@@ -104,7 +104,7 @@ If an M item lands in a spec/doc, it no longer needs to live in the handover bod
 
 ## Step 4 — write the handover file (H items)
 
-Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons so it's a valid Windows filename).
+Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons so it's a filesystem-safe filename on every OS — colons are invalid on Windows).
 
 Write to `<cwd>/.claude/handovers/<timestamp>.md`. Create the `.claude/handovers/` directory if it doesn't exist.
 

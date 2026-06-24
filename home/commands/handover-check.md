@@ -12,18 +12,17 @@ The heavy lifting is **deterministic**: a Layer-1 script (`handover-facts.mjs`) 
 
 Two phases — **all data-gathering first, then one report.**
 
-**Phase 1 — gather (emit NO prose yet).** Order matters: the fact sheet runs FIRST and **freezes** the exact snapshot, then the two charts read that frozen copy (`-Frozen`) so all three see the SAME session — even if a concurrent same-project session clobbers the live sidecar between reads (the within-report session-split bug).
-1. Run the fact sheet **alone** (PowerShell tool, NOT Bash — `$env:` syntax) — it writes the freeze:
+**Phase 1 — gather (emit NO prose yet).** Order matters: the fact sheet runs FIRST and **freezes** the exact snapshot, then the two charts read that frozen copy (`--frozen`) so all three see the SAME session — even if a concurrent same-project session clobbers the live sidecar between reads (the within-report session-split bug).
+1. Run the fact sheet **alone** first — it writes the freeze. (`$HOME` expands in both PowerShell and bash; Node accepts the forward slashes on Windows too. On Florian's Windows boxes, use the PowerShell tool per the project convention.)
 
-       node "$env:USERPROFILE\.claude\handover-facts.mjs"
+       node "$HOME/.claude/handover-facts.mjs"
 
    If it prints `MISSING`, tell the user to let the status line render once (press Enter on an empty prompt) and re-run — stop here.
    If its first line is `FOREIGN`, this session has no status-line snapshot of its own and the resolver fell back to **another session's** sidecar (the following lines give this session's id vs the snapshot's owner). This is the signature of a session that never renders a status line — the **Claude Code desktop app** is the common case. Do NOT report the numbers: they belong to a different session and would be meaningless here. Tell the user plainly that handover-check can't read this session (no live status line — e.g. the desktop app) and that it works from a terminal session where the status line renders — then **stop here**.
-2. **Then**, in **one message**, run the two charts with `-Frozen` AND spawn the subagent (they're independent):
-   - PowerShell tool (NOT Bash):
+2. **Then**, in **one message**, run the two charts with `--frozen` AND spawn the subagent (they're independent):
 
-         node "$env:USERPROFILE\.claude\render-legspark.mjs" --mono --frozen
-         node "$env:USERPROFILE\.claude\render-spikes.mjs" --mono --frozen
+         node "$HOME/.claude/render-legspark.mjs" --mono --frozen
+         node "$HOME/.claude/render-spikes.mjs" --mono --frozen
 
    - **Agent** tool — `subagent_type: general-purpose`, `model: sonnet`, `description: handover-check read`, `prompt:` the indented block under *Subagent prompt* below, with the **`handover-facts.mjs` output pasted into the `FACT SHEET:` slot**. It does NO tool calls — it only composes — and returns Style-B markdown. (Sonnet, not Haiku: the compose step is one cheap call, and Sonnet is more reliable at adding *correct* insight without bending a band's meaning — Haiku once wrote "the ~60% cliff where things get sharp", which is inverted.)
 

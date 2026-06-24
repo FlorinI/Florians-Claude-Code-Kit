@@ -38,7 +38,7 @@
   "activityPct": 0.5,
   "linesAdded": 8,
   "linesRemoved": 2,
-  "tps": 2000000,
+  "tps": 200,
   "base": 0.0000056513139304888396,
   "nAgents": null,
   "agentsUsd": 0,

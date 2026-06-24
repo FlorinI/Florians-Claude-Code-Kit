@@ -26,7 +26,7 @@
 
 import {
   readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync, rmSync,
-  readdirSync, copyFileSync, statSync,
+  readdirSync, copyFileSync, statSync, utimesSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,20 @@ function copyDirInto(srcDir, dstDir) {
   }
 }
 
+// Latest "timestamp":"…" in a transcript, as epoch ms (UTC ISO strings). Used to pin the file's
+// mtime so the mtime-derived `tps` is reproducible across checkouts.
+function latestTimestampMs(file) {
+  let max = null;
+  const re = /"timestamp"\s*:\s*"([^"]+)"/g;
+  const text = readFileSync(file, 'utf8');
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const ms = Date.parse(m[1]);
+    if (!Number.isNaN(ms) && (max === null || ms > max)) max = ms;
+  }
+  return max;
+}
+
 function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
   const tempHome = mkdtempSync(join(tmpdir(), 'slgolden-home-'));
   const tempCwd = mkdtempSync(join(tmpdir(), 'slgolden-cwd-'));
@@ -60,7 +74,15 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
 
   const stdin = structuredClone(stdinObj);
   const transcript = join(fixDir, 'transcript.jsonl');
-  if (existsSync(transcript)) stdin.transcript_path = transcript;
+  if (existsSync(transcript)) {
+    stdin.transcript_path = transcript;
+    // The engine derives `tps` (tokens/sec) from the transcript FILE's mtime. git checkout / copy
+    // reset mtime to "now", which is non-reproducible and breaks the golden across machines / CI.
+    // Pin mtime to the transcript's latest message timestamp (content-derived → deterministic, and
+    // the semantically correct "turn end"). Applied for both --bless and check, so goldens match.
+    const endMs = latestTimestampMs(transcript);
+    if (endMs != null) { const s = endMs / 1000; utimesSync(transcript, s, s); }
+  }
   stdin.workspace = stdin.workspace || {};
   stdin.workspace.current_dir = tempCwd;
   if ('cwd' in stdin) stdin.cwd = tempCwd;

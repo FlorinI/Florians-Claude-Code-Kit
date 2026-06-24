@@ -34,7 +34,7 @@
   "activityPct": null,
   "linesAdded": 3,
   "linesRemoved": 0,
-  "tps": 0,
+  "tps": 120,
   "base": null,
   "nAgents": null,
   "agentsUsd": null,

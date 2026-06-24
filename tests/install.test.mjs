@@ -218,18 +218,21 @@ test('uninstall removes a CLAUDE.md that held only our block', () => {
 
 test('CLI: conflict exits non-zero, clean exits zero', () => {
   withHome((home) => {
+    // Sandbox HOME so the launcher's setupLauncher (which uses homedir() when no shellHome is
+    // passed) writes a profile inside the throwaway dir, NEVER the real ~/.zshrc / PowerShell profile.
+    const env = { ...process.env, USERPROFILE: home, HOME: home };
     // Plant a conflict, run the CLI, expect exit 1.
     writeFileSync(join(home, 'statusline.mjs'), '// theirs\n');
     let code = 0;
     try {
-      execFileSync('node', [BASE, '--manifest', MANIFEST, '--source-root', REPO_ROOT, '--claude-home', home], { stdio: 'pipe' });
+      execFileSync('node', [BASE, '--manifest', MANIFEST, '--source-root', REPO_ROOT, '--claude-home', home], { stdio: 'pipe', env });
     } catch (e) {
       code = e.status;
     }
     assert.equal(code, 1, 'conflict → exit 1');
 
     // Force it through, expect exit 0.
-    execFileSync('node', [BASE, '--manifest', MANIFEST, '--source-root', REPO_ROOT, '--claude-home', home, '--force'], { stdio: 'pipe' });
+    execFileSync('node', [BASE, '--manifest', MANIFEST, '--source-root', REPO_ROOT, '--claude-home', home, '--force'], { stdio: 'pipe', env });
     assert.ok(existsSync(join(home, '.fcck-install.json')), 'forced install succeeded via CLI');
   });
 });

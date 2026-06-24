@@ -20,6 +20,8 @@ Pure Node, zero dependencies, no PowerShell. Works on macOS, Linux, and Windows.
 - **`/dialogue-convene` + `/dialogue-join`** — a two-session dialogue harness.
 - **`/grill-me`** — an interview-first alignment ritual before you write a plan.
 - **The `rca` skill** — disciplined root-cause analysis.
+- **The `cc` launcher** — one command that names and colors each session's terminal tab from a
+  per-project identity file, so many parallel sessions stay legible at a glance ([see below](#the-cc-launcher--per-project-identity--colored-tabs)).
 
 ## Install
 
@@ -59,6 +61,34 @@ settings keys to merge. `install.mjs` is a generic deployer — usable as a CLI 
 identically on every platform.
 
 See [docs/status-line.md](docs/status-line.md) and [docs/handover.md](docs/handover.md).
+
+## The `cc` launcher — per-project identity & colored tabs
+
+The installer also adds a tiny **`cc`** shell function (to your PowerShell `$PROFILE` on Windows, or
+`~/.zshrc` / `~/.bashrc` on macOS/Linux). Run `cc` instead of `claude` and it reads a per-project
+`<cwd>/.claude/session-identity.json` to title and color the session before launching:
+
+```json
+{ "name": "my-project", "color": "blue", "model": "", "effort": "" }
+```
+
+- **Names the tab** `name@branch` — falling back to the repo name, then the folder leaf, when `name`
+  is unset — so your terminal title bar and Claude's `/resume` picker tell sessions apart.
+- **Colors the session.** This is the part that pays off when you keep several sessions open at once.
+  It works in two layers:
+
+  | Layer | Terminals | What you get |
+  |---|---|---|
+  | Terminal **tab background** | Windows Terminal, macOS iTerm2 | the tab itself is tinted — visible in the tab strip and alt-tab **even when Claude isn't focused** |
+  | Claude Code's **own UI** | every platform / terminal | the `/color` is applied inside the session |
+
+  So Windows Terminal and iTerm2 users get a colored tab in the OS chrome; on any other terminal
+  (Terminal.app, gnome-terminal, …) you still get the in-session color.
+- **Applies `--model` / `--effort`** per project when those fields are set.
+
+Colors accept any name from Claude Code's palette: `red`, `orange`, `yellow`, `green`, `blue`,
+`purple`, `pink`, `cyan`, `gray`, `white`. Any arguments you pass to `cc` are forwarded straight
+through to `claude`.
 
 ## Development
 

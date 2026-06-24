@@ -7,7 +7,8 @@
 // installer adds to your shell profile ($PROFILE on Windows, ~/.zshrc or ~/.bashrc on macOS/Linux).
 //
 // Reads <cwd>/.claude/session-identity.json:
-//   name   -> session name/title via `--name <name>@<branch>`, ALWAYS (falls back to the repo slug).
+//   name   -> session name/title via `--name <name>@<branch>`, ALWAYS. Falls back through three tiers:
+//             identity name -> repo name (origin slug, else git top-level folder) -> cwd folder leaf.
 //             --name is a flag, so it sets the prompt box / /resume picker / terminal title without
 //             ever colliding with a user prompt.
 //   color  -> the terminal tab background (best-effort, per terminal: Windows Terminal & iTerm2) AND
@@ -16,7 +17,7 @@
 //   model  -> `--model <model>`  if set
 //   effort -> `--effort <level>` if set
 //
-// Title/name = <identity name | repo slug>@<branch>.
+// Title/name = <identity name | repo name | folder leaf>@<branch>.
 
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,10 +41,14 @@ function git(args) {
   catch { return ''; }
 }
 let branch = git(['branch', '--show-current']) || git(['rev-parse', '--short', 'HEAD']);
-let repo = loc.split(/[\\/]/).filter(Boolean).pop() || loc;       // folder leaf
+
+// Session name falls back through three tiers: identity name -> repo name -> folder leaf.
+const folder = loc.split(/[\\/]/).filter(Boolean).pop() || loc;   // 3rd: current directory leaf
+let repo = '';                                                    // 2nd: the git repo's own name
 const origin = git(['config', '--get', 'remote.origin.url']);
 if (origin) { const m = origin.replace(/\.git$/, '').match(/([^:/]+)$/); if (m) repo = m[1]; }
-const base = idName || repo;
+if (!repo) { const top = git(['rev-parse', '--show-toplevel']); if (top) repo = top.split(/[\\/]/).filter(Boolean).pop() || ''; }
+const base = idName || repo || folder;                            // 1st: explicit /identity name
 const title = branch ? `${base}@${branch}` : base;
 
 // --- terminal title (OSC 2 — portable) + tab color (per terminal) -----------------------------

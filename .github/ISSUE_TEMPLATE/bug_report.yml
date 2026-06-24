@@ -1,0 +1,29 @@
+name: Bug report
+description: Something in the status line or a command isn't working.
+labels: [bug]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 14 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`
+      placeholder: v20.11.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you got. A screenshot of the rendered line helps.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "_This is a best-effort, spare-time project — there's no guaranteed response time. Thanks for the report._"

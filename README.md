@@ -1,5 +1,9 @@
 # Florian's Claude Code Kit
 
+[![CI](https://github.com/FlorinI/Florians-Claude-Code-Kit/actions/workflows/ci.yml/badge.svg)](https://github.com/FlorinI/Florians-Claude-Code-Kit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
+
 A cross-platform **status line for [Claude Code](https://claude.com/claude-code)** plus a handful of
 workflow slash commands — installed into your `~/.claude` with a conflict-safe, *mergeful* installer
 that never clobbers what you already have.
@@ -64,6 +68,16 @@ npm run parity    # status-line + handover rendering golden tests
 ```
 
 CI runs both on a Linux / macOS / Windows matrix (see `.github/workflows/ci.yml`).
+
+## Support & contributing
+
+This is a personal tool I share best-effort. Issues and pull requests are welcome, but there is
+**no guaranteed response time** — I maintain it in spare time. Bug reports (especially cross-platform
+ones) and small, focused PRs are the most likely to land. Nobody pushes to `main` directly; changes
+come in as reviewed pull requests.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, [SECURITY.md](SECURITY.md) for reporting
+anything sensitive, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the (short) ground rules.
 
 ## License
 

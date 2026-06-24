@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions & show-and-tell
+    url: https://github.com/FlorinI/Florians-Claude-Code-Kit/discussions
+    about: Ask a question, or share your setup, in Discussions.

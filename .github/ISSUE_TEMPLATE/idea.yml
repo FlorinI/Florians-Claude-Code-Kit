@@ -1,0 +1,14 @@
+name: Idea / feature request
+description: Suggest an improvement. (See CONTRIBUTING — scope is "what the author runs", so not everything fits.)
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe the problem you're trying to solve, not just the solution you have in mind.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "_Heads up: the kit deliberately tracks the author's own workflow, so niche features may be declined in favour of a fork. No hard feelings — it's MIT._"

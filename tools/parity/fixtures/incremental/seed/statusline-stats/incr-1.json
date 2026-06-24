@@ -1,0 +1,57 @@
+{
+  "lastByteOffset": 559,
+  "nLegs": 2,
+  "sumUnits": 82780,
+  "sumOutputTokens": 2700,
+  "lastMsgId": "i2",
+  "lastInputBilled": 33080,
+  "lastOutputTokens": 1500,
+  "lastSeenCost": 1,
+  "lastLegCost": null,
+  "perLegUnits": [
+    66200,
+    16580
+  ],
+  "perLegOwnUnits": [
+    66200,
+    13580
+  ],
+  "costBaseline": 1,
+  "lastLegTs": 1781759750,
+  "lastWarm": 33000,
+  "nColdLegs": 0,
+  "coldWastedUnits": 0,
+  "lastColdLegIdx": 0,
+  "lastColdWastedUnits": 0,
+  "lastLegTtlSec": 3600,
+  "recentWriteTtls": [
+    3600,
+    3600
+  ],
+  "recentLegs": [
+    {
+      "idx": 1,
+      "inT": 200,
+      "cw": 30000,
+      "cwUnits": 60000,
+      "cr": 0,
+      "out": 1200,
+      "units": 66200,
+      "gapToPrev": null,
+      "coldTtl": 300,
+      "prevWarm": 0
+    },
+    {
+      "idx": 2,
+      "inT": 80,
+      "cw": 3000,
+      "cwUnits": 6000,
+      "cr": 30000,
+      "out": 1500,
+      "units": 16580,
+      "gapToPrev": 50,
+      "coldTtl": 3600,
+      "prevWarm": 30000
+    }
+  ]
+}

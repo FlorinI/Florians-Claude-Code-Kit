@@ -1,0 +1,29 @@
+{
+  "model": {
+    "display_name": "Haiku 4.5"
+  },
+  "version": "2.1.142",
+  "effort": {
+    "level": "low"
+  },
+  "context_window": {
+    "used_percentage": 3,
+    "total_input_tokens": 8000,
+    "context_window_size": 200000
+  },
+  "transcript_path": "Z:/does/not/exist.jsonl",
+  "session_id": "no-transcript-1",
+  "cost": {
+    "total_cost_usd": 0.4,
+    "total_api_duration_ms": 5000
+  },
+  "workspace": {
+    "current_dir": "P"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 61,
+      "resets_at": 1781747700
+    }
+  }
+}

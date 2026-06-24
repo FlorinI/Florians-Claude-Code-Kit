@@ -1,0 +1,35 @@
+{
+  "model": {
+    "display_name": "Opus 4.8 (1M context)"
+  },
+  "version": "2.1.142",
+  "effort": {
+    "level": "max"
+  },
+  "context_window": {
+    "used_percentage": 34,
+    "total_input_tokens": 340000,
+    "context_window_size": 1000000
+  },
+  "transcript_path": "P",
+  "session_id": "overcap-1",
+  "cost": {
+    "total_cost_usd": 52.5,
+    "total_api_duration_ms": 900000,
+    "total_lines_added": 5,
+    "total_lines_removed": 1
+  },
+  "workspace": {
+    "current_dir": "P"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 104,
+      "resets_at": 1781723600
+    },
+    "seven_day": {
+      "used_percentage": 100,
+      "resets_at": 1781920000
+    }
+  }
+}

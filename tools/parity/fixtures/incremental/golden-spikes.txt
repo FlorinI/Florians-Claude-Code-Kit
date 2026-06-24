@@ -1,0 +1,5 @@
+from session incr-1 · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 3 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.37  ·  loaded ~30k new context
+   Leg 3  ·  $0.13  ·  loaded ~5k new context
+   Leg 2  ·  $0.09  ·  generated ~2k output

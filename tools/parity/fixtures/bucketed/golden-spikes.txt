@@ -1,0 +1,5 @@
+from session bucketed · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 20 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 11  ·  $0.95  ·  re-cached ~70k (warm rewrite, not new content)
+   Leg 3  ·  $0.39  ·  re-read deep context (~250k)
+   Leg 6  ·  $0.39  ·  re-read deep context (~250k)

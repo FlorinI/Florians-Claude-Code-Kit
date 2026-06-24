@@ -1,0 +1,5 @@
+from session expired- · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 3 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 3  ·  $0.00  ·  re-cached ~80k (warm rewrite, not new content)
+   Leg 1  ·  $0.00  ·  loaded ~30k new context
+   Leg 2  ·  $0.00  ·  generated ~2k output

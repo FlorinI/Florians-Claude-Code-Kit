@@ -1,0 +1,4 @@
+{"type":"assistant","timestamp":"2026-06-17T18:13:20.000Z","message":{"id":"e1","usage":{"input_tokens":200,"cache_creation_input_tokens":30000,"cache_read_input_tokens":0,"output_tokens":1200,"cache_creation":{"ephemeral_1h_input_tokens":30000,"ephemeral_5m_input_tokens":0}}}}
+{"type":"assistant","timestamp":"2026-06-17T18:14:10.000Z","message":{"id":"e2","usage":{"input_tokens":80,"cache_creation_input_tokens":3000,"cache_read_input_tokens":30000,"output_tokens":1500,"cache_creation":{"ephemeral_1h_input_tokens":3000,"ephemeral_5m_input_tokens":0}}}}
+{"type":"user","timestamp":"2026-06-17T18:59:50.000Z","message":{"role":"user","content":"long break"}}
+{"type":"assistant","timestamp":"2026-06-17T19:00:00.000Z","message":{"id":"e3","usage":{"input_tokens":100,"cache_creation_input_tokens":80000,"cache_read_input_tokens":200,"output_tokens":1800,"cache_creation":{"ephemeral_1h_input_tokens":80000,"ephemeral_5m_input_tokens":0}}}}

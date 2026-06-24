@@ -1,0 +1,39 @@
+{
+  "name": "Florian's Claude Code Kit",
+  "id": "fcck",
+  "description": "Public bundle: the Node status line + /handover, /handover-check, dialogue, grill-me, and the rca skill. Deployed into ~/.claude by the manifest-driven base installer.",
+  "comment": "Source paths resolve against --source-root (default: this manifest's directory). dest paths are relative to ~/.claude. {{CLAUDE_HOME}} in settings is substituted with the forward-slashed target home at install time.",
+  "files": [
+    { "source": "home/statusline.mjs", "dest": "statusline.mjs" },
+    { "source": "home/_sl-compat.mjs", "dest": "_sl-compat.mjs" },
+    { "source": "home/leg-driver.mjs", "dest": "leg-driver.mjs" },
+    { "source": "home/sidecar-path.mjs", "dest": "sidecar-path.mjs" },
+    { "source": "home/render-legspark.mjs", "dest": "render-legspark.mjs" },
+    { "source": "home/render-spikes.mjs", "dest": "render-spikes.mjs" },
+    { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },
+    { "source": "home/session-start-handover.mjs", "dest": "session-start-handover.mjs" },
+    { "source": "home/dialogue-protocol.md", "dest": "dialogue-protocol.md" },
+    { "source": "home/commands/handover.md", "dest": "commands/handover.md" },
+    { "source": "home/commands/handover-check.md", "dest": "commands/handover-check.md" },
+    { "source": "home/commands/dialogue-convene.md", "dest": "commands/dialogue-convene.md" },
+    { "source": "home/commands/dialogue-join.md", "dest": "commands/dialogue-join.md" },
+    { "source": "home/commands/grill-me.md", "dest": "commands/grill-me.md" },
+    { "source": "home/skills/rca", "dest": "skills/rca", "dir": true }
+  ],
+  "settings": {
+    "statusLine": {
+      "type": "command",
+      "command": "node \"{{CLAUDE_HOME}}/statusline.mjs\"",
+      "refreshInterval": 10
+    },
+    "sessionStartHook": {
+      "matcher": "startup",
+      "hook": {
+        "type": "command",
+        "command": "node",
+        "args": ["{{CLAUDE_HOME}}/session-start-handover.mjs"],
+        "timeout": 10
+      }
+    }
+  }
+}

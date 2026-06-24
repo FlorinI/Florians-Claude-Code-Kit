@@ -1,0 +1,6 @@
+{
+  "nowEpoch": 1781740000,
+  "env": {
+    "CLAUDE_SL_TRANSCRIPT_MAXBYTES": "1067"
+  }
+}

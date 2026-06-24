@@ -1,0 +1,17 @@
+{
+  "name": "florians-claude-code-kit",
+  "version": "1.0.0",
+  "description": "A cross-platform Node status line for Claude Code, plus /handover, /handover-check, dialogue, grill-me and an RCA skill — installed into ~/.claude with a conflict-safe, mergeful installer.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "fcck-install": "install.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "parity": "node tools/parity/run-parity.mjs && node tools/parity/run-trio-parity.mjs"
+  }
+}

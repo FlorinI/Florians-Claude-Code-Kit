@@ -19,6 +19,8 @@ Pure Node, zero dependencies, no PowerShell. Works on macOS, Linux, and Windows.
 - **`/handover-check`** — a plain-language "is it time to hand over?" read of the current status line.
 - **`/dialogue-convene` + `/dialogue-join`** — a two-session dialogue harness.
 - **`/grill-me`** — an interview-first alignment ritual before you write a plan.
+- **`/identity`** — set a per-project session name / color (and optional model / effort) that the
+  `cc` launcher applies on every launch; it shows a color swatch and suggests names, no JSON by hand.
 - **The `rca` skill** — disciplined root-cause analysis.
 - **The `cc` launcher** — one command that names and colors each session's terminal tab from a
   per-project identity file, so many parallel sessions stay legible at a glance ([see below](#the-cc-launcher--per-project-identity--colored-tabs)).
@@ -72,6 +74,9 @@ The installer also adds a tiny **`cc`** shell function (to your PowerShell `$PRO
 { "name": "my-project", "color": "blue", "model": "", "effort": "" }
 ```
 
+Set it up with the **`/identity`** command — it shows a color swatch, suggests names from the repo,
+and writes the file for you — or edit the JSON directly. The launcher then:
+
 - **Names the tab** `name@branch` — falling back to the repo name, then the folder leaf, when `name`
   is unset — so your terminal title bar and Claude's `/resume` picker tell sessions apart.
 - **Colors the session.** This is the part that pays off when you keep several sessions open at once.
@@ -86,9 +91,9 @@ The installer also adds a tiny **`cc`** shell function (to your PowerShell `$PRO
   (Terminal.app, gnome-terminal, …) you still get the in-session color.
 - **Applies `--model` / `--effort`** per project when those fields are set.
 
-Colors accept any name from Claude Code's palette: `red`, `orange`, `yellow`, `green`, `blue`,
-`purple`, `pink`, `cyan`, `gray`, `white`. Any arguments you pass to `cc` are forwarded straight
-through to `claude`.
+Colors accept any name from Claude Code's `/color` palette: `red`, `orange`, `yellow`, `green`,
+`blue`, `purple`, `pink`, `cyan`. Any arguments you pass to `cc` are forwarded straight through to
+`claude`.
 
 ## Development
 

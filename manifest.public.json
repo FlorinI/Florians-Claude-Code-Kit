@@ -12,6 +12,7 @@
     { "source": "home/render-spikes.mjs", "dest": "render-spikes.mjs" },
     { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },
     { "source": "home/session-start-handover.mjs", "dest": "session-start-handover.mjs" },
+    { "source": "home/claude-launch.mjs", "dest": "claude-launch.mjs" },
     { "source": "home/dialogue-protocol.md", "dest": "dialogue-protocol.md" },
     { "source": "home/commands/handover.md", "dest": "commands/handover.md" },
     { "source": "home/commands/handover-check.md", "dest": "commands/handover-check.md" },
@@ -35,5 +36,10 @@
         "timeout": 10
       }
     }
+  },
+  "launcher": {
+    "script": "claude-launch.mjs",
+    "command": "cc",
+    "comment": "Installs a cross-platform `cc` shell function (PowerShell profile on Windows; ~/.zshrc or ~/.bashrc on macOS/Linux) that runs `node ~/.claude/claude-launch.mjs` — titling/coloring the tab and applying per-project name/model/effort from .claude/session-identity.json."
   }
 }

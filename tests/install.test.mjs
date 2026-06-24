@@ -29,7 +29,9 @@ function freshHome() {
 }
 
 function baseOpts(home, extra = {}) {
-  return { manifest: MANIFEST, sourceRoot: REPO_ROOT, claudeHome: home, log: quiet, ...extra };
+  // shellHome = home keeps the launcher's shell-profile write inside the throwaway dir (never the
+  // real ~/.zshrc / PowerShell profile).
+  return { manifest: MANIFEST, sourceRoot: REPO_ROOT, claudeHome: home, shellHome: home, log: quiet, ...extra };
 }
 
 function withHome(fn) {
@@ -235,6 +237,41 @@ test('CLI: conflict exits non-zero, clean exits zero', () => {
 test('CLI: --help exits zero', () => {
   const out = execFileSync('node', [BASE, '--help'], { encoding: 'utf8' });
   assert.match(out, /Usage:/);
+});
+
+test('clean install adds the cc launcher shell function; uninstall removes it', () => {
+  withHome((home) => {
+    runInstall(baseOpts(home));
+    // The profile path is platform-specific; find whichever one was written under the sandbox home.
+    const candidates = [
+      join(home, 'Documents', 'PowerShell', 'profile.ps1'),
+      join(home, '.zshrc'),
+      join(home, '.bashrc'),
+    ];
+    const profile = candidates.find((p) => existsSync(p));
+    assert.ok(profile, 'a shell profile was written');
+    const body = readFileSync(profile, 'utf8');
+    assert.match(body, /\bcc\b/, 'cc function present');
+    assert.match(body, /claude-launch\.mjs/, 'launcher function points at claude-launch.mjs');
+
+    const prov = JSON.parse(readFileSync(join(home, '.fcck-install.json'), 'utf8'));
+    assert.ok(prov.launcher && prov.launcher.command === 'cc', 'launcher recorded in provenance');
+
+    runUninstall(baseOpts(home));
+    const after = existsSync(profile) ? readFileSync(profile, 'utf8') : '';
+    assert.ok(!/claude-launch\.mjs/.test(after), 'launcher block removed on uninstall');
+  });
+});
+
+test('re-install does not duplicate the launcher block', () => {
+  withHome((home) => {
+    runInstall(baseOpts(home));
+    runInstall(baseOpts(home));
+    const candidates = [join(home, 'Documents', 'PowerShell', 'profile.ps1'), join(home, '.zshrc'), join(home, '.bashrc')];
+    const profile = candidates.find((p) => existsSync(p));
+    const body = readFileSync(profile, 'utf8');
+    assert.equal((body.match(/claude-launch\.mjs/g) || []).length, 1, 'launcher line appears exactly once');
+  });
 });
 
 test('planInstall surfaces conflicts without writing', () => {

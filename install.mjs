@@ -186,6 +186,74 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ── launcher shell-function setup ──────────────────────────────────────────────
+// Cross-platform: add a marker-bounded shell function (default `cc`) to the user's shell profile
+// that invokes the deployed launcher (`node <claudeHome>/<script>`). Windows → the PowerShell
+// profile; macOS/Linux → ~/.zshrc or ~/.bashrc (chosen from $SHELL). Re-install updates the block
+// in place; uninstall removes exactly it. Pure Node, no shell-out.
+const LAUNCHER_BEGIN = `# >>> ${KIT_NAME} (cc launcher) >>>`;
+const LAUNCHER_END = `# <<< ${KIT_NAME} (cc launcher) <<<`;
+
+function launcherProfile(claudeHome, shellHome) {
+  const home = shellHome || homedir();
+  const fwd = toForwardSlash(claudeHome);
+  if (process.platform === 'win32') {
+    return {
+      path: join(home, 'Documents', 'PowerShell', 'profile.ps1'),  // pwsh 7 CurrentUserAllHosts
+      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args }`,
+    };
+  }
+  const sh = (process.env.SHELL || '').toLowerCase();
+  // zsh sources ~/.zshrc for every interactive shell (login or not), so it's always right. bash on
+  // macOS, though, starts as a LOGIN shell (Terminal.app/iTerm2) that reads ~/.bash_profile, not
+  // ~/.bashrc — so target .bash_profile there; on Linux, GUI terminals start non-login shells that
+  // read ~/.bashrc.
+  const rc = sh.includes('zsh') ? '.zshrc'
+    : sh.includes('bash') ? (process.platform === 'darwin' ? '.bash_profile' : '.bashrc')
+      : (process.platform === 'darwin' ? '.zshrc' : '.bashrc');
+  return {
+    path: join(home, rc),
+    fnLine: (cmd, script) => `${cmd}() { node "${fwd}/${script}" "$@"; }`,
+  };
+}
+
+export function setupLauncher(opts = {}) {
+  const log = opts.log || ((m) => console.log(m));
+  const claudeHome = resolve(opts.claudeHome || join(homedir(), '.claude'));
+  const command = opts.command || 'cc';
+  const script = opts.script || 'claude-launch.mjs';
+  const { path: profilePath, fnLine } = launcherProfile(claudeHome, opts.shellHome);
+  const existed = existsSync(profilePath);
+  const existing = existed ? readFileSync(profilePath, 'utf8') : '';
+  const nl = existed ? detectNewline(existing) : '\n';
+  const block = `${LAUNCHER_BEGIN}\n${fnLine(command, script)}\n${LAUNCHER_END}`.split('\n').join(nl);
+  const re = new RegExp(`${escapeRegExp(LAUNCHER_BEGIN)}[\\s\\S]*?${escapeRegExp(LAUNCHER_END)}`);
+  let next;
+  if (re.test(existing)) next = existing.replace(re, () => block);
+  else if (existing.trim()) next = existing.replace(/\s+$/, '') + nl + nl + block + nl;
+  else next = block + nl;
+  if (next === existing) { log(`  launcher  ${command} already current in ${profilePath}`); return { profile: profilePath, command }; }
+  if (opts.dryRun) { log(`  launcher  would ${existed ? 'update' : 'add'} ${command} in ${profilePath}`); return { profile: profilePath, command }; }
+  writeFileEnsuringDir(profilePath, next);
+  log(`  launcher  ${command} ${existed ? 'updated' : 'added'} in ${profilePath} (open a new shell to use it)`);
+  return { profile: profilePath, command };
+}
+
+export function removeLauncher(opts = {}) {
+  const log = opts.log || ((m) => console.log(m));
+  const claudeHome = resolve(opts.claudeHome || join(homedir(), '.claude'));
+  const { path: profilePath } = launcherProfile(claudeHome, opts.shellHome);
+  if (!existsSync(profilePath)) return;
+  const text = readFileSync(profilePath, 'utf8');
+  const re = new RegExp(`\\n*${escapeRegExp(LAUNCHER_BEGIN)}[\\s\\S]*?${escapeRegExp(LAUNCHER_END)}\\n*`);
+  if (!re.test(text)) return;
+  if (opts.dryRun) { log(`  launcher  would remove launcher function from ${profilePath}`); return; }
+  const nl = detectNewline(text);
+  const stripped = text.replace(re, nl);
+  writeFileSync(profilePath, stripped.replace(/\s+$/, '') + (stripped.trim() ? nl : ''));
+  log(`  launcher  removed launcher function from ${profilePath}`);
+}
+
 // ── planning ────────────────────────────────────────────────────────────────
 // planInstall() computes everything without touching disk: the file writes, the settings merge,
 // the CLAUDE.md merge, and — crucially — the conflict list. Apply happens only after the plan is
@@ -197,6 +265,7 @@ export function planInstall(opts) {
   // owns settings.json (full template) and CLAUDE.md (SHARED/LOCAL) itself, byte-for-byte.
   const applySettings = opts.applySettings !== false;
   const applyClaudeMd = opts.applyClaudeMd !== false;
+  const applyLauncher = opts.applyLauncher !== false;
   const claudeHome = resolve(opts.claudeHome || join(homedir(), '.claude'));
   const claudeHomeFwd = toForwardSlash(claudeHome);
   const manifestPath = resolve(opts.manifest);
@@ -255,10 +324,14 @@ export function planInstall(opts) {
   const claudeMdExisted = existsSync(claudeMdPath);
   const claudeMdText = claudeMdExisted ? readFileSync(claudeMdPath, 'utf8') : '';
 
+  const launcherConfig = applyLauncher ? (manifest.launcher || null) : null;
+
   return {
     kitName: KIT_NAME,
     applySettings,
     applyClaudeMd,
+    launcherConfig,
+    shellHome: opts.shellHome,
     claudeHome,
     claudeHomeFwd,
     manifestPath,
@@ -301,6 +374,9 @@ export function runInstall(opts = {}) {
     for (const s of plan.settingsPlan.sets) log(`  settings  set ${s.key}`);
     if (plan.settingsPlan.hook) log(`  settings  ensure SessionStart hook (${basename(plan.settingsPlan.hook.hook.args?.[0] || 'hook')})`);
     if (plan.applyClaudeMd) log(`  CLAUDE.md  ${plan.claudeMdExisted ? (hasFcckBlock(plan.claudeMdText) ? 'update block' : 'append block') : 'create with block'}`);
+    if (plan.launcherConfig) {
+      setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, shellHome: plan.shellHome, dryRun: true, log });
+    }
     if (plan.conflicts.length) {
       log('  (--force) overwriting:');
       for (const c of plan.conflicts) log(`    ! ${c.detail}`);
@@ -362,6 +438,13 @@ export function runInstall(opts = {}) {
     log(`  CLAUDE.md  ${plan.claudeMdExisted ? (hasFcckBlock(plan.claudeMdText) ? 'updated block' : 'appended block') : 'created with block'}`);
   }
 
+  // 3b. Launcher shell function (cross-platform). Skipped when applyLauncher is false / no config.
+  let launcherProv = plan.provenance?.launcher || null;
+  if (plan.launcherConfig) {
+    const r = setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, shellHome: plan.shellHome, log });
+    launcherProv = { profile: r.profile, command: r.command };
+  }
+
   // 4. Provenance — merge with any prior install (so a wrapper calling us twice accumulates).
   const provenance = {
     kit: KIT_NAME,
@@ -371,6 +454,7 @@ export function runInstall(opts = {}) {
     settingsKeys: [...ownedKeys].sort(),
     hook: hookProvenance,
     claudeMdBlock,
+    launcher: launcherProv,
   };
   writeFileEnsuringDir(join(plan.claudeHome, PROVENANCE_FILE), JSON.stringify(provenance, null, 2) + '\n');
 
@@ -396,6 +480,7 @@ export function runUninstall(opts = {}) {
     for (const k of provenance.settingsKeys || []) log(`  settings  unset ${k}`);
     if (provenance.hook) log('  settings  remove SessionStart handover hook');
     if (provenance.claudeMdBlock) log('  CLAUDE.md  remove block');
+    if (provenance.launcher) removeLauncher({ claudeHome, command: provenance.launcher.command, shellHome: opts.shellHome, dryRun: true, log });
     log('  remove  ~/.claude/' + PROVENANCE_FILE);
     return { ok: true, dryRun: true };
   }
@@ -449,6 +534,9 @@ export function runUninstall(opts = {}) {
     else rmSync(claudeMdPath, { force: true }); // file held only our block → remove it
     log('  CLAUDE.md  removed block');
   }
+
+  // 3b. Launcher shell function.
+  if (provenance.launcher) removeLauncher({ claudeHome, command: provenance.launcher.command, shellHome: opts.shellHome, log });
 
   // 4. Provenance file itself.
   rmSync(provPath, { force: true });

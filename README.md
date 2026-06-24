@@ -4,26 +4,36 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
 
-A cross-platform **status line for [Claude Code](https://claude.com/claude-code)** plus a handful of
-workflow slash commands — installed into your `~/.claude` with a conflict-safe, *mergeful* installer
-that never clobbers what you already have.
+A few **guardrails for [Claude Code](https://claude.com/claude-code)** — a handful of workflow slash
+commands and a status line that catch the failures agentic coding hits most: building the wrong thing,
+losing the thread between sessions, overspending, fixing the wrong bug. Installed into your
+`~/.claude` with a conflict-safe, *mergeful* installer that never clobbers what you already have.
 
-Pure Node, zero dependencies, no PowerShell. Works on macOS, Linux, and Windows.
+Pure Node, zero dependencies, no PowerShell. Works on macOS, Linux, and Windows. It's not a complete
+safety net — just a few well-placed guards for the mistakes that cost the most.
 
 ## What you get
 
-- **A dense, drillable status line** (`statusline.mjs`): per-leg cost with a composition-weighted
-  forecast, a baseline-ratio chip, a per-leg sparkline, dual-axis context usage, to-compact headroom,
-  cold-cache tax tracking, and 5h/7d quota chips that surface only when they matter.
-- **`/handover`** — dump a session's in-flight state to a handover file the next session auto-picks up.
+Each piece guards against a specific way agentic coding goes wrong:
+
+- **`/grill-me`** — *guards alignment.* Before any plan, Claude interviews you one question at a time
+  (each with a recommended answer and the trade-off) and writes nothing until you say "alignment
+  complete" — so building the wrong thing gets caught before a line of code exists.
+- **`/handover`** — *guards continuity.* Dumps a session's in-flight state to a handover file the next
+  session auto-picks up, so you stop losing the thread between sessions.
+- **A dense, drillable status line** (`statusline.mjs`) — *guards cost & context.* Per-leg cost with a
+  composition-weighted forecast, a baseline-ratio chip, a per-leg sparkline, dual-axis context usage,
+  to-compact headroom, cold-cache tax tracking, and 5h/7d quota chips that surface only when they matter.
+- **The `rca` skill** — *guards debugging.* Forces a falsifiable hypothesis and a disconfirming check
+  before any fix, and right-sizes itself: a quick inline diagnosis for a cheap bug, a full documented
+  analysis when the fix gates something expensive or irreversible.
+- **`/dialogue-convene` + `/dialogue-join`** — a two-session dialogue harness; composes with
+  `/grill-me` as an alignment gate.
 - **`/handover-check`** — a plain-language "is it time to hand over?" read of the current status line.
-- **`/dialogue-convene` + `/dialogue-join`** — a two-session dialogue harness.
-- **`/grill-me`** — an interview-first alignment ritual before you write a plan.
-- **`/identity`** — set a per-project session name / color (and optional model / effort) that the
-  `cc` launcher applies on every launch; it shows a color swatch and suggests names, no JSON by hand.
-- **The `rca` skill** — disciplined root-cause analysis.
-- **The `cc` launcher** — one command that names and colors each session's terminal tab from a
-  per-project identity file, so many parallel sessions stay legible at a glance ([see below](#the-cc-launcher--per-project-identity--colored-tabs)).
+- **`/identity` + the `cc` launcher** — *guard your attention across parallel sessions.* Name and
+  color each session's terminal tab from a per-project identity file (`/identity` shows a color swatch
+  and suggests names — no JSON by hand), so many open sessions stay legible at a glance
+  ([see below](#the-cc-launcher--per-project-identity--colored-tabs)).
 
 ## Install
 

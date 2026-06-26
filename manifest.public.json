@@ -17,7 +17,6 @@
     { "source": "home/commands/handover.md", "dest": "commands/handover.md" },
     { "source": "home/commands/handover-check.md", "dest": "commands/handover-check.md" },
     { "source": "home/commands/dialogue-convene.md", "dest": "commands/dialogue-convene.md" },
-    { "source": "home/commands/dialogue-join.md", "dest": "commands/dialogue-join.md" },
     { "source": "home/commands/grill-me.md", "dest": "commands/grill-me.md" },
     { "source": "home/commands/identity.md", "dest": "commands/identity.md" },
     { "source": "home/skills/rca", "dest": "skills/rca", "dir": true }

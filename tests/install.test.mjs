@@ -278,6 +278,68 @@ test('re-install does not duplicate the launcher block', () => {
   });
 });
 
+test('re-install with prune removes files the manifest no longer ships (and only those)', () => {
+  withHome((home) => {
+    // First install with the real manifest, pruning on.
+    assert.equal(runInstall(baseOpts(home, { prune: true })).ok, true);
+    const victim = join(home, 'commands', 'handover-check.md');
+    const keeper = join(home, 'commands', 'handover.md');
+    assert.ok(existsSync(victim), 'precondition: victim deployed');
+    assert.ok(existsSync(keeper), 'precondition: keeper deployed');
+
+    // Build a manifest that drops one file entry, write it anywhere (sourceRoot still = REPO_ROOT).
+    const full = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+    full.files = full.files.filter((e) => e.source !== 'home/commands/handover-check.md');
+    const trimmed = join(home, '_trimmed-manifest.json');
+    writeFileSync(trimmed, JSON.stringify(full, null, 2));
+
+    const res = runInstall(baseOpts(home, { manifest: trimmed, prune: true }));
+    assert.equal(res.ok, true);
+    assert.ok(!existsSync(victim), 'dropped file pruned');
+    assert.ok(existsSync(keeper), 'still-shipped sibling kept');
+
+    // Provenance no longer lists the pruned file; still lists a keeper.
+    const prov = JSON.parse(readFileSync(join(home, '.fcck-install.json'), 'utf8'));
+    assert.ok(!prov.files.includes('commands/handover-check.md'), 'pruned file dropped from provenance');
+    assert.ok(prov.files.includes('commands/handover.md'), 'keeper retained in provenance');
+  });
+});
+
+test('prune leaves user-owned files untouched (prunes only what provenance records)', () => {
+  withHome((home) => {
+    runInstall(baseOpts(home, { prune: true }));
+    // A file the user dropped in themselves — never in our provenance.
+    const userFile = join(home, 'commands', 'my-own.md');
+    writeFileSync(userFile, '# mine\n');
+
+    // Re-install with a manifest missing a real entry; the user's file must survive regardless.
+    const full = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+    full.files = full.files.filter((e) => e.source !== 'home/commands/handover-check.md');
+    const trimmed = join(home, '_trimmed-manifest.json');
+    writeFileSync(trimmed, JSON.stringify(full, null, 2));
+    runInstall(baseOpts(home, { manifest: trimmed, prune: true }));
+
+    assert.ok(existsSync(userFile), 'user-owned file not pruned');
+    assert.equal(readFileSync(userFile, 'utf8'), '# mine\n', 'user file untouched');
+  });
+});
+
+test('without prune, re-install accumulates provenance (two-manifest path stays safe)', () => {
+  withHome((home) => {
+    runInstall(baseOpts(home));                 // prune off (default)
+    const full = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+    full.files = full.files.filter((e) => e.source !== 'home/commands/handover-check.md');
+    const trimmed = join(home, '_trimmed-manifest.json');
+    writeFileSync(trimmed, JSON.stringify(full, null, 2));
+    runInstall(baseOpts(home, { manifest: trimmed }));   // prune still off
+
+    // Old file stays on disk and in provenance — no pruning happened.
+    assert.ok(existsSync(join(home, 'commands', 'handover-check.md')), 'file kept when prune off');
+    const prov = JSON.parse(readFileSync(join(home, '.fcck-install.json'), 'utf8'));
+    assert.ok(prov.files.includes('commands/handover-check.md'), 'accumulated provenance retains it');
+  });
+});
+
 test('planInstall surfaces conflicts without writing', () => {
   withHome((home) => {
     writeFileSync(join(home, 'leg-driver.mjs'), '// theirs\n');

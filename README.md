@@ -27,8 +27,8 @@ Each piece guards against a specific way agentic coding goes wrong:
 - **The `rca` skill** — *guards debugging.* Forces a falsifiable hypothesis and a disconfirming check
   before any fix, and right-sizes itself: a quick inline diagnosis for a cheap bug, a full documented
   analysis when the fix gates something expensive or irreversible.
-- **`/dialogue-convene` + `/dialogue-join`** — a two-session dialogue harness; composes with
-  `/grill-me` as an alignment gate.
+- **`/dialogue-convene`** — a two-party dialogue harness (the other party can be any agent, not just
+  Claude Code); composes with `/grill-me` as an alignment gate.
 - **`/handover-check`** — a plain-language "is it time to hand over?" read of the current status line.
 - **`/identity` + the `cc` launcher** — *guard your attention across parallel sessions.* Name and
   color each session's terminal tab from a per-project identity file (`/identity` shows a color swatch

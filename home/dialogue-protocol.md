@@ -1,20 +1,20 @@
-# Dual-Session Dialogue — PROTOCOL (reusable, topic-agnostic)
+# Two-Party Dialogue — PROTOCOL (reusable, topic-agnostic)
 
-> A reusable harness for making **two Claude Code sessions discuss a topic, in writing, to a defined end-state** (consensus — or a deliberate hand-back to the human) — with no human relaying messages between them. This file is the **generic rules**; it does **not** change between topics. The per-use specifics (the topic, which session is which, the goal) live in the **dialogue file's header**, created fresh for each conversation by `/dialogue-convene`.
+> A reusable harness for making **two agents discuss a topic, in writing, to a defined end-state** (consensus — or a deliberate hand-back to the human) — with no human relaying messages between them. One party is the convening Claude Code session (Party A); the other (Party B) can be a second Claude Code session or any agent that can read/append a file and trigger its own next turn. This file is the **generic rules**; it does **not** change between topics. The per-use specifics (the topic, which party is which, the goal) live in the **dialogue file's header**, created fresh for each conversation by `/dialogue-convene`.
 >
-> Roles in this document: the **Convener** is the human who starts the dialogue and receives the result; **Party A** and **Party B** are the two sessions. Everything below is written so any two sessions, on any topic, can run it. The companion skills are `/dialogue-convene` (set up + emit the launch prompts) and `/dialogue-join` (become a Party and drive turns).
+> Roles in this document: the **Convener** is the human who starts the dialogue and receives the result; **Party A** and **Party B** are the two parties. Party B need not be a Claude Code session — it can be **any agentic tool** that can read a file, append to a file, and trigger its own next turn; the launch prompt (§8) assumes it has none of Claude Code's skills, memory, or conventions. Everything below is written so any two agents, on any topic, can run it. The single companion skill is `/dialogue-convene`: it sets up the dialogue, emits one self-contained launch prompt for the other party, then plays **Party A** in the convening session itself.
 
 ---
 
 ## 1. Per-use setup (the Convener does this once)
 
-Normally `/dialogue-convene` does this for you. It fills in the three variables this protocol leaves open and writes a fresh **dialogue file**:
+Normally `/dialogue-convene` does this for you — run in the session that will be **Party A**. It fills in the three variables this protocol leaves open, writes a fresh **dialogue file**, emits the §8 launch prompt for the other party, and then plays Party A itself (writes Turn 1 + arms the watch). The three variables:
 
 - **TOPIC** — what the two sessions are discussing.
 - **PARTIES** — a label for each session (e.g. `Session-A` / `Session-B`, or meaningful names like `PM-Claude` / `Clawnaty-Claude`). Labels must be **distinct and non-overlapping** (one must not be a substring of the other) and contain only letters, digits, and hyphens (they're used in a regex match — see §6).
 - **GOAL / definition of done** — what ends the dialogue. Default: **consensus + a joint summary addressed to the Convener.**
 
-It also records which session opens (**Party A** writes Turn 1), then prints two paste-ready launch prompts (§8). From then on the Convener doesn't carry messages — the sessions self-drive via the waiting mechanic in §6.
+Party A is always the convening session (it opens, writes Turn 1). The Convener carries the **one** emitted launch prompt (§8) to the other party — another Claude Code session, or any other agent — and pastes it there. From then on the Convener doesn't carry messages: the two parties self-drive via the waiting mechanic in §6.
 
 A minimal dialogue-file header looks like:
 ```
@@ -114,17 +114,24 @@ A co-signed defer's final turn must contain a **Decision Request** for the Conve
 
 ### 5.5 Resuming after the Convener answers
 
-Both watchers stop on the `BATON → CONVENER` handoff. To resume: the Convener appends a short answer block ending `— CONVENER · END OF TURN · BATON → <party>`, then re-invokes `/dialogue-join` in that one session. Its completion check sees the baton, it reads the answer, takes the next turn, and re-arms — ping-pong resumes.
+Both watchers stop on the `BATON → CONVENER` handoff. To resume: the Convener appends a short answer block ending `— CONVENER · END OF TURN · BATON → <party>`, then re-activates **that one party**:
+- If it's the **convening (Party A) session** and it's still alive, just tell it to continue — it re-runs its completion check, reads the answer, takes the next turn, and re-arms.
+- Otherwise (Party B, or a session that was lost), **re-paste that party's §8 launch prompt** (same template, that party's label). Its completion check sees the baton and resumes from wherever it sits — the prompt is self-contained, so re-pasting it is also the generic recovery move if a watcher ever dies mid-dialogue.
 
 ## 6. The background waiting mechanic (how you self-drive)
 
-So the two sessions converge **without the Convener passing messages**, each session watches the dialogue file in the background and wakes itself when the baton returns. `/dialogue-join` arms this for you; the mechanic is documented here.
+So the two parties converge **without the Convener passing messages**, each watches the dialogue file and resumes itself when the baton returns. Party A (the convening session) arms this from `/dialogue-convene`; Party B arms it from the launch prompt it was given (§8). The mechanic is documented here.
 
 **When you first join:**
-- If you are **Party A** (opener): write Turn 1, then arm the watch.
+- If you are **Party A** (the convening session): write Turn 1, then arm the watch.
 - If you are **Party B**: the baton is already yours (Party A opened) — take your turn now, then arm the watch.
 
-**Arming the watch** — run this as a **background** command (it polls every 10s and exits the moment your turn is due, or when a turn has been handed to the Convener — consensus *or* defer, both end `BATON → CONVENER`). Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
+**Three self-drive tiers — use the highest your environment supports** (this is what lets a non-Claude-Code party play too):
+- **Tier 1 — hands-free:** if your host re-invokes you when a background command exits, arm the watch below as a **background** command; the harness wakes you when it exits. This is the native, fully unattended loop. Both Claude Code and Cursor are confirmed to do this — so a CC↔CC *or* a CC↔Cursor dialogue runs fully hands-free.
+- **Tier 2 — self-poll:** if your host won't auto-re-invoke you but you can loop/sleep in your own terminal, run the same poll yourself — check the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
+- **Tier 3 — human nudge:** if you can do neither, write your turn, then ask the human to tell you "your turn" once the other party replies.
+
+**Arming the watch (Tier 1)** — run this as a **background** command (it polls every 10s and exits the moment your turn is due, or when a turn has been handed to the Convener — consensus *or* defer, both end `BATON → CONVENER`). Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
 
 ```powershell
 $f = "<DIALOGUE_FILE>"; $me = "<YOUR-LABEL>"; $max = 600; for ($i=0; $i -lt $max; $i++) { $last = (Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1); if ($last -match "BATON.*CONVENER") { Write-Output "CONVENER"; Write-Output $last; exit 0 }; if ($last -match "BATON.*$me") { Write-Output "YOUR_TURN"; Write-Output $last; exit 0 }; Start-Sleep -Seconds 10 }; Write-Output "TIMEOUT"; Write-Output $last
@@ -151,12 +158,34 @@ This is exactly the loop both parties run: *take turn → arm watch → wake on 
 - The `CONVENER` end-token is reserved — don't use it as a Party label.
 - Default to resolve-and-proceed (§5). Deferring is a real move, not a reflex — but never cement a foundational guess to avoid asking.
 
-## 8. Launch prompts (generated by `/dialogue-convene`)
+## 8. The launch prompt (generated by `/dialogue-convene`)
 
-`/dialogue-convene` prints these with the paths and labels filled in. Shown here for reference.
+There is **one** launch prompt — for the other party (Party B). The convening session is Party A and doesn't need a prompt; it plays directly (§6). `/dialogue-convene` fills the template below with the real paths and labels, prints it, and copies it to the clipboard so the Convener can paste it into the other agent.
 
-**To the opener (Party A):**
-> You are Party A in a dual-session dialogue. Run `/dialogue-join <DIALOGUE_FILE> <PARTY-A-LABEL>`. It will read the protocol (`<PROTOCOL_PATH>`) and the dialogue file, then have you write **Turn 1** opening the topic, end with your baton line, and arm the background watch so you self-drive. Continue until consensus or defer (`BATON → CONVENER`), then stop and give me the result. Don't prompt me between turns — the other session self-drives too.
+The template is deliberately **assume-nothing**: it must be actionable by an agent that has *none* of Claude Code's skills, memory, or conventions — only this prompt plus the two files it names. Keep it lean by inlining only the minimum and pointing to this protocol for the heavy rules (§4 consensus, §5 defer). Re-pasting it (with any party's label) is also the generic resume/recovery move (§5.5).
 
-**To the responder (Party B):**
-> You are Party B in a dual-session dialogue. Run `/dialogue-join <DIALOGUE_FILE> <PARTY-B-LABEL>`. The baton is already yours — it will have you take your turn now, end with your baton line, and arm the background watch. Drive to consensus per §4 (or defer per §5); when you ratify, include the joint summary for me. Don't prompt me between turns.
+Fill `<PROTOCOL_PATH>`, `<DIALOGUE_FILE>`, `<PARTY-B-LABEL>`, `<PARTY-A-LABEL>`, and `<WATCH_COMMAND>` (the §6 watcher with this party's file + label substituted):
+
+> You're joining a two-party written dialogue with another AI agent. **You have none of this project's skills, memories, or conventions — everything you need is in this message and two files.** Don't ask me to relay messages; you and the other party self-drive through a shared file.
+>
+> **Read first, in full:** (1) the protocol `<PROTOCOL_PATH>` — the rulebook; (2) the dialogue file `<DIALOGUE_FILE>` — the conversation so far. Pay attention to §3 (turn format + completion check), §4 (consensus handshake), §5 (when to defer to me, the human).
+>
+> **You are `<PARTY-B-LABEL>`; the other party is `<PARTY-A-LABEL>`.** The baton is already yours — `<PARTY-A-LABEL>` opened with Turn 1.
+>
+> **Each turn, append (never edit prior turns) exactly this shape to the dialogue file:**
+> ```
+> ## Turn N — <PARTY-B-LABEL>
+> <your content>
+>
+> — <PARTY-B-LABEL> · END OF TURN · BATON → <PARTY-A-LABEL>
+> ```
+> The last line is the **baton** — the only way to end a turn; it names who moves next. To settle, use `PROPOSE CONSENSUS` then (on the other's ratify) `RATIFY CONSENSUS · BATON → CONVENER` with a joint summary addressed to me. To hand a decision back to me, use the §5 defer handshake (`PROPOSE DEFER` → `DEFER TO CONVENER · BATON → CONVENER`).
+>
+> **Completion check before every turn:** look at the last non-empty line of the dialogue file. Baton to you (`BATON → <PARTY-B-LABEL>`) → take your turn. Baton to `<PARTY-A-LABEL>`, or no baton line → not ready; wait. Baton to `CONVENER` → the dialogue has ended; show me the final turn and stop.
+>
+> **Self-drive — pick the highest tier your environment supports (§6):**
+> - **Tier 1 (hands-free):** if your host re-invokes you when a background command exits, run this as a background command; when it wakes you, read its output — `YOUR_TURN` → take your turn and re-arm; `CONVENER` → show me the result and stop: `<WATCH_COMMAND>`
+> - **Tier 2 (self-poll):** else if you can loop/sleep in your own terminal, poll the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
+> - **Tier 3 (human nudge):** else write your turn and tell me to say "your turn" when the other party replies.
+>
+> Take your turn now, then self-drive. Stop and show me the result on consensus (joint summary) or defer (Decision Request).

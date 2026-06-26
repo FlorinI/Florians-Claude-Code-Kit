@@ -16,6 +16,11 @@
 //     file we don't own, or if the user already has a statusLine we don't own. --force overrides.
 //   • Record what we own in ~/.claude/.fcck-install.json (provenance) so re-runs are clean and
 //     `uninstall` removes exactly what we added — and nothing the user brought.
+//   • PRUNE retired files: on re-install (CLI sets opts.prune), files in provenance that the current
+//     manifest no longer ships are deleted — so dropping a manifest entry cleans the file off every
+//     machine on next install. Only ever kit-owned files; never user content. Gated behind opts.prune
+//     so the two-manifest accumulation path (runInstall once per manifest) can't mistake the other
+//     manifest's files for orphans.
 //
 // Zero dependencies, zero PowerShell, zero platform assumptions. Node's stdlib only.
 
@@ -276,6 +281,15 @@ export function planInstall(opts) {
   const provenance = readJsonIfExists(join(claudeHome, PROVENANCE_FILE), null);
   const ownedFiles = new Set(provenance?.files || []);
 
+  // Orphans: files this kit deployed on a previous run (recorded in provenance) that this manifest
+  // no longer ships — e.g. a command we retired. They're pruned on apply when opts.prune is set, so
+  // removing a manifest entry is all it takes to clean a file off every machine on next install. Only
+  // ever kit-owned files: never touches anything the user brought. (Pruning is gated behind opts.prune
+  // so the documented two-manifest accumulation path — runInstall called once per manifest — can't see
+  // the other manifest's files as orphans and delete them.)
+  const currentDests = new Set(files.map((f) => f.dest));
+  const orphans = [...ownedFiles].filter((d) => !currentDests.has(d));
+
   const conflicts = [];
 
   // File conflicts: a dest that already exists and we don't own it.
@@ -337,6 +351,7 @@ export function planInstall(opts) {
     manifestPath,
     sourceRoot,
     files: fileWrites,
+    orphans,
     settingsPath,
     settings,
     settingsExisted,
@@ -371,6 +386,7 @@ export function runInstall(opts = {}) {
     for (const f of plan.files) {
       log(`  ${f.exists ? 'update' : 'create'}  ~/.claude/${f.dest}`);
     }
+    if (opts.prune) for (const o of plan.orphans) log(`  prune   (retired) ~/.claude/${o}`);
     for (const s of plan.settingsPlan.sets) log(`  settings  set ${s.key}`);
     if (plan.settingsPlan.hook) log(`  settings  ensure SessionStart hook (${basename(plan.settingsPlan.hook.hook.args?.[0] || 'hook')})`);
     if (plan.applyClaudeMd) log(`  CLAUDE.md  ${plan.claudeMdExisted ? (hasFcckBlock(plan.claudeMdText) ? 'update block' : 'append block') : 'create with block'}`);
@@ -386,12 +402,26 @@ export function runInstall(opts = {}) {
     return { ok: true, dryRun: true, conflicts: plan.conflicts, plan };
   }
 
-  // 1. Files.
-  const writtenFiles = new Set(plan.provenance?.files || []);
+  // 1. Files. When pruning, the new provenance is exactly what this manifest ships (orphans dropped);
+  // otherwise we accumulate onto any prior install's set (the two-manifest path).
+  const writtenFiles = new Set(opts.prune ? [] : (plan.provenance?.files || []));
   for (const f of plan.files) {
     writeFileEnsuringDir(f.destAbs, f.content);
     writtenFiles.add(f.dest);
     log(`  ${f.exists ? 'update' : 'create'}  ~/.claude/${f.dest}`);
+  }
+
+  // 1b. Prune orphans — kit-owned files this manifest no longer ships. Only files recorded in
+  // provenance; never user content. Empty dirs left behind are swept (never past claudeHome).
+  if (opts.prune) {
+    for (const o of plan.orphans) {
+      const abs = join(plan.claudeHome, o);
+      if (existsSync(abs)) {
+        rmSync(abs, { force: true });
+        log(`  prune   (retired) ~/.claude/${o}`);
+      }
+      pruneEmptyDirs(dirname(abs), plan.claudeHome);
+    }
   }
 
   // 2. settings.json merge. Skipped entirely when applySettings is false (the private wrapper
@@ -616,7 +646,7 @@ export function main(argv = process.argv.slice(2), scriptDir) {
   try {
     let result;
     if (opts.command === 'uninstall') result = runUninstall(opts);
-    else if (opts.command === 'install') result = runInstall(opts);
+    else if (opts.command === 'install') result = runInstall({ ...opts, prune: true });
     else throw new Error(`unknown command: ${opts.command}`);
     if (!result.ok) process.exitCode = 1;
   } catch (e) {

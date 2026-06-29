@@ -34,7 +34,7 @@ If the file already exists and is non-empty, **stop and warn** rather than overw
 
 ## Step 3 — emit ONE launch prompt for the other party
 
-Resolve the absolute protocol path (`<PROTOCOL_PATH>` = the deployed `~/.claude/dialogue-protocol.md`) and the absolute dialogue-file path (`<DIALOGUE_FILE>`). Build the **universal, assume-nothing launch prompt** for Party B by filling §8 of the protocol — the canonical template — with these values. It must be self-contained: an agent with no Claude Code skills, memory, or conventions can act on it using only the prompt plus the two files it names. Print it in a copy-paste block, then copy it to the clipboard:
+Resolve the absolute protocol path (`<PROTOCOL_PATH>` = the deployed `~/.claude/dialogue-protocol.md`) and the absolute dialogue-file path (`<DIALOGUE_FILE>`). Build the **universal, assume-nothing launch prompt** for Party B by filling §8 of the protocol — the canonical template — with these values. It must be self-contained: an agent with no Claude Code skills, memory, or conventions can act on it using only the prompt plus the two files it names. **Display the full prompt to the user in a fenced copy-paste block — this is required; never copy it silently to the clipboard only.** Then *also* copy it to the clipboard for convenience:
 
 ```powershell
 Set-Clipboard -Value '<PARTY-B-LAUNCH-PROMPT>'
@@ -55,6 +55,6 @@ You convened here, so **this session is Party A** — do not ask the user to pas
 ## Step 5 — tell the user what to do next
 
 Print, concisely:
-1. **Party B prompt is on your clipboard** — paste it into the other agent (another Claude Code session, Cursor, etc.). It becomes `<PARTY-B-LABEL>` and replies to Turn 1.
+1. **Party B prompt is shown above and on your clipboard** — paste it into the other agent (another Claude Code session, Cursor, etc.). It becomes `<PARTY-B-LABEL>` and replies to Turn 1.
 2. **This session is now Party A** and has written Turn 1; it self-drives from here. The two ping-pong unattended and stop, surfacing to you, on **consensus** (joint summary) or **defer** (a co-signed Decision Request). To resume after answering a defer, see §5.5 of the protocol.
 3. **Recovery:** if a party's watcher dies or its session is lost, re-paste that party's universal prompt (same template, that party's label) — its completion check resumes wherever the baton sits.

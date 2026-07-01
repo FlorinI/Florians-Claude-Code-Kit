@@ -7,6 +7,8 @@ COST_TOTAL: `$1.60` total
 COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
 COST_FROZ5: cause=light-start; froz5 `0.68×` vs `0.23×` typical at this depth (residual 2.94×); confidence=low
 COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
 COLD: calm — idling past the cache lifetime would add `$0.41` to resume; no urgency
 QUALITY_LEAD: `38k`, green band — sharp
 QUALITY_SECONDARY: `10%` fill — well under the ~60% cliff

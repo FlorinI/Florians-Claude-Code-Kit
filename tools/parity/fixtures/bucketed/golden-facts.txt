@@ -7,6 +7,8 @@ COST_TOTAL: `$8.00` total
 COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
 COST_FROZ5: cause=on-curve; froz5 `0.98×` vs `1.39×` typical at this depth (residual 0.71×); confidence=ok
 COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
 COLD: the ~1-hour cache is starting to cool (`~12 min` of warmth left) — a send keeps it warm
 QUALITY_LEAD: `250k`, yellow band — mild weakening on hard multi-fact recall
 QUALITY_SECONDARY: `55%` fill — approaching the ~60% cliff

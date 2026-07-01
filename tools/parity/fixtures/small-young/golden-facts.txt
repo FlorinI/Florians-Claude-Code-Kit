@@ -7,6 +7,8 @@ COST_TOTAL: `$0.08` total
 COST_CHAR: no cost trend yet
 COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
 COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
 COLD: (omit)
 QUALITY_LEAD: `6%` fill — well under the ~60% cliff
 QUALITY_SECONDARY: `13k`, pristine band — sharp

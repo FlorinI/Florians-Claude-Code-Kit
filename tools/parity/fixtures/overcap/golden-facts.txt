@@ -12,7 +12,7 @@ COST_AGENTS_LEAD: (none)
 COLD: (omit)
 QUALITY_LEAD: `340k`, orange band — real degradation on complex full-context reasoning
 QUALITY_SECONDARY: `34%` fill — well under the ~60% cliff
-QUALITY_HEADROOM: `610k` to compact
+QUALITY_HEADROOM: `135k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
 TRAJECTORY: flat, range `?`

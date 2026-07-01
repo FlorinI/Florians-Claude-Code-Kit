@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.5.3';
+export const SL_VERSION = '4.2.6.0';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -85,6 +85,31 @@ function CacheWriteUnits(cw1h, cw5m, cwTotal) {
   cw1h = Number(cw1h) || 0; cw5m = Number(cw5m) || 0; cwTotal = Number(cwTotal) || 0;
   return (cw1h + cw5m) > 0 ? cw1h * M_CACHE_WRITE_1H + cw5m * M_CACHE_WRITE_5M : cwTotal * M_CACHE_WRITE_5M;
 }
+
+// Auto-compact fires at `min(autoCompactWindow, model window)`. The window is NOT in the status-line
+// payload, but `/autocompact` PERSISTS the user's choice to ~/.claude/settings.json as top-level
+// `autoCompactWindow`, written the instant it changes — so we read it directly (authoritative, immediate,
+// no observer-effect). Three states: a NUMBER = an override; `null` = `auto`; key ABSENT = `auto`. `null`
+// and absent are IDENTICAL → fall back to the model-tuned default (hence the `typeof === 'number'` test,
+// never "key present"). On `auto` the default is server-delivered (~500k on the 1M models, via the
+// tengu_amber_redwood3 gate) so we can't read the exact number — we estimate it and flag the estimate.
+// The old behaviour (model window × 0.95) overstated 1M headroom by ~450k and never warned before
+// compaction (caught live 2026-07: compacted at 466k while to-compact read 484k).
+const AUTO_COMPACT_1M = 500000;   // model-tuned `auto` default for the 1M regime (estimate; drifts server-side)
+function readAutoCompactWindow() {
+  // Written to USER settings by /autocompact. (A project-level override would be a future refinement.)
+  const s = readJson(join(ClaudeHome, '.claude', 'settings.json'));
+  return (s && typeof s.autoCompactWindow === 'number') ? s.autoCompactWindow : null;
+}
+// Effective auto-compact window + whether it's an ESTIMATE (on `auto`, using the default) vs an
+// authoritative override we read from settings.
+function CompactWindow(ctxSize) {
+  const set = readAutoCompactWindow();
+  if (typeof set === 'number') return { win: Math.min(set, ctxSize), estimate: false };
+  if (ctxSize >= 700000) return { win: AUTO_COMPACT_1M, estimate: true };   // 1M on `auto` → estimated default
+  return { win: ctxSize, estimate: false };                                 // 200k `auto` ≈ the model window
+}
+function CompactAt(ctxSize) { return psRound(CompactWindow(ctxSize).win * 0.95); }
 
 // --- ANSI color helpers ----------------------------------------------------
 const ESC = '\x1b';
@@ -481,10 +506,15 @@ if (!isNil(ctxUsed) && !isNil(ctxSize)) {
 }
 if (!isNil(ctxPct)) ctxParts.push(BgFill(ctxPct, FmtPct(ctxPct)));
 if (!isNil(ctxUsed) && !isNil(ctxSize)) {
-  const compactAt = psRound(ctxSize * 0.95);
+  const cw = CompactWindow(ctxSize);
+  const compactAt = psRound(cw.win * 0.95);
   const remaining = compactAt - ctxUsed;
-  if (remaining > 0) ctxParts.push(Dim('to-compact ') + ColorLow(remaining, FmtNum(remaining), 200000, 50000));
-  else ctxParts.push(RedBold('to-compact NOW'));
+  // `~` = the window is an ESTIMATE (on `auto`, using the model-tuned default) — shown ONLY when it's also
+  // near the bar (yellow/red, remaining < 200k), so a calm line never carries it and an authoritative
+  // override (a real number read from settings) never marks. One glyph, event-gated.
+  const est = (cw.estimate && remaining < 200000) ? '~' : '';
+  if (remaining > 0) ctxParts.push(Dim('to-compact ') + ColorLow(remaining, est + FmtNum(remaining), 200000, 50000));
+  else ctxParts.push(RedBold('to-compact ' + est + 'NOW'));
 }
 const absLvl = isNil(ctxUsed) ? 0 : (ctxUsed < 128000 ? 0 : ctxUsed < 256000 ? 1 : ctxUsed < 500000 ? 2 : 3);
 const fillLvl = isNil(ctxPct) ? 0 : (ctxPct < 50 ? 0 : ctxPct < 70 ? 1 : ctxPct < 85 ? 2 : 3);
@@ -915,7 +945,7 @@ try {
     : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
   const froz5State = isNil(ratio) ? null
     : ratio < 1.0 ? 'green' : ratio < 1.8 ? 'white' : ratio < 2.8 ? 'yellow' : ratio < 3.8 ? 'orange' : 'red';
-  const toCompactTok = (!isNil(ctxUsed) && !isNil(ctxSize)) ? psRound(ctxSize * 0.95) - ctxUsed : null;
+  const toCompactTok = (!isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
   const activityPct = (aliveSec && Number(aliveSec) > 0 && !isNil(apiSec)) ? mathRoundD(100.0 * apiSec / aliveSec, 1) : null;
   let coldStakeUsd = null, coldState = null, coldCoolRemainSec = null;
   if (!isNil(coldStakes) && coldStakes >= 0.25) {

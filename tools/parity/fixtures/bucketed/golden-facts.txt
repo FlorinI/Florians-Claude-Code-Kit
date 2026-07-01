@@ -12,7 +12,7 @@ COST_AGENTS_LEAD: (none)
 COLD: the ~1-hour cache is starting to cool (`~12 min` of warmth left) — a send keeps it warm
 QUALITY_LEAD: `250k`, yellow band — mild weakening on hard multi-fact recall
 QUALITY_SECONDARY: `55%` fill — approaching the ~60% cliff
-QUALITY_HEADROOM: `700k` to compact
+QUALITY_HEADROOM: `225k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
 TRAJECTORY: mostly flat with spikes, range `$0.36`–`$0.95`

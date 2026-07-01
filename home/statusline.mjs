@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.5.2';
+export const SL_VERSION = '4.2.5.3';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -573,7 +573,7 @@ if (rollup && Number(rollup.nColdLegs) >= 1 && Number(rollup.sumUnits) > 0 && se
   const nCold = Number(rollup.nColdLegs);
   const taxPct = (!isNil(costUsd) && Number(costUsd) > 0) ? psRound(100.0 * coldTax / Number(costUsd)) : 0;
   const nL = Number(rollup.nLegs);
-  coldParts.push(Dim('tax ') + Dim(taxPct.toString() + '% (') + ColorCost(coldTax, '$' + fmtN(coldTax, 2)) + Dim(')'));
+  coldParts.push(Dim('Tax ') + Dim(taxPct.toString() + '% (') + ColorCost(coldTax, '$' + fmtN(coldTax, 2)) + Dim(')'));
   const lastColdIdx = ('lastColdLegIdx' in rollup) ? Number(rollup.lastColdLegIdx) : 0;
   const legsAgo = lastColdIdx > 0 ? nL - lastColdIdx : 9999;
   coldRecent = (lastColdIdx > 0 && legsAgo < RECENT_COLD_WINDOW);
@@ -694,7 +694,7 @@ if (tpath && existsSync(tpath)) {
 }
 
 const line3 = cacheParts.length > 0 ? cacheParts.join(DIM_SEP) : null;
-const coldLine = coldParts.length > 0 ? `${ESC}[${coldMarkerCol}m${snow}${ESC}[0m` + ' ' + coldParts.join(DIM_SEP) : null;
+const coldLine = coldParts.length > 0 ? `${ESC}[${coldMarkerCol}m${snow}${ESC}[0m` + coldParts.join(DIM_SEP) : null;
 
 // === Cluster 5: per-leg cost sparkline (8 buckets) =========================
 let legsLine = null;

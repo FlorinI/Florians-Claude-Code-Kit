@@ -131,19 +131,12 @@ const qWord = ({
 })[absState] ?? 'sharp';
 const froz5 = s.froz5Ratio != null ? Number(s.froz5Ratio) : null;
 const nextUsd = s.nextLegUsd != null ? Number(s.nextLegUsd) : null;
-const trend = froz5 == null ? 0 : (froz5 < FROZ5_CLIMB ? 0 : (froz5 < FROZ5_STEEP ? 1 : 2));
-const cLevelRaw = (nextUsd == null || nextUsd < COST_FLOOR_FINE) ? 0
-  : (nextUsd < COST_FLOOR_STEEP ? Math.min(1, trend) : trend);
-const cLevel = ({ 0: 0, 1: 2 })[cLevelRaw] ?? 3;
-const hLevel = Math.max(qLevel, cLevel);
-const hText = ['Plenty of room', 'Getting deeper', 'Wind down soon', 'Time to hand over'][hLevel];
-const hPol = hLevel <= 1 ? '+' : '-';
-const hDriver = cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both');
 
-// ---- COST ----
+// Resolve the froz5 CAUSE up-front (reused verbatim by the COST section below) so the HEADLINE can
+// neutralize a ratio that's a resolved artifact: a light/heavy-start-inflated or cold-pumped froz5 must
+// NOT read as real cost pressure, or the one-line verdict contradicts the cost paragraph that calls it
+// benign. A non-artifact (on-curve/unknown) ratio still drives the trend rule unchanged.
 const is1M = (Number(s.windowSize) >= WINDOW_1M);
-const costLead = 'each leg ~' + FmtUsd(nextUsd) + ', ' + FmtRatio(froz5) + ' a fresh leg';
-const costTotal = FmtUsd(s.costUsd) + ' total';
 const ctxK = s.ctxTokens != null ? Number(s.ctxTokens) / 1000 : null;
 const coldInMedian = (lastColdLegsAgoScan != null && Number(lastColdLegsAgoScan) < 5);
 let froz5Cause = 'unknown', froz5Resid = null, froz5Exp = null, froz5Conf = 'low';
@@ -155,6 +148,32 @@ if (froz5 != null && ctxK != null && is1M) {
     : (froz5Resid <= FROZ5_RESID_LIGHT ? 'on-curve'
       : (coldInMedian ? 'cold-pumped' : 'light-start'));
 }
+const benignFroz5 = (froz5Cause === 'light-start' || froz5Cause === 'heavy-start' || froz5Cause === 'cold-pumped');
+const trend = froz5 == null ? 0 : (froz5 < FROZ5_CLIMB ? 0 : (froz5 < FROZ5_STEEP ? 1 : 2));
+// Resolved artifact → grade cost on the ABSOLUTE next-leg $ alone (COST_CHAR's "grounding number"),
+// so the headline can't false-elevate on an inflated ratio; only a non-artifact ratio may escalate.
+let cLevelRaw;
+if (nextUsd == null || nextUsd < COST_FLOOR_FINE) cLevelRaw = 0;
+else if (benignFroz5) cLevelRaw = (nextUsd < COST_FLOOR_STEEP ? 0 : 1);
+else cLevelRaw = (nextUsd < COST_FLOOR_STEEP ? Math.min(1, trend) : trend);
+const cLevel = ({ 0: 0, 1: 2 })[cLevelRaw] ?? 3;
+const hLevel = Math.max(qLevel, cLevel);
+const hPol = hLevel <= 1 ? '+' : '-';
+const hDriver = cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both');
+
+// Agent-spend prominence, proportional to share of session cost (denominator matches the status line's
+// agentsUsd/sessionCost): <1/3 = minor aside only (COST_DETAIL) · 1/3–1/2 = a headline tail · ≥1/2 = leads Cost.
+const sessionCostVal = s.costBaseline != null ? Math.max(0, Number(s.costUsd) - Number(s.costBaseline)) : Number(s.costUsd);
+const agentShare = (Number(s.nAgents) > 0 && s.agentsUsd != null && sessionCostVal > 0) ? Number(s.agentsUsd) / sessionCostVal : null;
+const agentPct = agentShare != null ? psRound(agentShare * 100) : null;
+const agentTier = agentShare == null ? 'none' : (agentShare >= 0.5 ? 'lead' : (agentShare >= (1 / 3) ? 'headline' : 'minor'));
+let hText = ['Plenty of room', 'Getting deeper', 'Wind down soon', 'Time to hand over'][hLevel];
+// ⅓–½ tails the headline; ≥½ gets BOTH the headline tail AND the Cost-section lead (below).
+if (agentTier === 'headline' || agentTier === 'lead') hText += ` ${MID} sub-agents are ${agentPct}% of spend`;
+
+// ---- COST (is1M / ctxK / the froz5 cause are all resolved above, before the headline) ----
+const costLead = 'each leg ~' + FmtUsd(nextUsd) + ', ' + FmtRatio(froz5) + ' a fresh leg';
+const costTotal = FmtUsd(s.costUsd) + ' total';
 let costChar;
 switch (froz5Cause) {
   case 'heavy-start': costChar = 'started heavy — a big opening leg (often a resume that front-loads reads) lifts the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust'; break;
@@ -171,6 +190,13 @@ switch (froz5Cause) {
 let costDetail = '(none)';
 if (Number(s.nAgents) > 0 && s.mainSessionUsd != null) {
   costDetail = 'main ' + FmtUsd(s.mainSessionUsd) + ` ${MID} agents ` + FmtUsd(s.agentsUsd) + ' over ' + BT + Math.trunc(Number(s.agentLegs)) + BT + ' legs';
+}
+// ≥1/2 of spend is sub-agents → a lead fragment the composer OPENS the Cost section with (agents ARE the story).
+let costAgentsLead = '(none)';
+if (agentTier === 'lead') {
+  costAgentsLead = 'most of the spend is sub-agents — ' + FmtUsd(s.agentsUsd) + ' of ' + FmtUsd(sessionCostVal)
+    + ' (' + BT + agentPct + '%' + BT + ') across ' + BT + Math.trunc(Number(s.agentLegs)) + BT + ' legs from '
+    + BT + Math.trunc(Number(s.nAgents)) + BT + ' agents';
 }
 
 // ---- COLD ----
@@ -252,6 +278,8 @@ emit(`COST_TOTAL: ${costTotal}`);
 emit(`COST_CHAR: ${costChar}`);
 emit(`COST_FROZ5: cause=${froz5Cause}` + (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` : ' (curve n/a — 200k window or missing data)'));
 emit(`COST_DETAIL: ${costDetail}`);
+emit(`COST_AGENTS_TIER: ${agentTier}`);
+emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);
 emit(`COLD: ${coldOut}`);
 emit(`QUALITY_LEAD: ${qLead}`);
 emit(`QUALITY_SECONDARY: ${qSecondary}`);

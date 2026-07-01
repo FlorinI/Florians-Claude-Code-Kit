@@ -64,9 +64,15 @@ If a clause is malformed or you can't tell what to change, ask one short questio
    on its own line in a fenced block:
 
    ```
-   /rename <name>
+   /rename <name>@<branch>
    /color <color>
    ```
+
+   **The `/rename` line must append the current git branch** — `<name>@<branch>` — so the pasted name
+   matches what the `cc` launcher titles the session (`base@branch`). Resolve `<branch>` with
+   `git branch --show-current`, falling back to the short HEAD (`git rev-parse --short HEAD`) when
+   detached; if the project isn't a git repo or has no branch, emit the bare `/rename <name>`. `/color`
+   takes no suffix.
 
    Chained slash commands don't parse past the first, so they **must be pasted separately** — say so.
    On a `show`, frame them as "to restore this session's identity, paste each."
@@ -119,8 +125,8 @@ enough to choose by.
 A blank "type a name" prompt is low value. Derive **2–3 candidate names** from repo signals — the
 project folder name, the project `CLAUDE.md` H1 title, the current git branch, the theme of recent
 work — and offer them via `AskUserQuestion`, plus the auto-"Other" and an explicit **"Leave unset"** so
-skipping is one tap. On a pick: persist `name` (steps 4–5) and echo `/rename <name>` (step 6). On
-"Leave unset": write nothing for `name`.
+skipping is one tap. On a pick: persist `name` (steps 4–5) and echo `/rename <name>@<branch>` (step 6).
+On "Leave unset": write nothing for `name`.
 
 ## Notes
 

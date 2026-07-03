@@ -41,6 +41,6 @@
   "mainSessionUsd": null,
   "agentLegs": 5,
   "agentCtxMax": 22060,
-  "agentsCachePath": "C:\\Users\\Florian\\AppData\\Local\\Temp\\slgolden-cwd-b4pqpG\\.claude\\statusline-stats\\agents-1.agents.json",
+  "agentsCachePath": "agents-1.agents.json",
   "gitRepo": null
 }

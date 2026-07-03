@@ -5,7 +5,7 @@
 // parsing goes through _sl-compat.mjs. Rendering is guarded by the Node golden test
 // (tools/parity/run-parity.mjs) against committed fixtures. See docs/roadmap.md.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, rmSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.6.0';
+export const SL_VERSION = '4.2.7.0';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -398,6 +398,42 @@ function walkAgentFiles(dir, out) {
     else if (e.isFile() && /^agent-.*\.jsonl$/.test(e.name)) out.push(fp);
   }
 }
+// Agent label = the task, read from the agent's FIRST user message (the parent-issued prompt). The
+// transcript carries no harness metadata (no description/label field), so prompt text is the only
+// in-file source. Boilerplate openers are stripped so the task shows from the first character.
+function agentLabelFromText(s) {
+  if (!s) return '';
+  let t = String(s).replace(/\s+/g, ' ').trim();
+  // Structured prompts (workflow fan-outs especially) bury the task after a long SHARED preamble;
+  // measured on real siblings, divergence starts right at a "TASK:" marker — prefer the text after it.
+  const m = t.match(/\b(?:your )?task\b\s*(?:\([^)]{0,60}\))?\s*[:—–]\s*/i);
+  if (m && t.length - (m.index + m[0].length) >= 12) t = t.slice(m.index + m[0].length);
+  t = t.replace(/^you are (an? |the )?/i, '').replace(/^context\s*[—:–-]+\s*/i, '');
+  t = t.replace(/^[#*`>\s]+/, '');
+  return t.slice(0, 160);
+}
+function agentLabelFromEntry(p) {
+  const c = p?.message?.content;
+  if (typeof c === 'string') return agentLabelFromText(c);
+  if (Array.isArray(c)) { for (const b of c) { if (b && b.type === 'text' && typeof b.text === 'string') return agentLabelFromText(b.text); } }
+  return '';
+}
+// One-time backfill for cache entries scanned before labels existed: read only the file head.
+function agentLabelFromFileHead(fp) {
+  try {
+    const fd = openSync(fp, 'r');
+    const buf = Buffer.alloc(262144);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    closeSync(fd);
+    for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
+      const t = line.trim();
+      if (!t || !/"type"\s*:\s*"user"/.test(t)) continue;
+      try { const p = JSON.parse(t); if (p.type === 'user') { const l = agentLabelFromEntry(p); if (l) return l; } } catch {}
+    }
+  } catch {}
+  return '';
+}
+function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replace(/\.jsonl$/, '').slice(0, 9); }
 function UpdateAgentRollups(sessionId, tpath, projRoot) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
@@ -418,9 +454,9 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
       walkAgentFiles(subDir, files);
       for (const fp of files) {
         let e = byPath[fp];
-        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, lastMsgId: '' }; byPath[fp] = e; }
+        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', lastMsgId: '' }; byPath[fp] = e; }
         let len = 0; try { len = statSync(fp).size; } catch {}
-        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.lastMsgId = ''; }
+        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.lastMsgId = ''; }
         if (Number(e.offset) < len) {
           try {
             const buf = readFileSync(fp);
@@ -432,6 +468,10 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
               for (let line of proc.split('\n')) {
                 line = line.trim();
                 if (!line) continue;
+                if (!e.label && /"type"\s*:\s*"user"/.test(line)) {
+                  try { const up = JSON.parse(line); if (up.type === 'user') { const lbl = agentLabelFromEntry(up); if (lbl) e.label = lbl; } } catch {}
+                  continue;
+                }
                 if (!/"type"\s*:\s*"assistant"/.test(line)) continue;
                 try {
                   const p = JSON.parse(line);
@@ -443,8 +483,10 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
                   const inTok = Number(u.input_tokens) || 0, cwTok = Number(u.cache_creation_input_tokens) || 0;
                   const crTok = Number(u.cache_read_input_tokens) || 0, outTok = Number(u.output_tokens) || 0;
                   const cwUnits = CacheWriteUnits(u.cache_creation?.ephemeral_1h_input_tokens, u.cache_creation?.ephemeral_5m_input_tokens, cwTok);
-                  e.units = Number(e.units) + (inTok * M_INPUT + cwUnits + crTok * M_CACHE_READ + outTok * M_OUTPUT);
+                  const legU = inTok * M_INPUT + cwUnits + crTok * M_CACHE_READ + outTok * M_OUTPUT;
+                  e.units = Number(e.units) + legU;
                   e.ownUnits = Number(e.ownUnits) + (inTok * M_INPUT + cwUnits + outTok * M_OUTPUT);
+                  if (legU > Number(e.maxLegUnits || 0)) e.maxLegUnits = legU;
                   e.legs = Number(e.legs) + 1;
                   e.out = Number(e.out) + outTok;
                   const ctx = inTok + cwTok + crTok;
@@ -456,6 +498,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
             }
           } catch {}
         }
+        if (!e.label) e.label = agentLabelFromFileHead(fp) || agentIdFromPath(fp);
       }
       cache.lastScanTs = nEpoch;
       cache.agents = Object.values(byPath);
@@ -474,7 +517,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
   }
   const ctxSorted = ctxList.slice().sort((x, y) => x - y);
   const medCtx = ctxSorted[Math.floor(ctxSorted.length / 2)];
-  return { nAgents: live.length, sumUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits };
+  return { nAgents: live.length, sumUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, cachePath };
 }
 function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
@@ -998,6 +1041,7 @@ try {
     mainSessionUsd: !isNil(mainSessionUsd) ? mathRoundD(Number(mainSessionUsd), 2) : null,
     agentLegs: agentAgg ? Number(agentAgg.sumLegs) : null,
     agentCtxMax: agentAgg ? Number(agentAgg.maxCtx) : null,
+    agentsCachePath: agentAgg ? (agentAgg.cachePath ?? null) : null,
     gitRepo: repo ?? null,
   };
   const json = JSON.stringify(snapshot);

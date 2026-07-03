@@ -222,6 +222,8 @@ function main() {
       if (!s || typeof s !== 'object') return s;
       const out = { ...s };
       if (typeof out.transcriptPath === 'string') out.transcriptPath = out.transcriptPath.replace(/\\/g, '/').split('/').pop();
+      // agentsCachePath lives under the per-run temp cwd — same class as transcriptPath.
+      if (typeof out.agentsCachePath === 'string') out.agentsCachePath = out.agentsCachePath.replace(/\\/g, '/').split('/').pop();
       delete out.aliveSec;
       delete out.activityPct;
       return out;

@@ -41,5 +41,6 @@
   "mainSessionUsd": null,
   "agentLegs": null,
   "agentCtxMax": null,
+  "agentsCachePath": null,
   "gitRepo": null
 }

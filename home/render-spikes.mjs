@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveSidecarPath } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, getDriver, M_CACHE_READ } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, getDriver, M_CACHE_READ, M_OUTPUT } from './leg-driver.mjs';
 import { fmtN, nowEpoch, psRound } from './_sl-compat.mjs';
 
 const argv = process.argv.slice(2);
@@ -91,6 +91,64 @@ for (const l of topLegs) {
 const legend = anyCold ? `  ${MID}  ${snow} = counted in the cold tax` : '';
 const outLines = [stamp, `top ${topLegs.length} cost spikes  ${MID}  of ${legs.length} legs  ${MID}  session-$ basis  ${MID}  leg 1 = oldest${legend}`];
 outLines.push(...bodyLines);
+
+// --- sub-agent spikes (aggregate per agent) -------------------------------------------------------
+// Agents NEVER appear in the per-leg list above: the scan covers the main transcript only, and
+// per-leg data is deliberately not kept for agents (aggregate-only, D2). This second table surfaces
+// the FAT AGENTS instead — whole-lifetime $ per agent from the status line's agents cache, with the
+// cause decomposed from the same composition weights (re-read vs loaded vs generated).
+if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
+  try {
+    const acache = JSON.parse(readFileSync(snap.agentsCachePath, 'utf8'));
+    const liveAg = (acache.agents || []).filter((a) => a && Number(a.legs) > 0);
+    if (liveAg.length > 0) {
+      const uSorted = liveAg.map((a) => Number(a.units)).sort((x, y) => x - y);
+      const medU = uSorted[Math.floor(uSorted.length / 2)];
+      const topAg = [...liveAg].sort((a, b) => Number(b.units) - Number(a.units)).slice(0, Top);
+      const agUsd = liveAg.reduce((s, a) => s + Number(a.units), 0) * base;
+      const agPct = sessionCost > 0 ? ` (${psRound(100 * agUsd / sessionCost)}%)` : '';
+      // Workflow siblings can share a long identical preamble even past the TASK marker; re-window
+      // colliding labels to start near their mutual divergence point so each row shows what DIFFERS.
+      const groups = {};
+      for (const a of topAg) { const k = String(a.label || '').slice(0, 24); (groups[k] = groups[k] || []).push(a); }
+      const disp = new Map();
+      for (const k of Object.keys(groups)) {
+        const g = groups[k];
+        if (g.length < 2 || !k) { for (const a of g) disp.set(a, String(a.label || '')); continue; }
+        let cp = String(g[0].label || '');
+        for (const a of g.slice(1)) { const s = String(a.label || ''); let i = 0; while (i < cp.length && i < s.length && cp[i] === s[i]) i++; cp = cp.slice(0, i); }
+        for (const a of g) {
+          const s = String(a.label || '');
+          disp.set(a, (cp.length >= 24 && s.length > cp.length) ? '…' + s.slice(Math.max(0, cp.length - 8)) : s);
+        }
+      }
+      const seen = {};
+      const agLines = [];
+      for (const a of topAg) {
+        const aid = String(a.path).replace(/^.*agent-/, '').replace(/\.jsonl$/, '');
+        let label = disp.get(a) || aid.slice(0, 9);
+        if (label.length > 58) label = label.slice(0, 57) + '…';
+        if (seen[label]) label = label.slice(0, 50) + ` [${aid.slice(0, 5)}]`;
+        seen[label] = true;
+        const usd = '$' + fmtN(Number(a.units) * base, 2);
+        const xMed = medU > 0 ? `${fmtN(Number(a.units) / medU, 1)}x med` : '—';
+        // decomposition from the stored aggregates: re-read (cache_read) / ingest (input+cache_write) / output
+        const reRead = Number(a.units) - Number(a.ownUnits);
+        const outU = Number(a.out) * M_OUTPUT;
+        const ingest = Math.max(0, Number(a.ownUnits) - outU);
+        let cause;
+        if (reRead >= ingest && reRead >= outU) cause = `mostly re-reading its context (${a.legs} legs over ~${psRound(Number(a.maxCtx) / 1000)}k)`;
+        else if (ingest >= outU) cause = `mostly loading content (ctx grew to ~${psRound(Number(a.maxCtx) / 1000)}k)`;
+        else cause = `mostly generating output (~${psRound(Number(a.out) / 1000)}k out)`;
+        const peak = Number(a.maxLegUnits) > 0 ? `  ${MID}  peak leg $${fmtN(Number(a.maxLegUnits) * base, 2)}` : '';
+        agLines.push(`   "${label}"  ${MID}  ${usd}  ${MID}  ${xMed}  ${MID}  ${a.legs} legs${peak}  ${MID}  ${cause}`);
+      }
+      outLines.push('');
+      outLines.push(`top ${topAg.length} agents  ${MID}  of ${liveAg.length}  ${MID}  $${fmtN(agUsd, 2)}${agPct}  ${MID}  whole-agent totals (agents never appear in the leg list above)`);
+      outLines.push(...agLines);
+    }
+  } catch { /* best effort — the leg table above already rendered */ }
+}
 const out = outLines.join('\n');
 
 try { writeFileSync(join(claudeHome, '.claude', 'spikes.txt'), out, 'utf8'); } catch { /* best effort */ }

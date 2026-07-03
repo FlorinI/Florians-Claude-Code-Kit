@@ -1,4 +1,4 @@
-[1mOpus 4.8 (1M context)[0m[2m v2.1.142[0m[2m | [0m[2meffort:[0m[1;38;5;255mMAX[0m[2m | [0m[38;5;240mbsl4.2.6.0[0m
+[1mOpus 4.8 (1M context)[0m[2m v2.1.142[0m[2m | [0m[2meffort:[0m[1;38;5;255mMAX[0m[2m | [0m[38;5;240mbsl4.2.7.0[0m
 [2mctx [0m[38;5;208m340.0k[0m[2m/1.00M[0m[2m | [0m[38;2;0;200;0;48;2;0;60;0m 34% [0m[2m | [0m[2mto-compact [0m[33m~135.0k[0m[2m | [0m[33m⚑[0m[2m /handover-check[0m
 [2m5h quota [0m[38;5;208m→104%█▆80%←[0m[2m time[0m[2m | [0m[38;5;208m5h over cap[0m[2m | [0m[38;5;208mon usage credits · paying overage[0m[2m | [0m[2mresets 1h[0m
 [2m7d quota [0m[38;5;208m→100%█▅67%←[0m[2m time[0m[2m | [0m[38;5;208m7d cap reached[0m[2m | [0m[38;5;208mon credits, or blocked til reset[0m[2m | [0m[2mresets 2d7h[0m

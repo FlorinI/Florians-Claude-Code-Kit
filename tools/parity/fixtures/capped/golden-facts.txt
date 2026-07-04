@@ -10,6 +10,7 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COLD: cold tax so far: `<$0.01` over `1` leg(s)
+WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `93k`, green band — sharp
 QUALITY_SECONDARY: `9%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `382k` to compact

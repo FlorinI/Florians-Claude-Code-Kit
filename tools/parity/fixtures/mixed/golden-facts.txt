@@ -10,6 +10,7 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COLD: the ~1-hour cache is starting to cool (`~35 min` of warmth left) — a send keeps it warm; cold tax so far: `$1.22` over `1` leg(s)
+WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `93k`, green band — sharp
 QUALITY_SECONDARY: `9%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `382k` to compact

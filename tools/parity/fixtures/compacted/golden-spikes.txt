@@ -1,0 +1,5 @@
+from session compacte · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 2  ·  $0.65  ·  re-read deep context (~190k)
+   Leg 3  ·  $0.52  ·  compacted ~12k (context collapsed, no idle gap)
+   Leg 1  ·  $0.16  ·  loaded ~6k new context

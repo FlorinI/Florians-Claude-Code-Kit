@@ -1,0 +1,5 @@
+from session compacte · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=6  ·  range $0.16–$0.44  ·  raw peak $0.65  ·  height ∝ cost (peak = full)
+ ▆█▄▁ 
+▁████▇
+██████

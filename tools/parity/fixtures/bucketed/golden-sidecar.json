@@ -12,6 +12,7 @@
   "ctxAbsState": "yellow",
   "fillState": "yellow",
   "toCompact": 225000,
+  "autoCompactOff": false,
   "costUsd": 8,
   "nextLegUsd": 0.36195085539543226,
   "froz5Ratio": 0.9842849659507595,

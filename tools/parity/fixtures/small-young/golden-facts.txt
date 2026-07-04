@@ -10,6 +10,7 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COLD: (omit)
+WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `6%` fill — well under the ~60% cliff
 QUALITY_SECONDARY: `13k`, pristine band — sharp
 QUALITY_HEADROOM: `177k` to compact

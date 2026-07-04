@@ -46,6 +46,15 @@ function FmtAge(sec) {
   if (sec < 86400) return `${psRound(sec / 3600)}h${String(psRound((sec % 3600) / 60)).padStart(2, '0')}m`;
   return `${psRound(sec / 86400)}d${String(psRound((sec % 86400) / 3600)).padStart(2, '0')}h`;
 }
+// True median — even count → mean of the middle two (same semantics as statusline.mjs's Median()).
+// The old upper-middle index read the FATTER of 2 agents as the median, so it rendered "1.0x med".
+function median(arr) {
+  const vals = arr.filter((x) => x !== null && x !== undefined).map(Number).sort((a, b) => a - b);
+  const n = vals.length;
+  if (n === 0) return 0.0;
+  const mid = Math.floor(n / 2);
+  return n % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2.0;
+}
 const sid = snap.sessionId ? String(snap.sessionId).slice(0, Math.min(8, String(snap.sessionId).length)) : '????????';
 const repo = snap.gitRepo ? snap.gitRepo : '(no repo)';
 let stamp;
@@ -102,8 +111,7 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
     const acache = JSON.parse(readFileSync(snap.agentsCachePath, 'utf8'));
     const liveAg = (acache.agents || []).filter((a) => a && Number(a.legs) > 0);
     if (liveAg.length > 0) {
-      const uSorted = liveAg.map((a) => Number(a.units)).sort((x, y) => x - y);
-      const medU = uSorted[Math.floor(uSorted.length / 2)];
+      const medU = median(liveAg.map((a) => Number(a.units)));
       const topAg = [...liveAg].sort((a, b) => Number(b.units) - Number(a.units)).slice(0, Top);
       const agUsd = liveAg.reduce((s, a) => s + Number(a.units), 0) * base;
       const agPct = sessionCost > 0 ? ` (${psRound(100 * agUsd / sessionCost)}%)` : '';

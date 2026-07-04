@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.7.0';
+export const SL_VERSION = '4.2.8.1';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -110,6 +110,21 @@ function CompactWindow(ctxSize) {
   return { win: ctxSize, estimate: false };                                 // 200k `auto` ≈ the model window
 }
 function CompactAt(ctxSize) { return psRound(CompactWindow(ctxSize).win * 0.95); }
+// Auto-compact can also be OFF entirely — then the countdown (and its red `NOW`) is a lie: compaction
+// never fires. Two off switches: `/autocompact` persists `autoCompactEnabled: false` to the same
+// settings file, and the DISABLE_AUTO_COMPACT env var disables it per-process. Env semantics MIRROR
+// Claude Code's own env-truthiness parser: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed)
+// disable auto-compact; EVERY other value — including 'off', 'no', '0', 'false', '' and junk — leaves
+// it ON, so the countdown must keep rendering. Verified against the running CC binary 2026-07-04
+// (ticket 2026-07-04-acoff-env-predicate-vs-cc); if CC's parser drifts, this allowlist must follow.
+function autoCompactDisabled() {
+  const s = readJson(join(ClaudeHome, '.claude', 'settings.json'));
+  if (s && s.autoCompactEnabled === false) return true;
+  const env = process.env.DISABLE_AUTO_COMPACT;
+  if (env != null && ['1', 'true', 'yes', 'on'].includes(String(env).toLowerCase().trim())) return true;
+  return false;
+}
+const AC_OFF = autoCompactDisabled();
 
 // --- ANSI color helpers ----------------------------------------------------
 const ESC = '\x1b';
@@ -328,6 +343,10 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot) {
                 const prevTtl = Number(r.lastLegTtlSec) > 0 ? Number(r.lastLegTtlSec) : 300;
                 const blBigRewrite = (cwTok >= 50000 && crTok < 0.5 * cwTok);
                 const blCollapsed = (prevWarm > 0 && crTok < prevWarm * 0.7);
+                // Twin of leg-driver.mjs testColdLeg — keep the thresholds (50000 / 0.5 / 0.7 / 8000)
+                // in lockstep. A collapse WITHOUT a TTL-exceeding gap is the `compacted` display class
+                // (getDriver) and deliberately does NOT count here: `gap > prevTtl` keeps the cold-tax
+                // counters clean of mid-session compactions.
                 if (gap > prevTtl && cwTok >= 8000 && (blBigRewrite || blCollapsed)) {
                   const thisColdWaste = cwUnits - (cwTok * M_CACHE_READ);
                   r.nColdLegs = Number(r.nColdLegs) + 1;
@@ -434,6 +453,17 @@ function agentLabelFromFileHead(fp) {
   return '';
 }
 function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replace(/\.jsonl$/, '').slice(0, 9); }
+// Model → coarse pricing tier. Works on BOTH the id form ("claude-opus-4-8-20260115", agent
+// transcripts) and the display form ("Opus 4.8 (1M context)", the stdin payload), so a
+// main-vs-agent comparison can never read a format difference as a tier difference. Unknown or
+// absent → null and null NEVER counts as a tier: every pre-change agents cache lacks `model`
+// forever (incremental offsets), and unknown ≠ different — the tier-mix warn must not fire on it.
+function ModelTier(m) {
+  if (!m) return null;
+  const s = String(m).toLowerCase();
+  for (const t of ['opus', 'sonnet', 'haiku', 'fable']) if (s.includes(t)) return t;
+  return null;
+}
 function UpdateAgentRollups(sessionId, tpath, projRoot) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
@@ -454,9 +484,9 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
       walkAgentFiles(subDir, files);
       for (const fp of files) {
         let e = byPath[fp];
-        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', lastMsgId: '' }; byPath[fp] = e; }
+        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', model: '', lastMsgId: '' }; byPath[fp] = e; }
         let len = 0; try { len = statSync(fp).size; } catch {}
-        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.lastMsgId = ''; }
+        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.model = ''; e.lastMsgId = ''; }
         if (Number(e.offset) < len) {
           try {
             const buf = readFileSync(fp);
@@ -476,6 +506,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
                 try {
                   const p = JSON.parse(line);
                   if (p.type !== 'assistant') continue;
+                  if (p?.message?.model) e.model = String(p.message.model);
                   const mid = p?.message?.id;
                   if (!mid || mid === e.lastMsgId) continue;
                   const u = p?.message?.usage;
@@ -509,15 +540,17 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
   if (live.length === 0) return null;
   let sumUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
   const ctxList = [];
+  const tierCounts = {};
   for (const a of live) {
     sumUnits += Number(a.units); sumLegs += Number(a.legs); sumOut += Number(a.out);
     sumMaxCtx += Number(a.maxCtx); ctxList.push(Number(a.maxCtx));
     if (Number(a.maxCtx) > maxCtx) maxCtx = Number(a.maxCtx);
     if (Number(a.units) > maxUnits) maxUnits = Number(a.units);
+    const tier = ModelTier(a.model);
+    if (tier) tierCounts[tier] = (tierCounts[tier] || 0) + 1;
   }
-  const ctxSorted = ctxList.slice().sort((x, y) => x - y);
-  const medCtx = ctxSorted[Math.floor(ctxSorted.length / 2)];
-  return { nAgents: live.length, sumUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, cachePath };
+  const medCtx = Median(ctxList);
+  return { nAgents: live.length, sumUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, tierCounts, cachePath };
 }
 function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
@@ -549,15 +582,20 @@ if (!isNil(ctxUsed) && !isNil(ctxSize)) {
 }
 if (!isNil(ctxPct)) ctxParts.push(BgFill(ctxPct, FmtPct(ctxPct)));
 if (!isNil(ctxUsed) && !isNil(ctxSize)) {
-  const cw = CompactWindow(ctxSize);
-  const compactAt = psRound(cw.win * 0.95);
-  const remaining = compactAt - ctxUsed;
-  // `~` = the window is an ESTIMATE (on `auto`, using the model-tuned default) — shown ONLY when it's also
-  // near the bar (yellow/red, remaining < 200k), so a calm line never carries it and an authoritative
-  // override (a real number read from settings) never marks. One glyph, event-gated.
-  const est = (cw.estimate && remaining < 200000) ? '~' : '';
-  if (remaining > 0) ctxParts.push(Dim('to-compact ') + ColorLow(remaining, est + FmtNum(remaining), 200000, 50000));
-  else ctxParts.push(RedBold('to-compact ' + est + 'NOW'));
+  if (AC_OFF) {
+    // Auto-compact is off — no countdown, no red NOW: compaction will not fire.
+    ctxParts.push(Dim('to-compact off'));
+  } else {
+    const cw = CompactWindow(ctxSize);
+    const compactAt = psRound(cw.win * 0.95);
+    const remaining = compactAt - ctxUsed;
+    // `~` = the window is an ESTIMATE (on `auto`, using the model-tuned default) — shown ONLY when it's also
+    // near the bar (yellow/red, remaining < 200k), so a calm line never carries it and an authoritative
+    // override (a real number read from settings) never marks. One glyph, event-gated.
+    const est = (cw.estimate && remaining < 200000) ? '~' : '';
+    if (remaining > 0) ctxParts.push(Dim('to-compact ') + ColorLow(remaining, est + FmtNum(remaining), 200000, 50000));
+    else ctxParts.push(RedBold('to-compact ' + est + 'NOW'));
+  }
 }
 const absLvl = isNil(ctxUsed) ? 0 : (ctxUsed < 128000 ? 0 : ctxUsed < 256000 ? 1 : ctxUsed < 500000 ? 2 : 3);
 const fillLvl = isNil(ctxPct) ? 0 : (ctxPct < 50 ? 0 : ctxPct < 70 ? 1 : ctxPct < 85 ? 2 : 3);
@@ -691,7 +729,12 @@ if (rollup && !isNil(ctxTok) && ctxTok > 0 && Number(rollup.sumUnits) > 0 && ses
         coldMarkerCol = wCol;
         const amt = amtBright ? ColorLegCell(coldStakes, stakesStr) : Dim(stakesStr);
         if (wCol !== '2') {
-          coldParts.push(`${ESC}[${wCol}mcold${ESC}[0m${ESC}[${tCol}m in ${FmtDuration(psRound(coldRemain))} ${ESC}[0m` + amt);
+          // Keep-warm alternative (display-only): a `max_tokens: 0` API ping refreshes the still-warm
+          // cache at cache-READ price — base × ctx × 0.10, TTL-independent — vs the full rebuild
+          // stake shown next to it. Only meaningful while cooling (nothing left to refresh once expired).
+          const keepWarmUsd = coldBase * Number(ctxTok) * M_CACHE_READ;
+          coldParts.push(`${ESC}[${wCol}mcold${ESC}[0m${ESC}[${tCol}m in ${FmtDuration(psRound(coldRemain))} ${ESC}[0m` + amt
+            + Dim(` (keep-warm $${fmtN(keepWarmUsd, 2)})`));
         }
       } else {
         const ttlLabel = ttlSec >= 3600 ? '>1h' : '>5m';
@@ -810,6 +853,17 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   }
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
   aParts.push(fmtN(avgLegs, 1) + Dim(' legs/ag'));
+  // Tier-mix warn (warn-only — cost math is untouched): the session $ is de-inflated by UNITS, which
+  // assumes one price tier; when main + agents span >1 KNOWN tier, the per-agent $ split is off. Show
+  // the per-tier head-count (main included) + a dim warn chip. Unknown tiers (pre-change caches with
+  // no `model` field) never count, so old data can't fire this.
+  const tiers = { ...(agentAgg.tierCounts || {}) };
+  const mainTier = ModelTier(model);
+  if (mainTier) tiers[mainTier] = (tiers[mainTier] || 0) + 1;
+  const tierNames = Object.keys(tiers).sort();
+  if (tierNames.length > 1) {
+    aParts.push(Dim('⚠tier-mix ' + tierNames.map((t) => `${t}×${tiers[t]}`).join('·')));
+  }
   agentsLine = Dim('agents: ') + aParts.join(DIM_SEP);
 }
 
@@ -988,7 +1042,9 @@ try {
     : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
   const froz5State = isNil(ratio) ? null
     : ratio < 1.0 ? 'green' : ratio < 1.8 ? 'white' : ratio < 2.8 ? 'yellow' : ratio < 3.8 ? 'orange' : 'red';
-  const toCompactTok = (!isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
+  // Auto-compact off → toCompact is null (there is no compaction point) + the always-present
+  // autoCompactOff flag, so handover-facts can phrase headroom honestly instead of "N to compact".
+  const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
   const activityPct = (aliveSec && Number(aliveSec) > 0 && !isNil(apiSec)) ? mathRoundD(100.0 * apiSec / aliveSec, 1) : null;
   let coldStakeUsd = null, coldState = null, coldCoolRemainSec = null;
   if (!isNil(coldStakes) && coldStakes >= 0.25) {
@@ -1012,6 +1068,7 @@ try {
     ctxAbsState: absState,
     fillState: fillStateV,
     toCompact: toCompactTok,
+    autoCompactOff: AC_OFF,
     costUsd: costUsd ?? null,
     nextLegUsd: forecast,
     froz5Ratio: ratio,

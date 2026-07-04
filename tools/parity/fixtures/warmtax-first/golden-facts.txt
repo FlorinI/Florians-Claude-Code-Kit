@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `warmtax-` · Opus 4.8 (1M context) · `205k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: + Getting deeper
+HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 0.3243913968329 / next 0.11729675270607827 (lvl 0)
+COST_LEAD: each leg `~$0.12`, `0.32×` a fresh leg
+COST_TOTAL: `$1.92` total
+COST_CHAR: started heavy — a big opening leg (often a resume that front-loads reads) lifts the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust
+COST_FROZ5: cause=heavy-start; froz5 `0.32×` vs `1.14×` typical at this depth (residual 0.28×); confidence=ok
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COLD: the 5-minute cache is starting to cool (`~4 min` of warmth left) — a send keeps it warm
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `205k`, yellow band — mild weakening on hard multi-fact recall
+QUALITY_SECONDARY: `20%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `270k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: mostly flat with spikes, range `$0.11`–`$1.35`
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next

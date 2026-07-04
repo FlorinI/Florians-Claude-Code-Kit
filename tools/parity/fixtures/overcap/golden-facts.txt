@@ -10,6 +10,7 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COLD: (omit)
+WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `340k`, orange band — real degradation on complex full-context reasoning
 QUALITY_SECONDARY: `34%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `135k` to compact

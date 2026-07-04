@@ -1,0 +1,5 @@
+from session warmtax- · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest  ·  ❆ = counted in the cold tax
+   Leg 3  ·  $0.77  ·  re-cached ~60k (warm rewrite, not new content)
+❆  Leg 4  ·  $0.76  ·  re-cached ~60k (cold — cache expired after idle; $0.69 avoidable cold tax)
+   Leg 1  ·  $0.12  ·  loaded ~8k new context

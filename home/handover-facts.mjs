@@ -17,7 +17,7 @@ import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveSidecarPath } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, M_CACHE_READ } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, testWarmRewriteLeg, M_CACHE_READ } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 
 const BT = '`';          // literal backtick → inline-code spans render light-blue in the assistant message
@@ -69,6 +69,19 @@ const coldWastedUsdScan = (nColdScan > 0 && s.base != null)
   : 0;
 const lastColdLegsAgoScan = nColdScan > 0 ? scanLegs.length - Number(coldLegs[coldLegs.length - 1].idx) : null;
 
+// Warm-rewrite tax — the same avoidable-premium formula the cold tax uses ((cwUnits − cw×0.10) × base,
+// per-leg site: render-spikes.mjs), summed over genuine warm-rewrite legs ONLY. The partition comes
+// from the classifier (testWarmRewriteLeg, leg-driver.mjs — getDriver's class order: cold first, then
+// compacted, then bigRewrite; opening leg excluded), so a big cache write is billed into exactly one
+// of {cold tax, compacted, warm-rewrite tax} and the spikes label always agrees with the money.
+// Raw signal, no smoothing/caps. The day CC adopts cache-preserving mid-conversation system messages,
+// this is the before/after number.
+const warmRewriteLegs = scanLegs.filter(testWarmRewriteLeg);
+const nWarmScan = warmRewriteLegs.length;
+const warmTaxUsdScan = (nWarmScan > 0 && s.base != null)
+  ? mathRoundD(warmRewriteLegs.reduce((a, l) => a + (l.cwUnits - l.cw * M_CACHE_READ), 0) * Number(s.base), 2)
+  : 0;
+
 // ---- TUNABLES (recalibrate here) ----
 const COST_FLOOR_FINE = 0.28;   // next-leg $ below this → cost verdict is FINE regardless of froz5
 const COST_FLOOR_STEEP = 0.45;  // between FINE and this, cost can read "climbing" at most — never "expensive"
@@ -87,6 +100,17 @@ function FmtK(t) { if (t == null) return `${BT}?${BT}`; return BT + psRound(Numb
 function FmtPct(v) { if (v == null) return `${BT}?${BT}`; return BT + psRound(Number(v)) + '%' + BT; }
 function FmtRatio(v) { if (v == null) return `${BT}?${BT}`; return BT + fmtN(Number(v), 2) + TIMES + BT; }
 function FmtMin(sec) { if (sec == null) return '~?'; return '~' + BT + psRound(Number(sec) / 60) + ' min' + BT; }
+
+// True median — even count → mean of the middle two (same semantics as statusline.mjs's Median()).
+// The old psRound(length/2) index picked an upper-middle-ish element (with banker's rounding it even
+// landed on the MAX for 3 legs), which skewed the `spiky` trajectory verdict.
+function median(arr) {
+  const vals = arr.filter((x) => x !== null && x !== undefined).map(Number).sort((a, b) => a - b);
+  const n = vals.length;
+  if (n === 0) return 0.0;
+  const mid = Math.floor(n / 2);
+  return n % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2.0;
+}
 
 // Empirical context→froz5 curve: the typical ratio at a given depth (ctxK = ctxTokens/1000),
 // piecewise-linear through FROZ5_CURVE with linear extrapolation off both ends (floored).
@@ -203,12 +227,18 @@ if (agentTier === 'lead') {
 const ttlName = Number(s.coldTtlSec) === 3600 ? '~1-hour cache' : (Number(s.coldTtlSec) === 300 ? '5-minute cache' : '5-minute cache (assumed)');
 const warm = FmtMin(s.coldCoolRemainSec);
 const stake = FmtUsd(s.coldStakeUsd);
+// Keep-warm alternative for the act-soon/urgent branches: a `max_tokens: 0` API ping re-warms the
+// still-warm cache at cache-READ price — base × ctx × 0.10 (TTL-independent), vs the rebuild stake.
+const keepWarmUsd = (s.base != null && s.ctxTokens != null) ? Number(s.base) * Number(s.ctxTokens) * M_CACHE_READ : null;
+const keepWarmClause = keepWarmUsd != null
+  ? ' (a ' + FmtUsd(keepWarmUsd) + ' keep-warm API refresh — max_tokens:0 — buys the same warmth without a real send)'
+  : '';
 let coldOut = '(omit)';
 switch (String(s.coldBand)) {
   case 'calm': if (s.coldStakeUsd != null) coldOut = 'calm — idling past the cache lifetime would add ' + stake + ' to resume; no urgency'; break;
   case 'heads-up': coldOut = 'the ' + ttlName + ' is starting to cool (' + warm + ' of warmth left) — a send keeps it warm'; break;
-  case 'act-soon': coldOut = 'send within ' + warm + ' to keep the ' + ttlName + ' warm; let it cool and resuming adds a one-time ' + stake; break;
-  case 'urgent': coldOut = 'the ' + ttlName + ' is about to expire (' + warm + ' left) — a send now keeps it warm; otherwise your next resume adds a one-time ' + stake; break;
+  case 'act-soon': coldOut = 'send within ' + warm + ' to keep the ' + ttlName + ' warm; let it cool and resuming adds a one-time ' + stake + keepWarmClause; break;
+  case 'urgent': coldOut = 'the ' + ttlName + ' is about to expire (' + warm + ' left) — a send now keeps it warm; otherwise your next resume adds a one-time ' + stake + keepWarmClause; break;
   case 'expired':
     coldOut = String(s.coldState) === 'cold'
       ? 'your recent resume re-cached the context for ' + stake + ' — already paid; you are warm again now'
@@ -234,7 +264,10 @@ const tokSig = FmtK(s.ctxTokens) + ', ' + absState + ' band' + (qWord ? ' — ' 
 const fillSig = FmtPct(s.fillPct) + fillBand;
 const qLead = is1M ? tokSig : fillSig;
 const qSecondary = is1M ? fillSig : tokSig;
-const qHeadroom = FmtK(s.toCompact) + ' to compact';
+// Auto-compact off → never say "N to compact": compaction will not fire. (toCompact is null then.)
+const qHeadroom = s.autoCompactOff === true
+  ? 'auto-compact is off — no compaction will fire; the session runs to the raw window (manage context by hand)'
+  : FmtK(s.toCompact) + ' to compact';
 
 // ---- ACTIVITY (omit when sub-agents ran — activity% is agent-polluted) ----
 let act;
@@ -251,8 +284,7 @@ if (lc.length >= 3) {
   const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const firstAvg = avg(lc.slice(0, third));
   const lastAvg = avg(lc.slice(lc.length - third));
-  const sorted = [...lc].sort((a, b) => a - b);
-  const med = sorted[psRound(sorted.length / 2)];
+  const med = median(lc);
   const max = Math.max(...lc);
   const climbing = (firstAvg > 0 && lastAvg > firstAvg * 1.3);
   const spiky = (med > 0 && max > med * 2.5);
@@ -281,6 +313,9 @@ emit(`COST_DETAIL: ${costDetail}`);
 emit(`COST_AGENTS_TIER: ${agentTier}`);
 emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);
 emit(`COLD: ${coldOut}`);
+emit('WARM_REWRITE_TAX: ' + (nWarmScan >= 1
+  ? FmtUsd(warmTaxUsdScan) + ' over ' + BT + nWarmScan + BT + ' leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax'
+  : '(none)'));
 emit(`QUALITY_LEAD: ${qLead}`);
 emit(`QUALITY_SECONDARY: ${qSecondary}`);
 emit(`QUALITY_HEADROOM: ${qHeadroom}`);

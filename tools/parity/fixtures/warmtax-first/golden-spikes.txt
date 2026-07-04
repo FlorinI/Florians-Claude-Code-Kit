@@ -1,0 +1,5 @@
+from session warmtax- · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $1.35  ·  re-cached ~200k (warm rewrite, not new content)
+   Leg 6  ·  $0.12  ·  re-read deep context (~203k)
+   Leg 5  ·  $0.12  ·  re-read deep context (~202k)

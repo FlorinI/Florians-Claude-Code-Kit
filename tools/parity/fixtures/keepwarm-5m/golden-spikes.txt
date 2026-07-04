@@ -1,0 +1,5 @@
+from session keepwarm · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 6  ·  $1.00  ·  loaded ~32k new context
+   Leg 1  ·  $0.20  ·  loaded ~8k new context
+   Leg 2  ·  $0.20  ·  re-read deep context (~50k)

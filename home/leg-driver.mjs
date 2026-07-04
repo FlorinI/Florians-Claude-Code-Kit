@@ -35,6 +35,7 @@ export function getDriver(l) {
     case 'cw': {
       const bigRewrite = (l.cw >= 50000 && l.cr < l.cw * 0.5);
       if (testColdLeg(l)) return `re-cached ~${psRound(l.cw / 1000)}k (cold — cache expired after idle)`;
+      if (testCompactedLeg(l)) return `compacted ~${psRound(l.cw / 1000)}k (context collapsed, no idle gap)`;
       if (bigRewrite) return `re-cached ~${psRound(l.cw / 1000)}k (warm rewrite, not new content)`;
       return `loaded ~${psRound(l.cw / 1000)}k new context`;
     }
@@ -50,6 +51,29 @@ export function testColdLeg(l) {
   const collapsed = (l.prevWarm > 0 && l.cr < l.prevWarm * 0.7);
   return l.gapToPrev != null && l.gapToPrev > l.coldTtl
     && l.cw >= 8000 && (bigRewrite || collapsed);
+}
+
+// Test-CompactedLeg — the ONE compacted predicate. The warm set COLLAPSED (cr < 0.7×prevWarm)
+// WITHOUT a TTL-exceeding idle gap — context was dropped mid-session (client /compact today,
+// server-side compaction tomorrow), not an expiry. Same collapse test as testColdLeg but with the
+// gap condition INVERTED, so this class and the cold class partition collapse events by gap; it
+// never touches the cold tax (testColdLeg requires gap > coldTtl and runs first in getDriver).
+// When collapse and bigRewrite both hold, compacted wins — collapse is the stronger signal
+// (pinned at the 2026-07-04 freeze).
+export function testCompactedLeg(l) {
+  return l.gapToPrev != null && l.gapToPrev <= l.coldTtl
+    && l.prevWarm > 0 && l.cr < l.prevWarm * 0.7 && l.cw >= 8000;
+}
+
+// Test-WarmRewriteLeg — the ONE warm-rewrite-TAX predicate (handover-facts' WARM_REWRITE_TAX sum).
+// Follows getDriver's cw-branch class order — cold first, then compacted, then bigRewrite — so the
+// spikes label and the billed class agree by construction, and the leg classes form a clean
+// partition: a big cache write lands in exactly one of {cold tax, compacted, warm-rewrite tax}.
+// The opening leg (gapToPrev == null) is excluded outright: with no previous warm baseline its
+// context load could never have been a cache read, so the premium is unavoidable — not a rewrite.
+export function testWarmRewriteLeg(l) {
+  const bigRewrite = (l.cw >= 50000 && l.cr < l.cw * 0.5);
+  return bigRewrite && l.gapToPrev != null && !testColdLeg(l) && !testCompactedLeg(l);
 }
 
 // Get-ScannedLegs — authoritative transcript scan for the /handover-check renderers. Per-leg

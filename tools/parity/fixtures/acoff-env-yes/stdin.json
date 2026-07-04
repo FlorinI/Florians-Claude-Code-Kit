@@ -1,0 +1,29 @@
+{
+  "model": {
+    "display_name": "Opus 4.8 (1M context)"
+  },
+  "version": "2.1.142",
+  "effort": {
+    "level": "high"
+  },
+  "thinking": {
+    "enabled": true
+  },
+  "context_window": {
+    "used_percentage": 40,
+    "total_input_tokens": 400000,
+    "context_window_size": 1000000
+  },
+  "transcript_path": "Z:/does/not/exist.jsonl",
+  "session_id": "acoff-env-yes-1",
+  "cost": {
+    "total_cost_usd": 4.75,
+    "total_api_duration_ms": 300000,
+    "total_lines_added": 60,
+    "total_lines_removed": 12
+  },
+  "workspace": {
+    "current_dir": "P"
+  },
+  "rate_limits": {}
+}

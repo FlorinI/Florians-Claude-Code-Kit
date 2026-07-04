@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `keepwarm` · Opus 4.8 (1M context) · `170k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: + Getting deeper
+HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 2.2 / next 0.44000000000000006 (lvl 0)
+COST_LEAD: each leg `~$0.44`, `2.20×` a fresh leg
+COST_TOTAL: `$2.00` total
+COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
+COST_FROZ5: cause=light-start; froz5 `2.20×` vs `0.95×` typical at this depth (residual 2.31×); confidence=ok
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COLD: send within `~2 min` to keep the 5-minute cache warm; let it cool and resuming adds a one-time `$3.91` (a `$0.34` keep-warm API refresh — max_tokens:0 — buys the same warmth without a real send)
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `170k`, yellow band — mild weakening on hard multi-fact recall
+QUALITY_SECONDARY: `17%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `305k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: climbing, with spikes, range `$0.20`–`$1.00`
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next

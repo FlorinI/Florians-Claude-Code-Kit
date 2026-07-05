@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.8.1';
+export const SL_VERSION = '4.2.8.2';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -862,7 +862,7 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   if (mainTier) tiers[mainTier] = (tiers[mainTier] || 0) + 1;
   const tierNames = Object.keys(tiers).sort();
   if (tierNames.length > 1) {
-    aParts.push(Dim('⚠tier-mix ' + tierNames.map((t) => `${t}×${tiers[t]}`).join('·')));
+    aParts.push(Dim('⚠ tier-mix ' + tierNames.map((t) => `${t}×${tiers[t]}`).join('·')));
   }
   agentsLine = Dim('agents: ') + aParts.join(DIM_SEP);
 }

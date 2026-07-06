@@ -1,5 +1,5 @@
 ---
-description: Dump the in-head topics of this session, triage each into a bucket (handover / persist / do-now), act on them, and write a handover file for the next session to pick up. Say "/handover ok" to run non-interactively with default buckets.
+description: Dump the in-head topics of this session, triage each into a bucket (handover / memory / project-docs / do-now), act on them, and write a handover file for the next session to pick up. Say "/handover ok" to run non-interactively with default buckets.
 ---
 
 # /handover — deliberate session handover
@@ -11,8 +11,8 @@ You are about to do a clean session handover. Don't `/clear` yet; the user will 
 If the command was invoked with the argument **`ok`** (case-insensitive — `ok`, `OK`, `Ok` all count), run the flow **with the proposed default buckets and no confirmation prompt** — but NOT silently. Specifically, in this order:
 
 1. Draft the eight coordinates (Step 1) internally. You do not need to print the long-form draft.
-2. **Print the Step-2 triage summary table** — the compact `N. [bucket] item` list, defaults already filled in, in the exact format the interactive flow uses (see Step 2). Show it BEFORE acting on or writing anything. This is the recap the user reacts to: because it lands before any M/X action or file write, the user can scan it and hit Esc to interrupt and correct course if a bucket is wrong.
-3. Do NOT pause for triage adjustments and do NOT ask for confirmation. After printing the table, continue straight on in the same turn — act on the M and X items (Step 3), write the handover file (Step 4), and report (Step 5).
+2. **Print the Step-2 triage summary table** — the compact `N. [bucket] item` list, defaults already filled in, in the exact format the interactive flow uses (see Step 2). Show it BEFORE acting on or writing anything. This is the recap the user reacts to: because it lands before any M/D/X action or file write, the user can scan it and hit Esc to interrupt and correct course if a bucket is wrong.
+3. Do NOT pause for triage adjustments and do NOT ask for confirmation. After printing the table, continue straight on in the same turn — act on the M, D, and X items (Step 3), write the handover file (Step 4), and report (Step 5).
 
 The only pauses still permitted are the deliberate-action confirmations in Step 3 for outward-facing or hard-to-reverse X items (commits, pushes, deletes, sends) — those are never auto-run off defaults.
 
@@ -46,7 +46,7 @@ If a section has only persisted items, still include it but mark it — the user
 
 Number every bullet/item sequentially from 1 to N across all sections (the counter does NOT reset between sections). This is the **only** numbering in the draft, which is what lets the user reference any item — e.g. "drop 7", "edit 3" — instead of describing it by position within a section. (Observed failure: a draft that numbered the *sections* 1–8 was then forced to put items on letters a–u to dodge the clash, which broke "drop 7 / edit 3" entirely.)
 
-Show each item's **proposed default bucket** (the Step-2 letter: `H` / `M` / `X` / `—`) in brackets immediately after the number, in **both** this long-form draft and the Step-2 triage — so the user reads each full item together with its disposition, no cross-referencing. The bracket is a proposal; the user adjusts it in Step 2.
+Show each item's **proposed default bucket** (the Step-2 letter: `H` / `M` / `D` / `X` / `—`) in brackets immediately after the number, in **both** this long-form draft and the Step-2 triage — so the user reads each full item together with its disposition, no cross-referencing. The bracket is a proposal; the user adjusts it in Step 2.
 
 Layout — named heading; running counter continuing across the section boundary without resetting; `[bucket]` right after each number:
 
@@ -57,7 +57,8 @@ Layout — named heading; running counter continuing across the section boundary
 
 ## Recent changes
 3. [H] <item>
-4. [M] <item>
+4. [M] <working-style preference>
+5. [D] <durable project decision>
 ```
 
 Present the draft to the user for review.
@@ -67,19 +68,27 @@ Present the draft to the user for review.
 Every numbered item gets a disposition — the triage is a **1:1 echo of the draft**: exactly one line per item, **same number, same order, same bracket** as the long-form draft, 1..N. Never summarize, merge, renumber, or drop; if the draft has 21 items, the triage has 21 lines. (Observed failure: 21 draft items collapsed into 7 renumbered topic lines, so no triage line mapped back to a draft item.) The bracket was already proposed inline in Step 1; this compact view just gathers them for quick adjustment. The buckets:
 
 - **H — Handover doc.** Carry forward as orientation for the next session. Forward-looking state: work in flight, blockers, half-formed plans, next steps you are NOT doing now.
-- **M — Memory / specs.** Persist durably *right now*. Working-style signals & preferences → a memory file; durable decisions, constraints, architecture, or roadmap → the relevant project spec/doc. You choose memory vs. spec per item, as appropriate.
+- **M — Claude memory.** A durable fact about *how to work with the user, or how Claude should behave* — a working-style preference, a correction, a validated pattern, a reference Claude will want again. Persist now to a memory file (frontmatter + a one-line `MEMORY.md` pointer). Audience: **future Claude sessions**; it lives in Claude's memory dir, never in the repo.
+- **D — Project docs.** A durable fact about *the project itself* — a decision ("X over Y because Z"), a constraint, an architectural choice, a convention, a roadmap item. Persist now into the repo's own documentation (`SPEC.md`, `docs/…`, `CLAUDE.md`, an ADR/roadmap — whatever the project uses). Audience: **anyone working on the project**; it's version-controlled and ships with the code.
 - **X — Execute now.** Do it before exiting — run the command, make the edit, commit, file the issue.
 - **— — Drop.** Not worth any bucket (e.g. already-persisted noise, resolved trivia).
 
-Default heuristics: preferences / working-style → **M** (memory); durable decisions / constraints / roadmap → **M** (spec); quick actionable tasks the user wants done → **X**; forward-looking state & blockers → **H**; already-persisted items → **—** unless worth restating in H.
+**M vs D — which target?** The split is about *audience and ownership*, not importance. Three tests, any one decides it:
+- **Audience** — would a new human teammate, with no access to Claude's memory, need this to work on the project? Yes → **D**. It only helps *Claude* serve the user better → **M**.
+- **Aboutness** — is the fact about the *product/codebase* (why it's built this way, what a constraint is)? → **D**. Is it about the *collaboration* (how the user likes to work, a correction, a preference)? → **M**.
+- **Ownership** — does it belong in version control and survive a fresh clone? → **D**. Does it belong to the user's personal Claude env, across all projects? → **M**.
+
+When an item is genuinely both (a decision that also revealed a working-style preference), split it: the decision → **D**, the preference → **M**. When a project has no docs home for it yet, that's a **D** item whose action is "create the doc" — don't downgrade it to **M** just because the file doesn't exist.
+
+Default heuristics: preferences / working-style / corrections / validated patterns → **M** (Claude memory); durable decisions / constraints / architecture / conventions / roadmap → **D** (project docs); quick actionable tasks the user wants done → **X**; forward-looking state & blockers → **H**; already-persisted items → **—** unless worth restating in H.
 
 Present compactly, defaults already filled in — one line per draft item, reusing the draft's numbers (this echoes items 1–N; a real list runs to whatever N was, not a summarized handful):
 
 ```
 1. [—] Session goal (recorded here, work done)
 2. [H] No MCP loaded this session — a restart picks it up
-3. [M] Board X is the real roadmap (→ memory)
-4. [M] "design principles" = the Visual Identity Brief (→ memory)
+3. [D] Board X is the real roadmap (→ docs/roadmap)
+4. [M] The user prefers dense, drillable displays (→ memory)
 5. [H] Design-system file looks thin — drift risk to confirm
 6. [X] Deploy statusline to ~/.claude
 7. [—] sparkline anchor fix (already committed)
@@ -88,19 +97,20 @@ Present compactly, defaults already filled in — one line per draft item, reusi
 
 Then offer the shorthand:
 
-> `Legend: H = handover · M = memory/specs · X = do now · — = drop.`
-> `Adjust with shorthand (e.g. "2X 5H 7-9—") or say "ok" to accept the defaults.`
+> `Legend: H = handover · M = Claude memory · D = project docs · X = do now · — = drop.`
+> `Adjust with shorthand (e.g. "2X 5H 7-9D") or say "ok" to accept the defaults.`
 
 Accept item-suffix shorthand (`2X`), ranges (`7-9M`), or bucket-grouped (`H 1 2 5; X 3`). Re-show the updated list after each change until the user confirms.
 
-## Step 3 — act on X and M (before writing the file)
+## Step 3 — act on X, M, and D (before writing the file)
 
 Do these first so the handover file can record their outcomes.
 
 - **X items** — execute now, in a sensible order. For anything outward-facing or hard to reverse (commits, pushes, deletes, sends), confirm with the user first per the usual deliberate-action rules. Report what each did.
-- **M items** — persist now. Memory files follow the memory-file conventions (frontmatter + a one-line `MEMORY.md` pointer); spec/doc items get written or appended to the right file. Show the user each destination.
+- **M items** — persist now to Claude memory, following the memory-file conventions (frontmatter + a one-line `MEMORY.md` pointer). Show the user the memory slug.
+- **D items** — write or append to the right project doc (`SPEC.md`, `docs/…`, `CLAUDE.md`, roadmap, or a new ADR); create the doc if the project has no home for it yet. Show the user each destination path.
 
-If an M item lands in a spec/doc, it no longer needs to live in the handover body — a one-line pointer ("persisted to `docs/X`") is enough.
+If a D item lands in a project doc, it no longer needs to live in the handover body — a one-line pointer ("documented in `docs/X`") is enough.
 
 ## Step 4 — write the handover file (H items)
 
@@ -108,7 +118,7 @@ Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons
 
 Write to `<cwd>/.claude/handovers/<timestamp>.md`. Create the `.claude/handovers/` directory if it doesn't exist.
 
-The file carries the **H** items as its forward-looking payload (in their eight-section structure), plus a short **Resolved before clear** section recording what was executed (X, with outcomes) and persisted (M, with destinations), so the next session sees the full picture.
+The file carries the **H** items as its forward-looking payload (in their eight-section structure), plus a short **Resolved before clear** section recording what was executed (X, with outcomes), persisted to memory (M), and documented in the project (D), so the next session sees the full picture.
 
 File shape:
 
@@ -156,7 +166,8 @@ model: <current model display name>
 ## Resolved before clear
 
 - **Executed (X):** <what was done, with outcomes>
-- **Persisted (M):** <what was saved, with destinations — memory slug / doc path>
+- **Persisted to memory (M):** <memory slug(s)>
+- **Documented in the project (D):** <doc path(s)>
 ```
 
 Omit any section (including "Resolved before clear") that has nothing in it.

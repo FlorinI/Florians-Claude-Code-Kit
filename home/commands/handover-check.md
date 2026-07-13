@@ -70,6 +70,6 @@ Copy legspark and spikes verbatim into their fenced blocks — do not redraw, re
     • **Quality** — a prose line: lead with QUALITY_LEAD, add QUALITY_SECONDARY as a secondary aside, state QUALITY_HEADROOM, and fold in QUALITY_CAVEAT.
     • **Activity** — if ACTIVITY starts with "(omit", skip this line ENTIRELY. Otherwise a prose line from it.
     • **Trajectory** — a prose line from TRAJECTORY (shape + range). Do NOT guess what caused spikes — the spike panel the main session appends carries the resolved cause per leg. In particular, never attribute per-leg spikes to "sub-agent work": agents never appear in the per-leg data (their cost is aggregate-only, in the agents table), so a main-leg spike is by construction NOT an agent.
-    • YOUR CALL — a one-line ```diff block starting with the YOURCALL_POLARITY sign ("+" or "-"), framing YOURCALL_BASIS as a crisp, human recommendation in your own words. Never put backticks or bold inside the block.
+    • YOUR CALL — a one-line ```diff block starting with the YOURCALL_POLARITY sign ("+" or "-"), framing YOURCALL_BASIS as a crisp, human recommendation in your own words. The cost direction here MUST match COST_CHAR — never call cost "climbing" if COST_CHAR says it is flat-to-falling (high-but-flat is not climbing). Never put backticks or bold inside the block.
 
     Output ONLY the blocks above — no preamble, and no trailing notes (the main session appends the charts and a follow-up line).

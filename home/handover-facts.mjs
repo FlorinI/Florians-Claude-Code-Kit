@@ -284,11 +284,20 @@ if (lc.length >= 3) {
   const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const firstAvg = avg(lc.slice(0, third));
   const lastAvg = avg(lc.slice(lc.length - third));
+  const midSlice = lc.slice(third, lc.length - third);
+  const midAvg = midSlice.length ? avg(midSlice) : (firstAvg + lastAvg) / 2;
   const med = median(lc);
   const max = Math.max(...lc);
   const climbing = (firstAvg > 0 && lastAvg > firstAvg * 1.3);
   const spiky = (med > 0 && max > med * 2.5);
-  trajShape = climbing && spiky ? 'climbing, with spikes' : (climbing ? 'climbing' : (spiky ? 'mostly flat with spikes' : 'flat'));
+  // Whole-session ARC vs the RECENT direction. A heavy-start / mid-peak session can climb OVERALL yet be
+  // flat-to-down lately; a bare "climbing" then contradicts a "flat-to-falling" Cost read (COST_CHAR). If
+  // the recent tail has come well off the session's peak stretch, say so instead of "climbing".
+  const peakSeg = Math.max(firstAvg, midAvg, lastAvg);
+  const recentOffPeak = (peakSeg > 0 && lastAvg < peakSeg * 0.85);
+  const base = (climbing && recentOffPeak) ? 'climbed earlier, flat-to-down recently'
+    : (climbing ? 'climbing' : 'flat');
+  trajShape = spiky ? (base === 'flat' ? 'mostly flat with spikes' : base + ', with spikes') : base;
 }
 
 // ---- YOUR CALL (polarity deterministic from the headline) ----
@@ -298,6 +307,10 @@ if (hLevel === 0) ycBasis = 'both axes fine — room to continue on recent conte
 else if (hLevel === 1) ycBasis = 'getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next';
 else if (hDriver === 'cost') ycBasis = 'cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context';
 else if (hDriver === 'quality') ycBasis = 'quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work';
+// hDriver === 'both'. Only call cost "climbing" when the ratio itself is trending up; a benign
+// (heavy/light-start, cold-pumped) ratio elevated cost via the absolute-$ floor — per-leg is HIGH but
+// FLAT, and saying "climbing" would contradict COST_CHAR's "flat-to-falling".
+else if (benignFroz5 || trend === 0) ycBasis = 'quality is in the degradation band and each leg is already pricey — cost is high but flat, not climbing — lean toward handing over';
 else ycBasis = 'both cost and quality are climbing — lean toward handing over';
 
 // ---- emit the fact sheet ----

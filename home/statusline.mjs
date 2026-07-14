@@ -10,17 +10,17 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import {
-  nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs,
+  nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs, atomicWriteFile,
 } from './_sl-compat.mjs';
 import {
-  getDriver, testColdLeg,
+  getDriver, testColdLeg, ModelTier, TIER_BASE,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
 } from './leg-driver.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.2.8.2';
+export const SL_VERSION = '4.3.0.1';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -245,7 +245,7 @@ function BgFroz5(ratio, text) {
 const DIM_SEP = Dim(' | ');
 
 // === Per-session cumulative-token rollups (incremental transcript scan) =====
-function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot) {
+function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel) {
   if (!sessionId || !tpath || !existsSync(tpath)) return null;
   const statsDir = join(claudeStateDir(projRoot), 'statusline-stats');
   try { if (!existsSync(statsDir)) mkdirSync(statsDir, { recursive: true }); } catch {}
@@ -257,7 +257,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot) {
     lastInputBilled: 0, lastOutputTokens: 0, lastSeenCost: 0, lastLegCost: null,
     perLegUnits: [], perLegOwnUnits: [], costBaseline: null, lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0,
-    lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [],
+    lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
   });
   if (!hadPrior) r = freshRollup();
 
@@ -285,6 +285,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot) {
   if (!('lastLegTtlSec' in r)) r.lastLegTtlSec = 0;
   if (!('recentWriteTtls' in r)) r.recentWriteTtls = [];
   if (!('recentLegs' in r)) r.recentLegs = [];
+  if (!('mainModel' in r)) r.mainModel = '';
   const skipLastLegCost = needsReset;
   const nLegsBefore = Number(r.nLegs);
 
@@ -388,14 +389,29 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot) {
   }
   r.lastSeenCost = Number(currentCost);
 
-  try { writeFileSync(statsPath, JSON.stringify(r, null, 2), 'utf8'); } catch {}
+  // Model stamping — a mid-session PRICE-TIER change (never a raw-string change: id-form vs
+  // display-form and same-tier upgrades share a tier) marks the froz5 ratio non-comparable across
+  // the switch. The stamp persists for the rest of the session; the sidecar carries it verbatim.
+  const prevTier = ModelTier(r.mainModel);
+  const newTier = ModelTier(mainModel);
+  if (prevTier !== null && newTier !== null && prevTier !== newTier) {
+    r.modelSwitchedAtLeg = Number(r.nLegs);
+    r.modelSwitch = { atLeg: Number(r.nLegs), from: String(r.mainModel), to: String(mainModel) };
+  }
+  if (mainModel) r.mainModel = String(mainModel);
+
+  try { atomicWriteFile(statsPath, JSON.stringify(r, null, 2)); } catch {}
 
   if (!hadPrior) {
     try {
       const cutoff = NOW - 7 * 86400;
       const self = sessionId + '.json';
       for (const name of readdirSync(statsDir)) {
-        if (!name.endsWith('.json') || name === self) continue;
+        if (name === self) continue;
+        // .json = expired session state; .tmp. = an orphaned atomic-write temp (crash between
+        // write and rename). Same age cutoff for both — a concurrent writer's in-flight temp
+        // is never fresh enough to sweep.
+        if (!name.endsWith('.json') && !name.includes('.tmp.')) continue;
         try {
           const fp = join(statsDir, name);
           if (statSync(fp).mtimeMs / 1000 < cutoff) rmSync(fp, { force: true });
@@ -453,18 +469,8 @@ function agentLabelFromFileHead(fp) {
   return '';
 }
 function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replace(/\.jsonl$/, '').slice(0, 9); }
-// Model → coarse pricing tier. Works on BOTH the id form ("claude-opus-4-8-20260115", agent
-// transcripts) and the display form ("Opus 4.8 (1M context)", the stdin payload), so a
-// main-vs-agent comparison can never read a format difference as a tier difference. Unknown or
-// absent → null and null NEVER counts as a tier: every pre-change agents cache lacks `model`
-// forever (incremental offsets), and unknown ≠ different — the tier-mix warn must not fire on it.
-function ModelTier(m) {
-  if (!m) return null;
-  const s = String(m).toLowerCase();
-  for (const t of ['opus', 'sonnet', 'haiku', 'fable']) if (s.includes(t)) return t;
-  return null;
-}
-function UpdateAgentRollups(sessionId, tpath, projRoot) {
+// (Model → pricing tier lives in leg-driver.mjs's ModelTier — shared with handover-facts.)
+function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
   if (!existsSync(subDir)) return null;
@@ -533,29 +539,40 @@ function UpdateAgentRollups(sessionId, tpath, projRoot) {
       }
       cache.lastScanTs = nEpoch;
       cache.agents = Object.values(byPath);
-      try { writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf8'); } catch {}
+      try { atomicWriteFile(cachePath, JSON.stringify(cache, null, 2)); } catch {}
     } catch {}
   }
   const live = cache.agents.filter((a) => a && Number(a.legs) > 0);
   if (live.length === 0) return null;
-  let sumUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
+  let sumUnits = 0, sumEffUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
   const ctxList = [];
   const tierCounts = {};
   for (const a of live) {
-    sumUnits += Number(a.units); sumLegs += Number(a.legs); sumOut += Number(a.out);
+    const tier = ModelTier(a.model);
+    // Tier-weighted effective units: an agent's units scale by its tier's headline input price
+    // relative to the MAIN tier (TIER_BASE ratios), so the main-vs-agents $ split of
+    // total_cost_usd stays honest when tiers mix. The total itself is never recomputed — only
+    // its attribution. Absent/empty/unmapped tier (or an unmapped main) → weight 1.0: the
+    // recompute never guesses.
+    const w = (tier !== null && TIER_BASE[tier] != null && mainTier != null && TIER_BASE[mainTier] != null)
+      ? TIER_BASE[tier] / TIER_BASE[mainTier] : 1.0;
+    sumUnits += Number(a.units); sumEffUnits += Number(a.units) * w;
+    sumLegs += Number(a.legs); sumOut += Number(a.out);
     sumMaxCtx += Number(a.maxCtx); ctxList.push(Number(a.maxCtx));
     if (Number(a.maxCtx) > maxCtx) maxCtx = Number(a.maxCtx);
     if (Number(a.units) > maxUnits) maxUnits = Number(a.units);
-    const tier = ModelTier(a.model);
     if (tier) tierCounts[tier] = (tierCounts[tier] || 0) + 1;
   }
   const medCtx = Median(ctxList);
-  return { nAgents: live.length, sumUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, tierCounts, cachePath };
+  return { nAgents: live.length, sumUnits, sumEffUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, tierCounts, cachePath };
 }
 function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
 // === Cluster 1: model + flags ==============================================
 const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
+// Tier from the RAW payload model (never the 'unknown' render fallback, which would read as a
+// real 'other' tier): absent display_name → null → no tier-mix contribution, weight 1.0.
+const mainTier = ModelTier(d?.model?.display_name);
 const version = d?.version;
 const effort = (d?.effort?.level) ? d.effort.level : '?';
 const style = (d?.output_style?.name) ? d.output_style.name : 'default';
@@ -617,7 +634,7 @@ const cwd = (d?.workspace?.current_dir) ? d.workspace.current_dir : d?.cwd;
 
 if (!isNil(costUsd)) cacheParts.push(ColorCost(costUsd, '$' + fmtN(costUsd, 2)));
 let rollup = null;
-if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd);
+if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '');
 
 let sessionCost = costUsd;
 if (rollup && ('costBaseline' in rollup) && rollup.costBaseline !== null) {
@@ -625,8 +642,10 @@ if (rollup && ('costBaseline' in rollup) && rollup.costBaseline !== null) {
   if (sessionCost < 0) sessionCost = 0;
 }
 let agentAgg = null;
-if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd); } catch {} }
-const agentUnits = agentAgg ? Number(agentAgg.sumUnits) : 0;
+if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier); } catch {} }
+// Effective (tier-weighted) agent units — the divisor and the $ split both use these, so
+// mainSessionUsd + agentsUsd ≡ total_cost_usd to the cent, before and after the weighting.
+const agentUnits = agentAgg ? Number(agentAgg.sumEffUnits) : 0;
 const mainUnits = rollup ? Number(rollup.sumUnits) : 0;
 const totalUnits = mainUnits + agentUnits;
 let agentsUsd = null, mainSessionUsd = null, baseTrue = null;
@@ -670,6 +689,11 @@ if (rollup && !isNil(rollup.lastLegCost) && Number(rollup.lastLegCost) > 0) {
   cacheParts.push(Dim('last leg ') + ColorLegCell(ltc, '$' + fmtN(ltc, 2)));
 }
 if (nextPart) cacheParts.push(nextPart);
+// temporary — removed by Stage B (dollar-gate re-anchor): the $ color bands / verdict floors are
+// calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main the dollars gate too hot.
+if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
+  cacheParts.push(Dim('⚠ $-gates Fable/Opus-calibrated'));
+}
 
 // === Cold-cache stats line =================================================
 const snow = '❆ ';
@@ -853,16 +877,20 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   }
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
   aParts.push(fmtN(avgLegs, 1) + Dim(' legs/ag'));
-  // Tier-mix warn (warn-only — cost math is untouched): the session $ is de-inflated by UNITS, which
-  // assumes one price tier; when main + agents span >1 KNOWN tier, the per-agent $ split is off. Show
-  // the per-tier head-count (main included) + a dim warn chip. Unknown tiers (pre-change caches with
-  // no `model` field) never count, so old data can't fire this.
-  const tiers = { ...(agentAgg.tierCounts || {}) };
-  const mainTier = ModelTier(model);
-  if (mainTier) tiers[mainTier] = (tiers[mainTier] || 0) + 1;
-  const tierNames = Object.keys(tiers).sort();
-  if (tierNames.length > 1) {
-    aParts.push(Dim('⚠ tier-mix ' + tierNames.map((t) => `${t}×${tiers[t]}`).join('·')));
+  // Tier-mix chip: main named separately from the per-tier agent head-count, so the main+agents
+  // totals can never misread (12 agents vs a 13-entry tier sum). Fires when main + agents span
+  // more than one tier — 'other' (present-but-unmapped model) counts, absent/empty models never
+  // do (pre-change caches with no `model` field can't fire this). The $ split itself is
+  // tier-weighted above; the chip stays as the visibility layer.
+  const agTiers = agentAgg.tierCounts || {};
+  const agTierNames = Object.keys(agTiers).sort();
+  const distinct = new Set(agTierNames);
+  if (mainTier) distinct.add(mainTier);
+  if (distinct.size > 1) {
+    const agList = agTierNames.map((t) => `${t}×${agTiers[t]}`).join('·');
+    const mainPart = mainTier ? `main·${mainTier}` : null;
+    const agPart = agList ? `ag ${agList}` : null;
+    aParts.push(Dim('⚠ tier-mix ' + [mainPart, agPart].filter(Boolean).join(' + ')));
   }
   agentsLine = Dim('agents: ') + aParts.join(DIM_SEP);
 }
@@ -995,6 +1023,99 @@ if (existsSync(dailyStatsPath)) {
 }
 const line5 = costParts.length > 0 ? Dim('session: ') + costParts.join(DIM_SEP) : null;
 
+// === Sidecar snapshot ======================================================
+// Two-phase write. Phase 1 (here) runs BEFORE the git subprocess cluster below, so a slow or
+// hung git can never delay the snapshot that /handover-check and the render-* panels consume:
+// it carries the full cost/context state plus the PREVIOUS render's gitRepo, and a cancellation
+// mid-git still leaves this fresh snapshot behind. Phase 2 (after the git cluster) re-writes the
+// SAME snapshot with only gitRepo refreshed off the live git read — live when git resolves a
+// repo, the last-known value when it doesn't (the identity never decays on a git failure).
+// Both phases go through the same atomic writer.
+let sidecarSnapshot = null;
+function writeSidecar(json) {
+  if (cwd) {
+    const projDir = join(cwd, '.claude');
+    if (!existsSync(projDir)) mkdirSync(projDir, { recursive: true });
+    atomicWriteFile(join(projDir, 'statusline-last.json'), json);
+  }
+  atomicWriteFile(join(ClaudeHome, '.claude', 'statusline-last.json'), json);
+}
+try {
+  const absState = isNil(ctxUsed) ? null
+    : ctxUsed < 32000 ? 'pristine' : ctxUsed < 128000 ? 'green' : ctxUsed < 256000 ? 'yellow' : ctxUsed < 500000 ? 'orange' : 'red';
+  const fillStateV = isNil(ctxPct) ? null
+    : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
+  const froz5State = isNil(ratio) ? null
+    : ratio < 1.0 ? 'green' : ratio < 1.8 ? 'white' : ratio < 2.8 ? 'yellow' : ratio < 3.8 ? 'orange' : 'red';
+  // Auto-compact off → toCompact is null (there is no compaction point) + the always-present
+  // autoCompactOff flag, so handover-facts can phrase headroom honestly instead of "N to compact".
+  const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
+  const activityPct = (aliveSec && Number(aliveSec) > 0 && !isNil(apiSec)) ? mathRoundD(100.0 * apiSec / aliveSec, 1) : null;
+  let coldStakeUsd = null, coldState = null, coldCoolRemainSec = null;
+  if (!isNil(coldStakes) && coldStakes >= 0.25) {
+    coldStakeUsd = mathRoundD(Number(coldStakes), 2);
+    if (rollup && !isNil(rollup.lastLegTs)) {
+      if (!isNil(coldRemain) && coldRemain > 0) { coldState = 'cooling'; coldCoolRemainSec = psRound(coldRemain); }
+      else coldState = 'cold';
+    } else coldState = 'idle-cold';
+  }
+  const sidecarPath = cwd ? join(cwd, '.claude', 'statusline-last.json') : join(ClaudeHome, '.claude', 'statusline-last.json');
+  const prevSnap = readJson(sidecarPath);
+  const prevGitRepo = (prevSnap && !isNil(prevSnap.gitRepo)) ? prevSnap.gitRepo : null;
+  const snapshot = {
+    schema: 3,
+    sessionId: sessionId ?? null,
+    renderedAt: NOW,
+    transcriptPath: tpath ?? null,
+    costBaseline: rollup ? (rollup.costBaseline ?? null) : null,
+    model,
+    // Present ONLY when a mid-session tier switch occurred (keeps the golden blast radius to the
+    // switch fixtures; consumers already handle absent keys).
+    ...(rollup && rollup.modelSwitch ? { modelSwitch: rollup.modelSwitch } : {}),
+    windowSize: ctxSize ?? null,
+    effort,
+    ctxTokens: ctxUsed ?? null,
+    fillPct: ctxPct ?? null,
+    ctxAbsState: absState,
+    fillState: fillStateV,
+    toCompact: toCompactTok,
+    autoCompactOff: AC_OFF,
+    costUsd: costUsd ?? null,
+    nextLegUsd: forecast,
+    froz5Ratio: ratio,
+    froz5State,
+    freshLegUsd: freshBaseline,
+    lastLegUsd: rollup ? (rollup.lastLegCost ?? null) : null,
+    nLegs: rollup ? Number(rollup.nLegs) : null,
+    nColdLegs: rollup ? Number(rollup.nColdLegs) : null,
+    coldWastedUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.coldWastedUnits), 2) : null,
+    lastColdTaxUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.lastColdWastedUnits), 2) : null,
+    lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
+    coldStakeUsd,
+    coldState,
+    coldBand,
+    coldCoolRemainSec,
+    coldTtlSec: (rollup && ('lastLegTtlSec' in rollup) && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : null,
+    legCosts: perLegCostArr.map((x) => mathRoundD(Number(x), 4)),
+    aliveSec,
+    apiSec,
+    activityPct,
+    linesAdded: d?.cost?.total_lines_added ?? null,
+    linesRemoved: d?.cost?.total_lines_removed ?? null,
+    tps: !isNil(tps) ? psRound(tps) : null,
+    base: baseTrue,
+    nAgents: agentAgg ? Number(agentAgg.nAgents) : null,
+    agentsUsd: !isNil(agentsUsd) ? mathRoundD(Number(agentsUsd), 2) : null,
+    mainSessionUsd: !isNil(mainSessionUsd) ? mathRoundD(Number(mainSessionUsd), 2) : null,
+    agentLegs: agentAgg ? Number(agentAgg.sumLegs) : null,
+    agentCtxMax: agentAgg ? Number(agentAgg.maxCtx) : null,
+    agentsCachePath: agentAgg ? (agentAgg.cachePath ?? null) : null,
+    gitRepo: prevGitRepo,
+  };
+  sidecarSnapshot = snapshot;
+  writeSidecar(JSON.stringify(snapshot));
+} catch {}
+
 // === Cluster 6: git ========================================================
 let gitLine = null;
 let repo = null;
@@ -1034,80 +1155,14 @@ if (cwd) {
   }
 }
 
-// === Sidecar snapshot ======================================================
+// === Sidecar gitRepo refresh (phase 2 of the sidecar write) ================
+// Seeds/updates the identity chain the phase-1 write reuses: fresh slug when git resolved one,
+// carry the last-known value when it didn't. No other snapshot field changes between the phases.
 try {
-  const absState = isNil(ctxUsed) ? null
-    : ctxUsed < 32000 ? 'pristine' : ctxUsed < 128000 ? 'green' : ctxUsed < 256000 ? 'yellow' : ctxUsed < 500000 ? 'orange' : 'red';
-  const fillStateV = isNil(ctxPct) ? null
-    : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
-  const froz5State = isNil(ratio) ? null
-    : ratio < 1.0 ? 'green' : ratio < 1.8 ? 'white' : ratio < 2.8 ? 'yellow' : ratio < 3.8 ? 'orange' : 'red';
-  // Auto-compact off → toCompact is null (there is no compaction point) + the always-present
-  // autoCompactOff flag, so handover-facts can phrase headroom honestly instead of "N to compact".
-  const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
-  const activityPct = (aliveSec && Number(aliveSec) > 0 && !isNil(apiSec)) ? mathRoundD(100.0 * apiSec / aliveSec, 1) : null;
-  let coldStakeUsd = null, coldState = null, coldCoolRemainSec = null;
-  if (!isNil(coldStakes) && coldStakes >= 0.25) {
-    coldStakeUsd = mathRoundD(Number(coldStakes), 2);
-    if (rollup && !isNil(rollup.lastLegTs)) {
-      if (!isNil(coldRemain) && coldRemain > 0) { coldState = 'cooling'; coldCoolRemainSec = psRound(coldRemain); }
-      else coldState = 'cold';
-    } else coldState = 'idle-cold';
+  if (sidecarSnapshot) {
+    sidecarSnapshot.gitRepo = repo ?? sidecarSnapshot.gitRepo;
+    writeSidecar(JSON.stringify(sidecarSnapshot));
   }
-  const snapshot = {
-    schema: 3,
-    sessionId: sessionId ?? null,
-    renderedAt: NOW,
-    transcriptPath: tpath ?? null,
-    costBaseline: rollup ? (rollup.costBaseline ?? null) : null,
-    model,
-    windowSize: ctxSize ?? null,
-    effort,
-    ctxTokens: ctxUsed ?? null,
-    fillPct: ctxPct ?? null,
-    ctxAbsState: absState,
-    fillState: fillStateV,
-    toCompact: toCompactTok,
-    autoCompactOff: AC_OFF,
-    costUsd: costUsd ?? null,
-    nextLegUsd: forecast,
-    froz5Ratio: ratio,
-    froz5State,
-    freshLegUsd: freshBaseline,
-    lastLegUsd: rollup ? (rollup.lastLegCost ?? null) : null,
-    nLegs: rollup ? Number(rollup.nLegs) : null,
-    nColdLegs: rollup ? Number(rollup.nColdLegs) : null,
-    coldWastedUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.coldWastedUnits), 2) : null,
-    lastColdTaxUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.lastColdWastedUnits), 2) : null,
-    lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
-    coldStakeUsd,
-    coldState,
-    coldBand,
-    coldCoolRemainSec,
-    coldTtlSec: (rollup && ('lastLegTtlSec' in rollup) && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : null,
-    legCosts: perLegCostArr.map((x) => mathRoundD(Number(x), 4)),
-    aliveSec,
-    apiSec,
-    activityPct,
-    linesAdded: d?.cost?.total_lines_added ?? null,
-    linesRemoved: d?.cost?.total_lines_removed ?? null,
-    tps: !isNil(tps) ? psRound(tps) : null,
-    base: baseTrue,
-    nAgents: agentAgg ? Number(agentAgg.nAgents) : null,
-    agentsUsd: !isNil(agentsUsd) ? mathRoundD(Number(agentsUsd), 2) : null,
-    mainSessionUsd: !isNil(mainSessionUsd) ? mathRoundD(Number(mainSessionUsd), 2) : null,
-    agentLegs: agentAgg ? Number(agentAgg.sumLegs) : null,
-    agentCtxMax: agentAgg ? Number(agentAgg.maxCtx) : null,
-    agentsCachePath: agentAgg ? (agentAgg.cachePath ?? null) : null,
-    gitRepo: repo ?? null,
-  };
-  const json = JSON.stringify(snapshot);
-  if (cwd) {
-    const projDir = join(cwd, '.claude');
-    if (!existsSync(projDir)) mkdirSync(projDir, { recursive: true });
-    writeFileSync(join(projDir, 'statusline-last.json'), json, 'utf8');
-  }
-  writeFileSync(join(ClaudeHome, '.claude', 'statusline-last.json'), json, 'utf8');
 } catch {}
 
 const ShowSessionLine = false;

@@ -17,7 +17,7 @@ import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveSidecarPath } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, testWarmRewriteLeg, M_CACHE_READ } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, M_CACHE_READ } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 
 const BT = '`';          // literal backtick → inline-code spans render light-blue in the assistant message
@@ -74,8 +74,9 @@ const lastColdLegsAgoScan = nColdScan > 0 ? scanLegs.length - Number(coldLegs[co
 // from the classifier (testWarmRewriteLeg, leg-driver.mjs — getDriver's class order: cold first, then
 // compacted, then bigRewrite; opening leg excluded), so a big cache write is billed into exactly one
 // of {cold tax, compacted, warm-rewrite tax} and the spikes label always agrees with the money.
-// Raw signal, no smoothing/caps. The day CC adopts cache-preserving mid-conversation system messages,
-// this is the before/after number.
+// Raw signal, no smoothing/caps. CC adopted cache-preserving mid-conversation injection, then
+// rolled it back on Sonnet 5 in 2.1.201 — so the tax is EXPECTED on Sonnet 5 and notable on
+// every other model (the per-model gloss at the emit site resolves which).
 const warmRewriteLegs = scanLegs.filter(testWarmRewriteLeg);
 const nWarmScan = warmRewriteLegs.length;
 const warmTaxUsdScan = (nWarmScan > 0 && s.base != null)
@@ -163,8 +164,14 @@ const nextUsd = s.nextLegUsd != null ? Number(s.nextLegUsd) : null;
 const is1M = (Number(s.windowSize) >= WINDOW_1M);
 const ctxK = s.ctxTokens != null ? Number(s.ctxTokens) / 1000 : null;
 const coldInMedian = (lastColdLegsAgoScan != null && Number(lastColdLegsAgoScan) < 5);
+const sessionTier = ModelTier(s.model);
 let froz5Cause = 'unknown', froz5Resid = null, froz5Exp = null, froz5Conf = 'low';
-if (froz5 != null && ctxK != null && is1M) {
+if (s.modelSwitch) {
+  // Fifth cause, PREEMPTS the other four: a mid-session price-TIER switch invalidates the
+  // fresh-leg baseline — legs before and after the switch are priced on different models, so
+  // neither the ratio nor the depth curve is comparable across it.
+  froz5Cause = 'model-switched';
+} else if (froz5 != null && ctxK != null && is1M) {
   froz5Exp = Froz5Expected(ctxK);
   froz5Resid = froz5 / froz5Exp;
   froz5Conf = ctxK < FROZ5_CURVE_MINK ? 'low' : 'ok';
@@ -200,6 +207,7 @@ const costLead = 'each leg ~' + FmtUsd(nextUsd) + ', ' + FmtRatio(froz5) + ' a f
 const costTotal = FmtUsd(s.costUsd) + ' total';
 let costChar;
 switch (froz5Cause) {
+  case 'model-switched': costChar = 'the model switched mid-session (' + String(s.modelSwitch.from) + ' → ' + String(s.modelSwitch.to) + ' at leg ' + Math.trunc(Number(s.modelSwitch.atLeg)) + ') — legs before and after are priced on different models, so the ratio and the depth curve do not apply; the absolute next-leg $ is the number to trust'; break;
   case 'heavy-start': costChar = 'started heavy — a big opening leg (often a resume that front-loads reads) lifts the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust'; break;
   case 'light-start': costChar = 'started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number'; break;
   case 'cold-pumped': costChar = 'a recent cold re-cache is pumping the next-leg forecast, so the multiple overstates steady-state escalation — it subsides as the cold leg ages out (see the cold line)'; break;
@@ -321,13 +329,23 @@ emit(`HEADLINE_BASIS: driver=${hDriver}; quality=${absState} (lvl ${qLevel}); co
 emit(`COST_LEAD: ${costLead}`);
 emit(`COST_TOTAL: ${costTotal}`);
 emit(`COST_CHAR: ${costChar}`);
-emit(`COST_FROZ5: cause=${froz5Cause}` + (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` : ' (curve n/a — 200k window or missing data)'));
+emit(`COST_FROZ5: cause=${froz5Cause}` + (froz5Cause === 'model-switched'
+  ? ' — ratio not comparable across the switch'
+  : (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` : ' (curve n/a — 200k window or missing data)')));
 emit(`COST_DETAIL: ${costDetail}`);
 emit(`COST_AGENTS_TIER: ${agentTier}`);
 emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);
+// temporary — removed by Stage B (dollar-gate re-anchor): the $ verdict floors (COST_FLOOR_*) are
+// calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main they grade too leniently.
+if (sessionTier === 'sonnet' || sessionTier === 'haiku') {
+  emit('COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing');
+}
 emit(`COLD: ${coldOut}`);
 emit('WARM_REWRITE_TAX: ' + (nWarmScan >= 1
   ? FmtUsd(warmTaxUsdScan) + ' over ' + BT + nWarmScan + BT + ' leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax'
+    + (sessionTier === 'sonnet'
+      ? '; expected — CC 2.1.201 dropped cache-preserving injection on Sonnet 5'
+      : '; unexpected on this model — worth a look')
   : '(none)'));
 emit(`QUALITY_LEAD: ${qLead}`);
 emit(`QUALITY_SECONDARY: ${qSecondary}`);

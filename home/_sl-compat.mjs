@@ -16,6 +16,25 @@
 //   3. UTC timestamp parsing. The .NET DateTimeOffset.Parse(..., AssumeUniversal) treats
 //      a bare (offset-less) ISO datetime as UTC; JS Date.parse treats it as LOCAL. → parseUtcEpoch.
 
+import { writeFileSync, renameSync, unlinkSync } from 'node:fs';
+
+// ---------------------------------------------------------------------------
+// atomicWriteFile(path, text) — crash-safe state write: write to a temp file in the SAME directory
+// (rename is only atomic within one filesystem), then rename over the target. A kill between the
+// two steps leaves the ORIGINAL file intact plus an orphaned <path>.tmp.<pid>, which no reader
+// ever opens (readers target exact filenames) and the writers' housekeeping sweeps. On error the
+// temp is unlinked best-effort and the error rethrown — callers keep their own try/catch policy.
+export function atomicWriteFile(path, text) {
+  const tmp = path + '.tmp.' + process.pid;
+  try {
+    writeFileSync(tmp, text, 'utf8');
+    renameSync(tmp, path);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Clock seam. Mirrors statusline-bloated.ps1's $script:NowEpoch / Get-NowLocal.
 // CLAUDE_SL_NOW_EPOCH (epoch seconds, UTC) freezes "now" for the parity harness;

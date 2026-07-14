@@ -9,6 +9,7 @@ COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
 COLD: (omit)
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `3%` fill — well under the ~60% cliff

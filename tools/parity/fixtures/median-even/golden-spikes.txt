@@ -1,0 +1,5 @@
+from session median-e · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $6.59  ·  generated ~100k output
+   Leg 2  ·  $6.59  ·  generated ~100k output
+   Leg 3  ·  $6.59  ·  generated ~100k output

@@ -1,0 +1,5 @@
+from session median-s · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=6  ·  range $6.65–$6.65  ·  raw peak $6.65  ·  height ∝ cost (peak = full)
+██████
+██████
+██████

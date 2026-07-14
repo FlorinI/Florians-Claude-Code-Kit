@@ -10,7 +10,7 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COLD: the 5-minute cache is starting to cool (`~4 min` of warmth left) — a send keeps it warm; cold tax so far: `$0.69` over `1` leg(s)
-WARM_REWRITE_TAX: `$0.69` over `1` leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax
+WARM_REWRITE_TAX: `$0.69` over `1` leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax; unexpected on this model — worth a look
 QUALITY_LEAD: `150k`, yellow band — mild weakening on hard multi-fact recall
 QUALITY_SECONDARY: `15%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `325k` to compact

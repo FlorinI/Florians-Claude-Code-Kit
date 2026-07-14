@@ -19,6 +19,26 @@ export const M_CACHE_WRITE_1H = 2.0;
 export const M_CACHE_READ = 0.10;
 export const M_OUTPUT = 5.0;
 
+// Headline $/MTok INPUT price per model family — hand-maintained constants, never fetched (no
+// pricing-page parsing, no config, no env). Only the RATIOS matter: the tier-weighted cost split
+// scales an agent's units by TIER_BASE[agentTier] / TIER_BASE[mainTier]. Update by hand when a
+// list price changes (the announced Sonnet $2→$3 flip on 2026-09-01 is a one-line edit here).
+export const TIER_BASE = { fable: 10, mythos: 10, opus: 5, sonnet: 2, haiku: 1 };
+
+// Model → coarse pricing tier. Works on BOTH the id form ("claude-opus-4-8-20260115", agent
+// transcripts) and the display form ("Opus 4.8 (1M context)", the stdin payload), so a
+// main-vs-agent comparison can never read a format difference as a tier difference. Absent or
+// empty-string model → null, and null NEVER counts as a tier: every pre-change agents cache lacks
+// `model` forever (incremental offsets), and the cache's initialized/transient state is '' — the
+// tier-mix warn must not fire on either. A present, NON-EMPTY, unmapped string is 'other': visible
+// in the chip and counted for warn-firing, but excluded from tier weighting (weight 1.0).
+export function ModelTier(m) {
+  if (!m) return null;
+  const s = String(m).toLowerCase();
+  for (const t of ['opus', 'sonnet', 'haiku', 'fable', 'mythos']) if (s.includes(t)) return t;
+  return 'other';
+}
+
 // Dominant cost DRIVER = the largest WEIGHTED term. Mirrors Get-Driver in leg-driver.ps1.
 export function getDriver(l) {
   // Term order matches the pwsh hashtable's practical argmax; weighted ties are measure-zero

@@ -19,9 +19,9 @@
 //
 // Title/name = <identity name | repo name | folder leaf>@<branch>.
 
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 
 const ESC = '\x1b';
 const BEL = '\x07';
@@ -110,7 +110,12 @@ for (let i = 0; i < userArgs.length; i++) {
 if (!userHasPrompt && idColor) cli.push(`/color ${idColor}`);
 
 // --- resolve + launch claude ------------------------------------------------------------------
-function resolveClaude() {
+// CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are
+// truthy; every other value — '0', 'off', '', junk — is falsy. Kept local; this file has no deps.
+function EnvTruthy(v) { return v != null && ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase().trim()); }
+
+// PATH + PATHEXT-aware executable resolver (Windows shims are .cmd/.bat, not bare names).
+function resolveOnPath(name) {
   const PATH = process.env.PATH || '';
   const isWin = process.platform === 'win32';
   const sep = isWin ? ';' : ':';
@@ -118,18 +123,54 @@ function resolveClaude() {
   for (const dir of PATH.split(sep)) {
     if (!dir) continue;
     for (const ext of exts) {
-      const p = join(dir, 'claude' + ext);
+      const p = join(dir, name + ext);
       try { if (existsSync(p) && statSync(p).isFile()) return p; } catch {}
     }
   }
   return null;
 }
-const claudePath = resolveClaude();
+const claudePath = resolveOnPath('claude');
 if (!claudePath) { console.error('claude executable not found on PATH.'); process.exit(1); }
 
 // Windows .cmd/.bat shims must be run through the shell; native binaries spawn directly.
-const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(claudePath);
-const res = viaCmd
-  ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/c', claudePath, ...cli], { stdio: 'inherit' })
-  : spawnSync(claudePath, cli, { stdio: 'inherit' });
+function shimVector(exe, args) {
+  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(exe);
+  return viaCmd ? [process.env.ComSpec || 'cmd.exe', '/c', exe, ...args] : [exe, ...args];
+}
+const claudeArgv = shimVector(claudePath, cli);
+
+// --- VS Code co-launch (env-gated; default off) -------------------------------------------------
+// CC_VSCODE truthy → open VS Code on this project, detached, before claude launches. Exactly one
+// *.code-workspace at the cwd root opens that workspace; zero or multiple open the folder (never
+// guess between two). `code` missing from PATH → skip silently. The claude launch never waits on
+// or fails because of this step.
+const VS_SPAWN_OPTS = { detached: true, stdio: 'ignore' };
+let vsPlan = { action: 'off', target: null, exe: null };
+if (EnvTruthy(process.env.CC_VSCODE)) {
+  let action = 'folder', target = '.';
+  try {
+    const ws = readdirSync(loc).filter((n) => n.toLowerCase().endsWith('.code-workspace'));
+    if (ws.length === 1) { action = 'workspace'; target = ws[0]; }
+  } catch {}
+  const codePath = resolveOnPath('code');
+  vsPlan = codePath ? { action, target, exe: codePath } : { action: 'skip-no-cli', target: null, exe: null };
+}
+
+// --- dry-run seam: print the launch plan as ONE JSON line, spawn nothing ------------------------
+if (EnvTruthy(process.env.CC_LAUNCH_DRYRUN)) {
+  process.stdout.write(JSON.stringify({
+    vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true } },
+    claude: { argv: claudeArgv },
+  }) + '\n');
+  process.exit(0);
+}
+
+if (vsPlan.exe) {
+  try {
+    const [vsExe, ...vsArgs] = shimVector(vsPlan.exe, [vsPlan.target]);
+    spawn(vsExe, vsArgs, VS_SPAWN_OPTS).unref();   // the one VS Code spawn site
+  } catch { /* never block or fail the claude launch */ }
+}
+
+const res = spawnSync(claudeArgv[0], claudeArgv.slice(1), { stdio: 'inherit' });
 process.exit(typeof res.status === 'number' ? res.status : (res.error ? 1 : 0));

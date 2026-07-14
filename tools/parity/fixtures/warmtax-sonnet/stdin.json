@@ -1,0 +1,26 @@
+{
+  "model": {
+    "display_name": "Sonnet 5"
+  },
+  "version": "2.1.142",
+  "effort": {
+    "level": "high"
+  },
+  "context_window": {
+    "used_percentage": 15,
+    "total_input_tokens": 150000,
+    "context_window_size": 1000000
+  },
+  "transcript_path": "PLACEHOLDER",
+  "session_id": "warmtax-sonnet-1",
+  "cost": {
+    "total_cost_usd": 1.7191,
+    "total_api_duration_ms": 150000,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "workspace": {
+    "current_dir": "PLACEHOLDER"
+  },
+  "rate_limits": {}
+}

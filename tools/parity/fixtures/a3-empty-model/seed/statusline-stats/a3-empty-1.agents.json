@@ -1,0 +1,18 @@
+{
+  "lastScanTs": 1781750000,
+  "agents": [
+    {
+      "path": "seeded-agent-1.jsonl",
+      "offset": 0,
+      "units": 1000000,
+      "ownUnits": 995000,
+      "legs": 1,
+      "out": 199000,
+      "maxCtx": 50000,
+      "maxLegUnits": 1000000,
+      "label": "seeded agent",
+      "lastMsgId": "s1",
+      "model": ""
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `b4-absen` · Fable 5 (1M context) · `51k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=froz5 1.0102 / next 5.051 (lvl 2)
+COST_LEAD: each leg `~$5.05`, `1.01×` a fresh leg
+COST_TOTAL: `$40.00` total
+COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
+COST_FROZ5: cause=light-start; froz5 `1.01×` vs `0.30×` typical at this depth (residual 3.36×); confidence=low
+COST_DETAIL: main `$30.00` · agents `$10.00` over `1` legs
+COST_AGENTS_TIER: minor
+COST_AGENTS_LEAD: (none)
+COLD: your recent resume re-cached the context for `$0.59` — already paid; you are warm again now
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `51k`, green band — sharp
+QUALITY_SECONDARY: `18%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `424k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit — 1 sub-agents ran; activity% folds their parallel compute, so it does not signal your work pattern)
+TRAJECTORY: flat, range `$5.00`–`$5.00`
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

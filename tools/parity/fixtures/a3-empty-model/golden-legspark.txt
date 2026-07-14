@@ -1,0 +1,5 @@
+from session a3-empty · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=6  ·  range $5–$5  ·  raw peak $5  ·  height ∝ cost (peak = full)
+██████
+██████
+██████

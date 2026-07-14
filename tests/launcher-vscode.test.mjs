@@ -29,7 +29,8 @@ function makeShims({ withCode }) {
 }
 
 // ccVscode: a string sets CC_VSCODE to that value; null leaves it UNSET in the child env.
-function runLauncher({ workspaces = [], withCode = true, ccVscode = '1' }) {
+// ccVscodeTile: same convention for CC_VSCODE_TILE (the default-on tiling switch).
+function runLauncher({ workspaces = [], withCode = true, ccVscode = '1', ccVscodeTile = null }) {
   const proj = mkdtempSync(join(tmpdir(), 'ccl-proj-'));
   const shims = makeShims({ withCode });
   try {
@@ -39,6 +40,7 @@ function runLauncher({ workspaces = [], withCode = true, ccVscode = '1' }) {
       PATHEXT: '.COM;.EXE;.BAT;.CMD',
       CC_LAUNCH_DRYRUN: '1',
       ...(ccVscode === null ? {} : { CC_VSCODE: ccVscode }),
+      ...(ccVscodeTile === null ? {} : { CC_VSCODE_TILE: ccVscodeTile }),
       ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
       TEMP: process.env.TEMP, TMP: process.env.TMP,
     };
@@ -102,4 +104,78 @@ test('H6 — never blocking: single fire-and-forget spawn site (detached + unref
   const src = readFileSync(launcher, 'utf8');
   assert.match(src, /spawn\(vsExe, vsArgs, VS_SPAWN_OPTS\)\.unref\(\);/);
   assert.equal((src.match(/VS_SPAWN_OPTS\)/g) || []).length, 1, 'one spawn site shares the asserted opts');
+});
+
+// --- window tiling (Windows side-by-side), asserted through the same dry-run seam ----------------
+// tile.enabled is computed purely from platform + env + vsPlan, so it is deterministic and spawns
+// nothing. The enabled/reason split is platform-dependent, so enabled-true assertions are win32-only
+// while the reason/field checks that don't depend on win32 run on every OS.
+const IS_WIN = process.platform === 'win32';
+
+test('T1 — win32 + CC_VSCODE=1 + a workspace: tiling on, terminal-left/50-50, workspace projectMatch', () => {
+  const { plan } = runLauncher({ workspaces: ['proj.code-workspace'] });
+  assert.ok(plan.tile, 'tile block always present in the plan');
+  assert.equal(plan.tile.side, 'terminal-left');
+  assert.equal(plan.tile.ratio, 0.5);
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+  assert.equal(plan.tile.snapGroup, true, 'tiler forms a real snap group, not a bare reposition');
+  assert.equal(plan.tile.projectMatch, 'proj', 'workspace base without the .code-workspace extension');
+  assert.equal(typeof plan.tile.titleMatch, 'string');
+  if (IS_WIN) { assert.equal(plan.tile.enabled, true); assert.equal(plan.tile.reason, 'on'); }
+  else { assert.equal(plan.tile.enabled, false); assert.equal(plan.tile.reason, 'not-win32'); }
+});
+
+test('T2 — CC_VSCODE unset: tiling off with reason vscode-off (any OS)', () => {
+  const { plan } = runLauncher({ workspaces: ['proj.code-workspace'], ccVscode: null });
+  assert.equal(plan.tile.enabled, false);
+  assert.equal(plan.tile.reason, 'vscode-off');
+});
+
+test('T3 — win32 + CC_VSCODE_TILE=off: VS Code still opens, tiling disabled by flag', () => {
+  const { plan } = runLauncher({ workspaces: [], ccVscodeTile: 'off' });
+  assert.equal(plan.vscode.action, 'folder', 'VS Code co-launch is unaffected by the tile flag');
+  assert.equal(plan.tile.enabled, false);
+  assert.equal(plan.tile.reason, IS_WIN ? 'disabled-flag' : 'not-win32');
+});
+
+test('T4 — win32 + `code` missing: tiling gated off (vscode-no-cli)', () => {
+  const { plan } = runLauncher({ workspaces: ['proj.code-workspace'], withCode: false });
+  assert.equal(plan.tile.enabled, false);
+  assert.equal(plan.tile.reason, IS_WIN ? 'vscode-no-cli' : 'not-win32');
+});
+
+test('T5 — CC_VSCODE_TILE truthy/falsy variants parse as a default-on flag (win32)', { skip: !IS_WIN }, () => {
+  for (const v of ['1', 'on', 'true', 'yes']) {
+    assert.equal(runLauncher({ workspaces: [], ccVscodeTile: v }).plan.tile.enabled, true, `${v} → on`);
+  }
+  for (const v of ['0', 'off', 'false', 'no']) {
+    assert.equal(runLauncher({ workspaces: [], ccVscodeTile: v }).plan.tile.enabled, false, `${v} → off`);
+  }
+});
+
+// --- snap-group gesture + exit re-title (structural, OS-independent) ------------------------------
+// These assert the launcher SOURCE, not runtime behaviour: the snap gesture and the exit re-title
+// only fire on a live win32 launch (no dry-run seam), so they're verified by shape, like H6.
+
+test('T6 — the tiler forms a snap group VS-Code-right-first then terminal-left (focus ends on terminal)', () => {
+  const src = readFileSync(launcher, 'utf8');
+  // The gesture is driven by simulated Win+arrow (keybd_event) — no snap-group API exists.
+  assert.match(src, /keybd_event/, 'drives the snap gesture via keybd_event');
+  // Order matters: VS Code (Win+Right, 0x27) must be snapped BEFORE the terminal (Win+Left, 0x25),
+  // so the last-snapped window (terminal) keeps focus.
+  const right = src.indexOf('SnapKey 0x27');
+  const left = src.indexOf('SnapKey 0x25');
+  assert.ok(right > 0 && left > 0, 'both snap directions present');
+  assert.ok(right < left, 'VS Code snaps right first, terminal snaps left second');
+  // Foreground lock must be lifted for a background process to focus each window before snapping.
+  assert.match(src, /SPI_SETFOREGROUNDLOCKTIMEOUT|0x2001/, 'zeroes the foreground lock timeout');
+  assert.match(src, /AttachThreadInput/, 'attaches to the foreground input queue to steal focus');
+});
+
+test('T7 — the launcher re-asserts the tab title after Claude Code exits (name persists on the prompt)', () => {
+  const src = readFileSync(launcher, 'utf8');
+  // The OSC 2 re-emit must live AFTER the claude spawnSync, not only before it.
+  const spawn = src.indexOf('spawnSync(claudeArgv[0]');
+  const lastOsc = src.lastIndexOf('ESC}]2;${title}');
+  assert.ok(spawn > 0 && lastOsc > spawn, 'an OSC 2 title write follows the claude spawnSync');
 });

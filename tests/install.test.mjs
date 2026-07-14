@@ -274,7 +274,10 @@ test('re-install does not duplicate the launcher block', () => {
     const candidates = [join(home, 'Documents', 'PowerShell', 'profile.ps1'), join(home, '.zshrc'), join(home, '.bash_profile'), join(home, '.bashrc')];
     const profile = candidates.find((p) => existsSync(p));
     const body = readFileSync(profile, 'utf8');
-    assert.equal((body.match(/claude-launch\.mjs/g) || []).length, 1, 'launcher line appears exactly once');
+    // Count the block's begin marker, not the script name: the function body may reference the
+    // launcher more than once (Windows re-titles via a second --print-title call), so one marker —
+    // not one script mention — is the true "block appears exactly once" invariant.
+    assert.equal((body.match(/\(cc launcher\) >>>/g) || []).length, 1, 'launcher block appears exactly once');
   });
 });
 

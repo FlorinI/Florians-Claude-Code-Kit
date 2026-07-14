@@ -205,7 +205,11 @@ function launcherProfile(claudeHome, shellHome) {
   if (process.platform === 'win32') {
     return {
       path: join(home, 'Documents', 'PowerShell', 'profile.ps1'),  // pwsh 7 CurrentUserAllHosts
-      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args }`,
+      // After the launch returns, pwsh re-owns the tab title: Windows Terminal reverts a child-set
+      // title to the shell's own when the child exits, so only the shell setting it makes <name@branch>
+      // stick past CC. `--print-title` just echoes the resolved title; the launch itself titles the tab
+      // while CC runs. Wrapped in try/catch so a headless/no-console host can't error the prompt.
+      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args; try { $t = (node "${fwd}/${script}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t } } catch {} }`,
     };
   }
   const sh = (process.env.SHELL || '').toLowerCase();

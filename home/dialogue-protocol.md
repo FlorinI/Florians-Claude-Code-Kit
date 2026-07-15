@@ -131,21 +131,21 @@ So the two parties converge **without the Convener passing messages**, each watc
 - **Tier 2 — self-poll:** if your host won't auto-re-invoke you but you can loop/sleep in your own terminal, run the same poll yourself — check the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
 - **Tier 3 — human nudge:** if you can do neither, write your turn, then ask the human to tell you "your turn" once the other party replies.
 
-**Arming the watch (Tier 1)** — run this as a **background** command (it polls every 10s and exits the moment your turn is due, or when a turn has been handed to the Convener — consensus *or* defer, both end `BATON → CONVENER`). Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
+**Arming the watch (Tier 1)** — run this as a **background** command (it polls every 30s and exits the moment your turn is due, or when a turn has been handed to the Convener — consensus *or* defer, both end `BATON → CONVENER`). It caps at **58 minutes** per arming and then exits `TIMEOUT`; that cap is not a deadline for the other party — it's just how long one background command runs before you **re-arm it** (see the `TIMEOUT` wake below). Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
 
 ```powershell
-$f = "<DIALOGUE_FILE>"; $me = "<YOUR-LABEL>"; $max = 600; for ($i=0; $i -lt $max; $i++) { $last = (Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1); if ($last -match "BATON.*CONVENER") { Write-Output "CONVENER"; Write-Output $last; exit 0 }; if ($last -match "BATON.*$me") { Write-Output "YOUR_TURN"; Write-Output $last; exit 0 }; Start-Sleep -Seconds 10 }; Write-Output "TIMEOUT"; Write-Output $last
+$f = "<DIALOGUE_FILE>"; $me = "<YOUR-LABEL>"; $max = 116; for ($i=0; $i -lt $max; $i++) { $last = (Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1); if ($last -match "BATON.*CONVENER") { Write-Output "CONVENER"; Write-Output $last; exit 0 }; if ($last -match "BATON.*$me") { Write-Output "YOUR_TURN"; Write-Output $last; exit 0 }; Start-Sleep -Seconds 30 }; Write-Output "TIMEOUT"; Write-Output $last
 ```
 
 *(POSIX/bash equivalent, if a session isn't on PowerShell:)*
 ```bash
-f="<DIALOGUE_FILE>"; me="<YOUR-LABEL>"; for i in $(seq 1 600); do last=$(grep -v '^[[:space:]]*$' "$f" | tail -n1); case "$last" in *BATON*CONVENER*) echo "CONVENER"; echo "$last"; exit 0;; *BATON*"$me"*) echo "YOUR_TURN"; echo "$last"; exit 0;; esac; sleep 10; done; echo "TIMEOUT"; echo "$last"
+f="<DIALOGUE_FILE>"; me="<YOUR-LABEL>"; for i in $(seq 1 116); do last=$(grep -v '^[[:space:]]*$' "$f" | tail -n1); case "$last" in *BATON*CONVENER*) echo "CONVENER"; echo "$last"; exit 0;; *BATON*"$me"*) echo "YOUR_TURN"; echo "$last"; exit 0;; esac; sleep 30; done; echo "TIMEOUT"; echo "$last"
 ```
 
 **On wake:**
 - Output `YOUR_TURN` → the other party finished and the baton is yours: read the new turn(s), write your reply per §3–§5, then **re-arm** the watch.
 - Output `CONVENER` → a turn was handed to the Convener (consensus or defer): **stop. Do not re-arm.** Surface the final turn (joint summary or Decision Request) to the Convener and end.
-- Output `TIMEOUT` → ~100 min passed with no baton to you: report the stall to the Convener rather than guessing; optionally re-arm.
+- Output `TIMEOUT` → 58 min passed with no baton to you: **do NOT assume the other party died and do NOT surface a stall to the Convener.** A turn legitimately takes many minutes — even several of the other party's own turns — and it will get back to you. Just **silently re-arm** the same watch and keep waiting. This re-arm is **indefinite**: repeat on every `TIMEOUT`, with no cap on the number of re-arms. The only things that stop you are `YOUR_TURN` (take your turn) and `CONVENER` (end).
 
 This is exactly the loop both parties run: *take turn → arm watch → wake on baton → take turn → …* until `CONVENER`.
 
@@ -184,7 +184,7 @@ Fill `<PROTOCOL_PATH>`, `<DIALOGUE_FILE>`, `<PARTY-B-LABEL>`, `<PARTY-A-LABEL>`,
 > **Completion check before every turn:** look at the last non-empty line of the dialogue file. Baton to you (`BATON → <PARTY-B-LABEL>`) → take your turn. Baton to `<PARTY-A-LABEL>`, or no baton line → not ready; wait. Baton to `CONVENER` → the dialogue has ended; show me the final turn and stop.
 >
 > **Self-drive — pick the highest tier your environment supports (§6):**
-> - **Tier 1 (hands-free):** if your host re-invokes you when a background command exits, run this as a background command; when it wakes you, read its output — `YOUR_TURN` → take your turn and re-arm; `CONVENER` → show me the result and stop: `<WATCH_COMMAND>`
+> - **Tier 1 (hands-free):** if your host re-invokes you when a background command exits, run this as a background command; when it wakes you, read its output — `YOUR_TURN` → take your turn and re-arm; `CONVENER` → show me the result and stop; `TIMEOUT` (the watch caps at 58 min) → **silently re-arm the same command and keep waiting — do NOT assume the other party died or tell me it stalled; a turn can take many minutes and it will get back to you.** Re-arm on `TIMEOUT` indefinitely, no cap: `<WATCH_COMMAND>`
 > - **Tier 2 (self-poll):** else if you can loop/sleep in your own terminal, poll the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
 > - **Tier 3 (human nudge):** else write your turn and tell me to say "your turn" when the other party replies.
 >

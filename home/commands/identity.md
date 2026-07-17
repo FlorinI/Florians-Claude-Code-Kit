@@ -1,5 +1,5 @@
 ---
-description: View or update this project's session identity (name/color/model/effort) in .claude/session-identity.json — the file the `cc` launcher reads to name and color each session — then echo paste-ready /rename and /color lines for the live session.
+description: View or update this project's session identity (name/color/model/effort) in .claude/session-identity.json — the file the `cc` launcher reads to name and color each session — then echo paste-ready /rename, /color, /model, /effort lines for the live session.
 argument-hint: "[show] | name <text> | color <name> | model <id> | effort <level>"
 ---
 
@@ -14,12 +14,13 @@ Four fields, three surfaces:
 
 - **Remembered** = the JSON file. Persists across sessions. Only a file edit changes it — that's what
   `/identity` writes.
-- **Live (paste)** = the current session's actual name and color, set by the built-in `/rename` and
-  `/color` slash commands. Those have **no programmatic API** ([anthropics/claude-code#58588]) and the
-  model **cannot invoke them** — so `/identity` finishes by handing you the exact lines to paste.
-- **Next launch** = `model` and `effort`. The `cc` launcher adds `--model <id>` / `--effort <level>`
-  to `claude` when they're set. They have no live effect on the running session — `/identity` only
-  persists them; they apply the next time you start the project with `cc`.
+- **Live (paste)** = `name`, `color`, `model`, `effort` — each has a built-in slash command that
+  applies to the **running** session immediately: `/rename`, `/color`, `/model <id>`, `/effort <level>`.
+  These have **no programmatic API** ([anthropics/claude-code#58588]) and the model **cannot invoke
+  them** — so `/identity` finishes by handing you the exact lines to paste. `model`/`effort` are *also*
+  read by the `cc` launcher, which adds `--model <id>` / `--effort <level>` to `claude` at launch — so
+  persisting them makes future `cc` launches start with that model/effort, while the paste-line changes
+  *this* session now.
 
 [anthropics/claude-code#58588]: https://github.com/anthropics/claude-code/issues/58588
 
@@ -60,12 +61,14 @@ If a clause is malformed or you can't tell what to change, ask one short questio
 5. **Write back** pretty-printed, 2-space indent, UTF-8 without BOM, trailing newline — matching the
    existing file's shape. Create `.claude/` if missing. Confirm in one line what each changed value is
    now (old → new).
-6. **Echo the live-apply paste-lines.** For each of `name`/`color` that is set, print the exact command
+6. **Echo the live-apply paste-lines.** For each field that is set, print the exact command
    on its own line in a fenced block:
 
    ```
    /rename <name>@<branch>
    /color <color>
+   /model <id>
+   /effort <level>
    ```
 
    **The `/rename` line must append the current git branch** — `<name>@<branch>` — so the pasted name
@@ -77,8 +80,11 @@ If a clause is malformed or you can't tell what to change, ask one short questio
    Chained slash commands don't parse past the first, so they **must be pasted separately** — say so.
    On a `show`, frame them as "to restore this session's identity, paste each."
 
-   `model` and `effort` have **no paste-line and no live effect** — after persisting them, note in one
-   line that they apply on the next `cc` launch; don't imply the running session changed.
+   `model` and `effort` **DO have live paste-lines** — `/model <id>` and `/effort <level>` take effect
+   on the running session immediately, like `/rename` and `/color`. Echo them for any field that is set.
+   Persisting them *additionally* makes the next `cc` launch start with that model/effort. (`/effort`
+   invalidates the prompt cache when it changes — a one-time token cost.) Don't claim they only apply
+   next launch.
 
 ## Interactive setup (no-arg, unset fields)
 
@@ -90,8 +96,9 @@ projects leave unset, so each picker for them includes a prominent **"Leave unse
 
 Offer via `AskUserQuestion`: `opus`, `sonnet`, `haiku` (aliases pick the latest of each tier), the
 auto-"Other" (the user can type any id/alias `claude --model` accepts), and an explicit
-**"Leave unset"**. On a pick: persist `model` (steps 4–5); there's **no paste-line** — note it applies
-on the next `cc` launch. On "Leave unset": write nothing for `model`.
+**"Leave unset"**. On a pick: persist `model` (steps 4–5) and echo the `/model <id>` paste-line
+(step 6) — it applies to this session immediately *and* seeds future `cc` launches. On "Leave unset":
+write nothing for `model`.
 
 ### Effort (optional — usually unset)
 
@@ -102,8 +109,9 @@ present them as a short line and ask the user to reply with one (or leave unset)
 effort levels:  low · medium · high · xhigh · max     (or: leave unset)
 ```
 
-On a reply: validate, persist `effort` (steps 4–5); **no paste-line** — note it applies on the next
-`cc` launch. On "leave unset": write nothing for `effort`.
+On a reply: validate, persist `effort` (steps 4–5) and echo the `/effort <level>` paste-line (step 6) —
+it applies to this session immediately *and* seeds future `cc` launches. On "leave unset": write
+nothing for `effort`.
 
 ### Color (show the hues, don't just list words)
 
@@ -130,10 +138,10 @@ On "Leave unset": write nothing for `name`.
 
 ## Notes
 
-- `/identity` changes the **remembered** value immediately. For `name`/`color`, the **live** session
-  only updates when you paste the lines — state that plainly; don't imply the rename/recolor already
-  happened. For `model`/`effort`, nothing changes in the running session — they apply on the next `cc`
-  launch via the launcher.
+- `/identity` changes the **remembered** value immediately. For `name`/`color`/`model`/`effort`, the
+  **live** session only updates when you paste the matching line (`/rename`, `/color`, `/model <id>`,
+  `/effort <level>`) — state that plainly; don't imply it already happened. Don't claim model/effort
+  only apply next launch: they have live paste-lines *and* also seed future `cc` launches.
 - `effort` must be one of `low | medium | high | xhigh | max`; `model` is passed verbatim to
   `claude --model` (validate effort, accept model leniently).
 - Keep `color` to one the built-in `/color` accepts: **red, blue, green, yellow, purple, orange,

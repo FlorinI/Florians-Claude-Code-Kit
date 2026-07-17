@@ -71,14 +71,31 @@ const COLORS = {
   gray: [122, 122, 122], grey: [122, 122, 122], white: [204, 204, 204],
 };
 const rgb = idColor ? COLORS[idColor.toLowerCase()] : null;
+const hx = (n) => n.toString(16).padStart(2, '0');
+// Windows Terminal paints the tab background via OSC 4 palette index 264. Computed once, then used
+// both to paint the tab live (below) AND handed back to the shell via `--print-tabcolor` so PWSH can
+// re-paint after CC exits. Empty string when there's no color or we're not in Windows Terminal.
+const wtTabColorOSC = (rgb && process.env.WT_SESSION)
+  ? `${ESC}]4;264;rgb:${hx(rgb[0])}/${hx(rgb[1])}/${hx(rgb[2])}${ESC}\\`
+  : '';
+
+// --- `--print-tabcolor` seam: echo the WT tab-color escape and exit ---------------------------
+// Companion to `--print-title`. Windows Terminal reverts a child-set tab color the moment the child
+// (this launcher / claude) exits, so the tab drops its identity color when CC quits. The shell `cc`
+// function re-emits this escape from PWSH ITSELF after CC returns — the shell process outlives CC, so
+// the color sticks past the session exactly as $Host.UI.RawUI.WindowTitle makes the title stick.
+// Prints nothing on non-WT terminals or when no color is set.
+if (process.argv.slice(2).includes('--print-tabcolor')) { process.stdout.write(wtTabColorOSC); process.exit(0); }
+
 if (rgb) {
   const [r, g, b] = rgb;
   if (process.env.WT_SESSION) {
-    // Windows Terminal: OSC 4 sets palette index 264 = the tab background. Persists all session.
-    const hx = (n) => n.toString(16).padStart(2, '0');
-    termWrite(`${ESC}]4;264;rgb:${hx(r)}/${hx(g)}/${hx(b)}${ESC}\\`);
+    // Windows Terminal: OSC 4 sets palette index 264 = the tab background. Reverts on child exit —
+    // the shell re-emits it via --print-tabcolor to make it persist past the session.
+    termWrite(wtTabColorOSC);
   } else if (process.env.TERM_PROGRAM === 'iTerm.app') {
-    // iTerm2: proprietary OSC 6 tab color, one sequence per RGB component.
+    // iTerm2: proprietary OSC 6 tab color, one sequence per RGB component. iTerm keeps a child's tab
+    // color after the child exits, so it needs no shell re-emit — the live paint is enough.
     termWrite(`${ESC}]6;1;bg;red;brightness;${r}${BEL}`);
     termWrite(`${ESC}]6;1;bg;green;brightness;${g}${BEL}`);
     termWrite(`${ESC}]6;1;bg;blue;brightness;${b}${BEL}`);

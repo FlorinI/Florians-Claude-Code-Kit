@@ -205,11 +205,13 @@ function launcherProfile(claudeHome, shellHome) {
   if (process.platform === 'win32') {
     return {
       path: join(home, 'Documents', 'PowerShell', 'profile.ps1'),  // pwsh 7 CurrentUserAllHosts
-      // After the launch returns, pwsh re-owns the tab title: Windows Terminal reverts a child-set
-      // title to the shell's own when the child exits, so only the shell setting it makes <name@branch>
-      // stick past CC. `--print-title` just echoes the resolved title; the launch itself titles the tab
-      // while CC runs. Wrapped in try/catch so a headless/no-console host can't error the prompt.
-      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args; try { $t = (node "${fwd}/${script}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t } } catch {} }`,
+      // After the launch returns, pwsh re-owns BOTH the tab title and its color: Windows Terminal
+      // reverts a child-set title (to the shell's own) and a child-set tab color the moment the child
+      // exits, so only the shell re-asserting them makes <name@branch> and the identity color stick past
+      // CC. `--print-title` echoes the resolved title; `--print-tabcolor` echoes the OSC tab-color
+      // escape (empty on non-WT); the launch itself paints both while CC runs. Wrapped in try/catch so a
+      // headless/no-console host can't error the prompt.
+      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args; try { $t = (node "${fwd}/${script}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${script}" --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`,
     };
   }
   const sh = (process.env.SHELL || '').toLowerCase();

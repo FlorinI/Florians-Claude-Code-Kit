@@ -1,1 +1,5 @@
-(no per-leg cost data in snapshot)
+from session agents-o · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=3  ·  range $1–$1.9  ·  raw peak $1.9  ·  height ∝ cost (peak = full)
+█  
+█▇▅
+███

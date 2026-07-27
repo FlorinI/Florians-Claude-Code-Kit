@@ -1,5 +1,5 @@
 from session agents-1 · (no repo) · rendered 0s ago
 top 3 cost spikes  ·  of 3 legs  ·  session-$ basis  ·  leg 1 = oldest
-   Leg 1  ·  $0.00  ·  loaded ~40k new context
-   Leg 3  ·  $0.00  ·  loaded ~6k new context
-   Leg 2  ·  $0.00  ·  loaded ~5k new context
+   Leg 1  ·  $1.48  ·  loaded ~40k new context
+   Leg 3  ·  $0.47  ·  loaded ~6k new context
+   Leg 2  ·  $0.39  ·  loaded ~5k new context

@@ -3,7 +3,6 @@
   "sessionId": "acoff-env-false-1",
   "renderedAt": 1781750000,
   "transcriptPath": "exist.jsonl",
-  "costBaseline": null,
   "model": "Opus 4.8 (1M context)",
   "windowSize": 1000000,
   "effort": "high",

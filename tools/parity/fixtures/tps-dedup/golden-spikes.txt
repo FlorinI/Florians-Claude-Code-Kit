@@ -1,0 +1,5 @@
+from session tps-dedu · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 4 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.05  ·  loaded ~12k new context
+   Leg 2  ·  $0.01  ·  generated ~1k output
+   Leg 3  ·  $0.01  ·  generated ~0k output

@@ -20,7 +20,7 @@ import {
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.3.0.1';
+export const SL_VERSION = '4.3.1.0';
 
 const ClaudeHome = process.env.USERPROFILE || homedir();
 const NOW = nowEpoch();
@@ -255,7 +255,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   const freshRollup = () => ({
     lastByteOffset: 0, nLegs: 0, sumUnits: 0, sumOutputTokens: 0, lastMsgId: '',
     lastInputBilled: 0, lastOutputTokens: 0, lastSeenCost: 0, lastLegCost: null,
-    perLegUnits: [], perLegOwnUnits: [], costBaseline: null, lastLegTs: null, lastWarm: 0,
+    perLegUnits: [], perLegOwnUnits: [], lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0,
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
   });
@@ -263,13 +263,11 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
 
   const requiredFields = ['lastByteOffset', 'nLegs', 'sumUnits', 'sumOutputTokens',
     'lastMsgId', 'lastInputBilled', 'lastOutputTokens', 'lastSeenCost',
-    'lastLegCost', 'perLegUnits', 'perLegOwnUnits', 'costBaseline'];
-  const priorBaseline = ('costBaseline' in r) ? r.costBaseline : null;
+    'lastLegCost', 'perLegUnits', 'perLegOwnUnits'];
   let needsReset = false;
   for (const f of requiredFields) { if (!(f in r)) { needsReset = true; break; } }
   if (needsReset) {
     r = freshRollup();
-    r.costBaseline = (priorBaseline !== null) ? priorBaseline : 0;
   }
   if (isNil(r.perLegUnits)) r.perLegUnits = [];
   if (isNil(r.perLegOwnUnits)) r.perLegOwnUnits = [];
@@ -380,12 +378,6 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   if (hadPrior && !skipLastLegCost && Number(r.nLegs) > nLegsBefore) {
     const delta = Number(currentCost) - Number(r.lastSeenCost);
     if (delta > 0) r.lastLegCost = delta;
-  }
-  if (('costBaseline' in r) && r.costBaseline !== null && Number(r.costBaseline) > Number(currentCost)) {
-    r.costBaseline = null;
-  }
-  if (('costBaseline' in r) && r.costBaseline === null && Number(r.nLegs) > 0) {
-    r.costBaseline = (Number(r.nLegs) <= 5) ? Number(currentCost) : 0;
   }
   r.lastSeenCost = Number(currentCost);
 
@@ -574,6 +566,20 @@ const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
 // real 'other' tier): absent display_name → null → no tier-mix contribution, weight 1.0.
 const mainTier = ModelTier(d?.model?.display_name);
 const version = d?.version;
+// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit) — the froz5 curve was fit pre-CC-2.1.219
+// (Opus 5 default + the ~80% system-prompt cut shrank freshUnits, inflating the ratio at every depth).
+// Version-only gate; absent/unparsable version → NOT stale (never mark on unknown).
+function verGte(v, min) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v ?? ''));
+  if (!m) return false;
+  for (let i = 0; i < 3; i++) {
+    const p = Number(m[i + 1]);
+    if (p > min[i]) return true;
+    if (p < min[i]) return false;
+  }
+  return true;
+}
+const froz5CalibStale = verGte(version, [2, 1, 219]);
 const effort = (d?.effort?.level) ? d.effort.level : '?';
 const style = (d?.output_style?.name) ? d.output_style.name : 'default';
 const fast = d?.fast_mode;
@@ -637,10 +643,6 @@ let rollup = null;
 if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '');
 
 let sessionCost = costUsd;
-if (rollup && ('costBaseline' in rollup) && rollup.costBaseline !== null) {
-  sessionCost = Number(costUsd) - Number(rollup.costBaseline);
-  if (sessionCost < 0) sessionCost = 0;
-}
 let agentAgg = null;
 if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier); } catch {} }
 // Effective (tier-weighted) agent units — the divisor and the $ split both use these, so
@@ -678,7 +680,8 @@ if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
   const forecastStr = '$' + fmtN(forecast, 2);
   let part = Dim('next ') + ColorLegCell(forecast, forecastStr);
   if (!isNil(ratio)) {
-    const ratioStr = fmtN(ratio, 1) + 'x';
+    // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): `?` suffix marks low confidence.
+    const ratioStr = fmtN(ratio, 1) + 'x' + (froz5CalibStale ? '?' : '');
     const freshStr = '$' + fmtN(freshBaseline, 2);
     part += Dim(' =') + BgFroz5(ratio, ratioStr) + Dim(`${freshStr} (fresh)`);
   }
@@ -809,12 +812,21 @@ if (tpath && existsSync(tpath)) {
     if (latestUserMs == null && len > tailSize) tailWarning = true;
     if (latestUserMs != null) {
       let outputSum = 0;
+      // The Bun-era writer (≥ ~2.1.215) emits one assistant line PER CONTENT BLOCK, each repeating
+      // the same message.id + full usage — dedup on message.id so a K-block reply counts once.
+      // Id-less usage lines keep counting individually (cannot be deduped).
+      const seenTpsIds = new Set();
       for (let i = latestUserIdx + 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
         try {
           const parsed = JSON.parse(line);
           if (parsed.type === 'assistant' && parsed.message && parsed.message.usage && parsed.message.usage.output_tokens) {
+            const msgId = parsed.message.id;
+            if (msgId) {
+              if (seenTpsIds.has(msgId)) continue;
+              seenTpsIds.add(msgId);
+            }
             outputSum += Number(parsed.message.usage.output_tokens);
           }
         } catch {}
@@ -1067,11 +1079,12 @@ try {
     sessionId: sessionId ?? null,
     renderedAt: NOW,
     transcriptPath: tpath ?? null,
-    costBaseline: rollup ? (rollup.costBaseline ?? null) : null,
     model,
     // Present ONLY when a mid-session tier switch occurred (keeps the golden blast radius to the
     // switch fixtures; consumers already handle absent keys).
     ...(rollup && rollup.modelSwitch ? { modelSwitch: rollup.modelSwitch } : {}),
+    // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): present ONLY when stale, like modelSwitch.
+    ...(froz5CalibStale ? { froz5CalibStale: true } : {}),
     windowSize: ctxSize ?? null,
     effort,
     ctxTokens: ctxUsed ?? null,

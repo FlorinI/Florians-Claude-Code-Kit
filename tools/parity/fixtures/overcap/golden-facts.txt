@@ -1,21 +1,21 @@
 IDENTITY: **Reading** `(no repo)` · `overcap-` · Opus 4.8 (1M context) · `340k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: - Wind down soon
-HEADLINE_BASIS: driver=quality; quality=orange (lvl 2); cost=froz5 null / next null (lvl 0)
-COST_LEAD: each leg `~$?`, `?` a fresh leg
+HEADLINE_BASIS: driver=quality; quality=orange (lvl 2); cost=froz5 1.4997119262531207 / next 26.244958709429614 (lvl 0)
+COST_LEAD: each leg `~$26.24`, `1.50×` a fresh leg
 COST_TOTAL: `$52.50` total
-COST_CHAR: no cost trend yet
-COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
+COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
+COST_FROZ5: cause=on-curve; froz5 `1.50×` vs `1.93×` typical at this depth (residual 0.78×); confidence=ok
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
-COLD: (omit)
+COLD: calm — idling past the cache lifetime would add `$325.67` to resume; no urgency
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `340k`, orange band — real degradation on complex full-context reasoning
 QUALITY_SECONDARY: `34%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `135k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
-TRAJECTORY: flat, range `?`
+TRAJECTORY: mostly flat with spikes, range `$8.36`–`$33.37`
 YOURCALL_POLARITY: -
 YOURCALL_BASIS: quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work

@@ -3,7 +3,6 @@
   "sessionId": "a1-tier-1",
   "renderedAt": 1781750000,
   "transcriptPath": "transcript.jsonl",
-  "costBaseline": 0,
   "model": "Fable 5 (1M context)",
   "windowSize": 1000000,
   "effort": "high",

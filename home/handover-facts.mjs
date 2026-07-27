@@ -163,6 +163,9 @@ const nextUsd = s.nextLegUsd != null ? Number(s.nextLegUsd) : null;
 // benign. A non-artifact (on-curve/unknown) ratio still drives the trend rule unchanged.
 const is1M = (Number(s.windowSize) >= WINDOW_1M);
 const ctxK = s.ctxTokens != null ? Number(s.ctxTokens) / 1000 : null;
+// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): the sidecar flags renders on CC ≥2.1.219,
+// where the curve (fit pre-Opus-5 prompt cut) reads high at every depth → confidence drops to low.
+const froz5Stale = s.froz5CalibStale === true;
 const coldInMedian = (lastColdLegsAgoScan != null && Number(lastColdLegsAgoScan) < 5);
 const sessionTier = ModelTier(s.model);
 let froz5Cause = 'unknown', froz5Resid = null, froz5Exp = null, froz5Conf = 'low';
@@ -174,7 +177,8 @@ if (s.modelSwitch) {
 } else if (froz5 != null && ctxK != null && is1M) {
   froz5Exp = Froz5Expected(ctxK);
   froz5Resid = froz5 / froz5Exp;
-  froz5Conf = ctxK < FROZ5_CURVE_MINK ? 'low' : 'ok';
+  // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): stale curve forces confidence=low.
+  froz5Conf = (froz5Stale || ctxK < FROZ5_CURVE_MINK) ? 'low' : 'ok';
   froz5Cause = froz5Resid < FROZ5_RESID_HEAVY ? 'heavy-start'
     : (froz5Resid <= FROZ5_RESID_LIGHT ? 'on-curve'
       : (coldInMedian ? 'cold-pumped' : 'light-start'));
@@ -194,7 +198,7 @@ const hDriver = cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both'
 
 // Agent-spend prominence, proportional to share of session cost (denominator matches the status line's
 // agentsUsd/sessionCost): <1/3 = minor aside only (COST_DETAIL) · 1/3–1/2 = a headline tail · ≥1/2 = leads Cost.
-const sessionCostVal = s.costBaseline != null ? Math.max(0, Number(s.costUsd) - Number(s.costBaseline)) : Number(s.costUsd);
+const sessionCostVal = Number(s.costUsd);
 const agentShare = (Number(s.nAgents) > 0 && s.agentsUsd != null && sessionCostVal > 0) ? Number(s.agentsUsd) / sessionCostVal : null;
 const agentPct = agentShare != null ? psRound(agentShare * 100) : null;
 const agentTier = agentShare == null ? 'none' : (agentShare >= 0.5 ? 'lead' : (agentShare >= (1 / 3) ? 'headline' : 'minor'));
@@ -218,6 +222,11 @@ switch (froz5Cause) {
     else if (froz5 < FROZ5_CLIMB) costChar = 'roughly breaking even with a fresh early leg';
     else if (froz5 < FROZ5_STEEP) costChar = 'climbing — context cost is outgrowing the early baseline';
     else costChar = 'steep — context cost is well above the early baseline';
+}
+// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): residual-derived causes get a stale-curve
+// caveat; model-switched (preempts the resolver) and the no-curve default branch stay untouched.
+if (froz5Stale && (froz5Cause === 'heavy-start' || froz5Cause === 'light-start' || froz5Cause === 'cold-pumped' || froz5Cause === 'on-curve')) {
+  costChar += ' — low confidence: the typical-depth curve predates the Opus-5 prompt cut (post-cut sessions read above it), so treat this cause as indicative; the absolute next-leg $ is still real';
 }
 let costDetail = '(none)';
 if (Number(s.nAgents) > 0 && s.mainSessionUsd != null) {
@@ -329,9 +338,10 @@ emit(`HEADLINE_BASIS: driver=${hDriver}; quality=${absState} (lvl ${qLevel}); co
 emit(`COST_LEAD: ${costLead}`);
 emit(`COST_TOTAL: ${costTotal}`);
 emit(`COST_CHAR: ${costChar}`);
+// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): stale-curve tag on the residual branch.
 emit(`COST_FROZ5: cause=${froz5Cause}` + (froz5Cause === 'model-switched'
   ? ' — ratio not comparable across the switch'
-  : (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` : ' (curve n/a — 200k window or missing data)')));
+  : (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` + (froz5Stale ? '; curve=stale (fit pre-Opus-5 prompt cut)' : '') : ' (curve n/a — 200k window or missing data)')));
 emit(`COST_DETAIL: ${costDetail}`);
 emit(`COST_AGENTS_TIER: ${agentTier}`);
 emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -16,12 +16,12 @@ const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
 const sidecar = (f) => JSON.parse(readFileSync(join(FIX, f, 'golden-sidecar.json'), 'utf8'));
 const stdout = (f) => readFileSync(join(FIX, f, 'golden.txt'), 'utf8').replace(/\x1b\[[0-9;]*m/g, '');
 const facts = (f) => readFileSync(join(FIX, f, 'golden-facts.txt'), 'utf8');
+const allFixtures = () => readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory());
 
 // ---- A: tier-weighted cost split -------------------------------------------------------------
 test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent ×0.2)', () => {
   const s = sidecar('a1-tier-weighted');
   assert.equal(s.costUsd, 40);
-  assert.equal(s.costBaseline, 0);
   assert.equal(s.mainSessionUsd, 37.5); // 3.0M / 3.2M effective units × $40
   assert.equal(s.agentsUsd, 2.5);       // 0.2M / 3.2M × $40 — NOT the unweighted $10
   const line = stdout('a1-tier-weighted');
@@ -33,7 +33,7 @@ test('A4 — attribution never changes the total: split sums to sessionCost to t
   for (const f of ['a1-tier-weighted', 'b2-mythos', 'b3-unmapped', 'a3-empty-model', 'b4-absent-model']) {
     const s = sidecar(f);
     assert.notEqual(s.agentsUsd, null, `${f}: agentsUsd must be non-null (vacuity guard)`);
-    const sessionCost = s.costUsd - (s.costBaseline ?? 0);
+    const sessionCost = s.costUsd; // total_cost_usd IS session-local (CC resets it on /clear since 2.1.211)
     assert.ok(Math.abs(s.mainSessionUsd + s.agentsUsd - sessionCost) < 0.005,
       `${f}: ${s.mainSessionUsd} + ${s.agentsUsd} != ${sessionCost}`);
   }
@@ -144,4 +144,50 @@ test('G2 — Fable/Opus main: no chip, no COST_GATES_NOTE', () => {
     assert.ok(!stdout(f).includes('$-gates'), `${f}: chip must not fire`);
     assert.ok(!facts(f).includes('COST_GATES_NOTE'), `${f}: emit must not fire`);
   }
+});
+
+// ---- H: costBaseline removal (2026-07-27 Phase 1 sprint, M2) ------------------------------------
+test('H1 — costBaseline is GONE from every golden sidecar (mechanism removed outright)', () => {
+  for (const f of allFixtures()) {
+    assert.ok(!('costBaseline' in sidecar(f)), `${f}: stale costBaseline key in golden`);
+  }
+});
+
+// ---- I: turn-TPS message.id dedup (2026-07-27 Phase 1 sprint, M1) -------------------------------
+// Hand-computed pin: the tps-dedup transcript's last turn is msg A ×3 adjacent duplicate lines
+// (same message.id, output_tokens 500 → counts ONCE) + one id-less usage line (150 → still counts,
+// cannot be deduped) + msg B (distinct id, 250), over a 10 s turn (file mtime pinned to the last
+// content timestamp by the harness). (500 + 150 + 250) / 10 = 90 — pre-fix the duplicates made it
+// (1500 + 150 + 250) / 10 = 190. No stdout pin: the session line carrying the tps chip is
+// display-gated off (ShowSessionLine = false, statusline.mjs), so the sidecar `tps` — the single
+// computation site feeding both — is the assertable surface.
+test('I1 — turn-TPS dedups per-content-block duplicate lines: tps == 90, not 190', () => {
+  assert.equal(sidecar('tps-dedup').tps, 90);
+});
+
+// ---- J: froz5 stale-curve marker (2026-07-27 Phase 1 sprint, M3, interim) -----------------------
+test('J1 — no froz5CalibStale key in any fixture except froz5-stale (golden blast radius)', () => {
+  for (const f of allFixtures()) {
+    if (f === 'froz5-stale') continue;
+    assert.ok(!('froz5CalibStale' in sidecar(f)), `${f}: unexpected froz5CalibStale key`);
+  }
+});
+
+test('J2 — froz5-stale (CC 2.1.219): flag present, chip gains `?`, facts drop to confidence=low', () => {
+  const s = sidecar('froz5-stale');
+  assert.equal(s.froz5CalibStale, true);
+  assert.match(stdout('froz5-stale'), /2\.2x\?/); // `?` suffix inside the froz5 tint
+  const f = facts('froz5-stale');
+  assert.match(f, /COST_FROZ5: cause=light-start;.*confidence=low; curve=stale \(fit pre-Opus-5 prompt cut\)/);
+  assert.match(f, /COST_CHAR: .*low confidence: the typical-depth curve predates the Opus-5 prompt cut/);
+});
+
+test('J3 — marker never touches the number: ratio/state identical to the clone parent keepwarm-1h', () => {
+  const a = sidecar('froz5-stale');
+  const b = sidecar('keepwarm-1h');
+  assert.equal(a.froz5Ratio, b.froz5Ratio); // 2.2 — raw signal, no cap/smoothing/suppression
+  assert.equal(a.froz5State, b.froz5State); // chip color driver unchanged
+  // parent stays confidence=ok — proves the ok→low flip above is the version gate, nothing else
+  assert.match(facts('keepwarm-1h'), /confidence=ok/);
+  assert.ok(!stdout('keepwarm-1h').includes('x?'), 'parent chip must not carry the ? suffix');
 });

@@ -3,7 +3,6 @@
   "sessionId": "keepwarm-5m-0001",
   "renderedAt": 1781777300,
   "transcriptPath": "transcript.jsonl",
-  "costBaseline": 0,
   "model": "Opus 4.8 (1M context)",
   "windowSize": 1000000,
   "effort": "high",

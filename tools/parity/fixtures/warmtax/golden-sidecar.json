@@ -3,7 +3,6 @@
   "sessionId": "warmtax-0001",
   "renderedAt": 1781780800,
   "transcriptPath": "transcript.jsonl",
-  "costBaseline": 0,
   "model": "Opus 4.8 (1M context)",
   "windowSize": 1000000,
   "effort": "high",

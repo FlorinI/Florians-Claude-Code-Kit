@@ -11,8 +11,9 @@ import { atomicWriteFile } from '../home/_sl-compat.mjs';
 
 // write-hardening (rows F1/F2-behavioural) — the atomic-write helper's contract, plus the
 // post-kill recovery path: a crash between temp-write and rename leaves the original target
-// intact and an orphaned <path>.tmp.<pid>; the next render must run clean, keep the cost
-// baseline, and tolerate the orphan. (Which call sites USE the helper is source-invariants F2.)
+// intact and an orphaned <path>.tmp.<pid>; the next render must run clean off the intact stats
+// file (no rollup reset) and tolerate the orphan. (Which call sites USE the helper is
+// source-invariants F2.)
 
 const here = dirname(fileURLToPath(import.meta.url));
 const engine = join(here, '..', 'home', 'statusline.mjs');
@@ -47,7 +48,7 @@ test('atomicWriteFile — failed write throws, cleans its temp, never half-write
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('F1 — post-kill state (intact stats + orphaned temp): baseline survives, render runs clean', () => {
+test('F1 — post-kill state (intact stats + orphaned temp): stats survive, render runs clean', () => {
   const home = mkdtempSync(join(tmpdir(), 'wh-home-'));
   const cwd = mkdtempSync(join(tmpdir(), 'wh-cwd-'));
   try {
@@ -71,21 +72,30 @@ test('F1 — post-kill state (intact stats + orphaned temp): baseline survives, 
     const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
     const run = (cost) => execFileSync(process.execPath, [engine], { input: stdinFor(cost), env, maxBuffer: 64 * 1024 * 1024 });
 
-    // Render 1 establishes the stats file; ≤5 legs → costBaseline latches to the current cost.
+    // Render 1 establishes the stats file. The costBaseline mechanism was removed 2026-07-27
+    // (CC resets total_cost_usd on /clear since 2.1.211): fresh rollups must not carry the key.
     run(0.25);
     const statsPath = join(cwd, '.claude', 'statusline-stats', 'wh-kill-1.json');
-    assert.equal(JSON.parse(readFileSync(statsPath, 'utf8')).costBaseline, 0.25);
+    const stats1 = JSON.parse(readFileSync(statsPath, 'utf8'));
+    assert.ok(!('costBaseline' in stats1), 'fresh rollup carries no costBaseline key');
+    assert.equal(stats1.lastSeenCost, 0.25, 'render 1 latched its cost');
 
     // Simulate the kill's aftermath: the target survived, plus an orphaned temp full of garbage.
     const orphan = statsPath + '.tmp.99999';
     writeFileSync(orphan, '{"nLegs": 999, "TRUNCATED', 'utf8');
 
-    // Render 2 must run clean off the intact stats file — baseline kept, no reset, orphan ignored.
+    // Render 2 must run clean off the INTACT stats file, ignoring the orphan. Grow the transcript
+    // by one leg so the no-reset proof is discriminating: a new leg prices at
+    // currentCost − lastSeenCost = 0.30 − 0.25 = 0.05 only when render 1's state was carried
+    // forward — the reset path (freshRollup + skipLastLegCost) would leave lastLegCost null.
+    writeFileSync(transcript, legLine(0) + legLine(1) + legLine(2) + legLine(3), 'utf8');
     const out = run(0.3);
     assert.ok(out.length > 0, 'render produced output');
     const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
-    assert.equal(stats.costBaseline, 0.25, 'cost baseline NOT reset');
-    assert.equal(stats.nLegs, 3, 'legs preserved, garbage temp never read');
+    assert.equal(stats.nLegs, 4, 'incremental scan picked up the new leg, garbage temp never read');
+    assert.ok(Math.abs(stats.lastLegCost - 0.05) < 1e-9,
+      `state carried forward, no reset: lastLegCost ${stats.lastLegCost} != 0.05`);
+    assert.equal(stats.lastSeenCost, 0.3, 'render 2 latched its cost');
     // Tolerated: the orphan is dead weight, never promoted to state (swept by age later).
     if (existsSync(orphan)) {
       assert.equal(readFileSync(orphan, 'utf8'), '{"nLegs": 999, "TRUNCATED', 'orphan left as-is');

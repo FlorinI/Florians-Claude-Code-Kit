@@ -1,5 +1,5 @@
 from session incr-1 · (no repo) · rendered 0s ago
-per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=3  ·  range $0.2–$0.37  ·  raw peak $0.37  ·  height ∝ cost (peak = full)
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=3  ·  range $0.53–$1  ·  raw peak $1  ·  height ∝ cost (peak = full)
 █  
 █▇▅
 ███

@@ -1,0 +1,5 @@
+from session tps-dedu · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=4  ·  range $0.02–$0.05  ·  raw peak $0.05  ·  height ∝ cost (peak = full)
+█   
+██▅▃
+████

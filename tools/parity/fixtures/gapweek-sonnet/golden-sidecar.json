@@ -3,7 +3,6 @@
   "sessionId": "gapweek-1",
   "renderedAt": 1781750000,
   "transcriptPath": "exist.jsonl",
-  "costBaseline": null,
   "model": "Sonnet 5",
   "windowSize": 200000,
   "effort": "medium",

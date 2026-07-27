@@ -1,0 +1,26 @@
+{
+  "model": {
+    "display_name": "Opus 4.8 (1M context)"
+  },
+  "version": "2.1.219",
+  "effort": {
+    "level": "high"
+  },
+  "context_window": {
+    "used_percentage": 17,
+    "total_input_tokens": 170000,
+    "context_window_size": 1000000
+  },
+  "transcript_path": "PLACEHOLDER",
+  "session_id": "froz5-stale-0001",
+  "cost": {
+    "total_cost_usd": 2.0,
+    "total_api_duration_ms": 120000,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "workspace": {
+    "current_dir": "PLACEHOLDER"
+  },
+  "rate_limits": {}
+}

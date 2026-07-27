@@ -71,9 +71,8 @@ const legs = getScannedLegs(tpath);
 const sumUnits = legs.reduce((a, l) => a + l.units, 0);
 if (legs.length === 0 || sumUnits <= 0) done('(no priced legs in the transcript yet)');
 
-// --- session-local cost (parity with the status line's costBaseline /clear fix) ---
+// --- session cost — total_cost_usd IS session-local (CC resets it on /clear since 2.1.211) ---
 let sessionCost = Number(snap.costUsd);
-if (snap.costBaseline != null) sessionCost = Math.max(0, Number(snap.costUsd) - Number(snap.costBaseline));
 // Use the status line's DE-INFLATED base (sessionCost / (main + sub-agent units)) from the sidecar, so the
 // spike $ and the avoidable cold tax reconcile with the status line. Fall back to the local main-only base
 // only for pre-bsl4.0.0.0 snapshots that lack the field.

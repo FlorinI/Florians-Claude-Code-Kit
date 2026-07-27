@@ -1,5 +1,5 @@
 from session mixed-fi · (no repo) · rendered 0s ago
 top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest  ·  ❆ = counted in the cold tax
-❆  Leg 4  ·  $0.00  ·  re-cached ~80k (cold — cache expired after idle; $0.00 avoidable cold tax)
-   Leg 1  ·  $0.00  ·  loaded ~30k new context
-   Leg 6  ·  $0.00  ·  generated ~3k output
+❆  Leg 4  ·  $5.53  ·  re-cached ~80k (cold — cache expired after idle; $4.97 avoidable cold tax)
+   Leg 1  ·  $1.43  ·  loaded ~30k new context
+   Leg 6  ·  $1.11  ·  generated ~3k output

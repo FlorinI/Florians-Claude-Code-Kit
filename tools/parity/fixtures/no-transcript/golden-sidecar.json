@@ -3,7 +3,6 @@
   "sessionId": "no-transcript-1",
   "renderedAt": 1781740500,
   "transcriptPath": "exist.jsonl",
-  "costBaseline": null,
   "model": "Haiku 4.5",
   "windowSize": 200000,
   "effort": "low",

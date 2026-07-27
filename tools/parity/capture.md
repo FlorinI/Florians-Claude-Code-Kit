@@ -55,7 +55,7 @@ the main transcript path: `<transcript-minus-.jsonl>/subagents`).
 | `expired-cold` | last leg >TTL ago → `cold? >1h` expired branch |
 | `no-transcript`| missing transcript file → rollup null, null-safety, quota only |
 | `agents`       | sub-agent fleet → agents line + base de-inflation over the combined unit pool |
-| `incremental`  | pre-seeded stats (`seed/`) → `hadPrior` + last-leg-cost delta + costBaseline |
+| `incremental`  | pre-seeded stats (`seed/`) → `hadPrior` + last-leg-cost delta |
 
 ## Capturing a real fixture
 

@@ -3,7 +3,6 @@
   "sessionId": "model-switch-1",
   "renderedAt": 1781750000,
   "transcriptPath": "transcript.jsonl",
-  "costBaseline": 0,
   "model": "Sonnet 5",
   "modelSwitch": {
     "atLeg": 13,

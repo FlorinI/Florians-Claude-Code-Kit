@@ -50,6 +50,10 @@ function runTrio(fixDir, nowEpoch) {
     ...process.env,
     USERPROFILE: tempHome,
     HOME: tempHome,
+    // POSITIVE pin, never a delete — see run-parity.mjs. The trio reads/writes handover-frozen.json,
+    // legspark.ansi and spikes.txt under the resolved config home, so an inherited CLAUDE_CONFIG_DIR
+    // would both perturb the goldens and write outside the temp home.
+    CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
     CLAUDE_PROJECT_DIR: tempCwd,
     TZ: 'UTC',
     CLAUDE_SL_NOW_EPOCH: String(nowEpoch),

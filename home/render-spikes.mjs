@@ -10,8 +10,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { resolveSidecarPath } from './sidecar-path.mjs';
+import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
 import { getScannedLegs, testColdLeg, getDriver, M_CACHE_READ, M_OUTPUT } from './leg-driver.mjs';
 import { fmtN, nowEpoch, psRound } from './_sl-compat.mjs';
 
@@ -23,14 +22,14 @@ const Top = topIdx >= 0 && argv[topIdx + 1] != null ? Number(argv[topIdx + 1]) :
 
 const ESC = '\x1b';
 const MID = '·';
-const claudeHome = process.env.USERPROFILE || homedir();
+const configHome = resolveConfigHome();
 function done(s) { process.stdout.write(s); process.exit(0); }
 
 // ❆ cold-tax marker. Default = deep blue (256-colour 33), matching the status line; --mono = the bare
 // glyph with NO ANSI, for the report path (an assistant message strips ANSI to literal junk).
 const snow = Mono ? '❆' : `${ESC}[38;5;33m❆${ESC}[0m`;
 
-const frozen = join(claudeHome, '.claude', 'handover-frozen.json');
+const frozen = join(configHome, 'handover-frozen.json');
 const sidecar = (Frozen && existsSync(frozen)) ? frozen : resolveSidecarPath(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 if (!sidecar || !existsSync(sidecar)) done('(no status-line snapshot yet — press Enter on an empty prompt, then re-run)');
 let snap;
@@ -158,7 +157,7 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
 }
 const out = outLines.join('\n');
 
-try { writeFileSync(join(claudeHome, '.claude', 'spikes.txt'), out, 'utf8'); } catch { /* best effort */ }
+try { writeFileSync(join(configHome, 'spikes.txt'), out, 'utf8'); } catch { /* best effort */ }
 
 process.stdout.write(out);
 process.exit(0);

@@ -32,7 +32,9 @@ function render(dirs, displayName, cost) {
   };
   execFileSync(process.execPath, [engine], {
     input: JSON.stringify(stdin),
-    env: { ...process.env, USERPROFILE: dirs.home, HOME: dirs.home, CLAUDE_PROJECT_DIR: dirs.cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) },
+    // CLAUDE_CONFIG_DIR is pinned POSITIVELY (never deleted) so the child's user-level state stays
+    // inside the temp home even when this suite is launched from a second-subscription session.
+    env: { ...process.env, USERPROFILE: dirs.home, HOME: dirs.home, CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CLAUDE_PROJECT_DIR: dirs.cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) },
     maxBuffer: 64 * 1024 * 1024,
   });
   return {

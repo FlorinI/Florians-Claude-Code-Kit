@@ -91,6 +91,12 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
     ...process.env,
     USERPROFILE: tempHome,
     HOME: tempHome,
+    // POSITIVE pin, never a delete: the cluster resolves its user config home from
+    // CLAUDE_CONFIG_DIR when set, so a value inherited from the surrounding shell (a session
+    // launched against a second subscription) would make the child read that home's settings.json
+    // and write its caches there — nondeterministic goldens plus pollution outside the temp home.
+    // Pinning it to the temp home's .claude makes the run identical from any session.
+    CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
     CLAUDE_PROJECT_DIR: tempCwd,
     TZ: 'UTC',
     CLAUDE_SL_NOW_EPOCH: String(nowEpoch),

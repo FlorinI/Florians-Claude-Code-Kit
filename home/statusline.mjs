@@ -7,7 +7,6 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, rmSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import {
   nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs, atomicWriteFile,
@@ -16,13 +15,18 @@ import {
   getDriver, testColdLeg, ModelTier, TIER_BASE,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
 } from './leg-driver.mjs';
+import { resolveConfigHome } from './sidecar-path.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.3.1.0';
+export const SL_VERSION = '4.3.2.0';
 
-const ClaudeHome = process.env.USERPROFILE || homedir();
+// The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
+// user-level read (settings.json, stats-cache.json) and write (the global sidecar, the rollup caches)
+// goes through it, so a second-subscription session sees its own state. PROJECT-level paths
+// (<cwd>/.claude/…) are per-project, not per-subscription, and are deliberately untouched.
+const ConfigHome = resolveConfigHome();
 const NOW = nowEpoch();
 
 let input_json = '';
@@ -31,7 +35,7 @@ let d = {};
 try { d = JSON.parse(input_json); } catch { d = {}; }
 
 if (process.env.CLAUDE_STATUSLINE_DEBUG === '1') {
-  try { writeFileSync(join(ClaudeHome, '.claude', 'statusline-input-sample.json'), input_json, 'utf8'); } catch {}
+  try { writeFileSync(join(ConfigHome, 'statusline-input-sample.json'), input_json, 'utf8'); } catch {}
 }
 
 // Transcript read cap (golden-test determinism). When CLAUDE_SL_TRANSCRIPT_MAXBYTES is set, the
@@ -39,7 +43,7 @@ if (process.env.CLAUDE_STATUSLINE_DEBUG === '1') {
 // of the transcript. Unset (production) → read to EOF.
 const TRANSCRIPT_MAXBYTES = process.env.CLAUDE_SL_TRANSCRIPT_MAXBYTES ? Number(process.env.CLAUDE_SL_TRANSCRIPT_MAXBYTES) : null;
 function claudeStateDir(projRoot) {
-  return projRoot ? join(projRoot, '.claude') : join(ClaudeHome, '.claude');
+  return projRoot ? join(projRoot, '.claude') : ConfigHome;
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -98,7 +102,7 @@ function CacheWriteUnits(cw1h, cw5m, cwTotal) {
 const AUTO_COMPACT_1M = 500000;   // model-tuned `auto` default for the 1M regime (estimate; drifts server-side)
 function readAutoCompactWindow() {
   // Written to USER settings by /autocompact. (A project-level override would be a future refinement.)
-  const s = readJson(join(ClaudeHome, '.claude', 'settings.json'));
+  const s = readJson(join(ConfigHome, 'settings.json'));
   return (s && typeof s.autoCompactWindow === 'number') ? s.autoCompactWindow : null;
 }
 // Effective auto-compact window + whether it's an ESTIMATE (on `auto`, using the default) vs an
@@ -118,7 +122,7 @@ function CompactAt(ctxSize) { return psRound(CompactWindow(ctxSize).win * 0.95);
 // it ON, so the countdown must keep rendering. Verified against the running CC binary 2026-07-04
 // (ticket 2026-07-04-acoff-env-predicate-vs-cc); if CC's parser drifts, this allowlist must follow.
 function autoCompactDisabled() {
-  const s = readJson(join(ClaudeHome, '.claude', 'settings.json'));
+  const s = readJson(join(ConfigHome, 'settings.json'));
   if (s && s.autoCompactEnabled === false) return true;
   const env = process.env.DISABLE_AUTO_COMPACT;
   if (env != null && ['1', 'true', 'yes', 'on'].includes(String(env).toLowerCase().trim())) return true;
@@ -1020,7 +1024,7 @@ if (!isNil(d?.cost?.total_lines_added) || !isNil(d?.cost?.total_lines_removed)) 
 }
 if (tpsRendered) costParts.push(tpsRendered);
 if (tailWarning) costParts.push(RedBold('tail!'));
-const dailyStatsPath = join(ClaudeHome, '.claude', 'stats-cache.json');
+const dailyStatsPath = join(ConfigHome, 'stats-cache.json');
 if (existsSync(dailyStatsPath)) {
   try {
     const stats = readJson(dailyStatsPath);
@@ -1050,7 +1054,7 @@ function writeSidecar(json) {
     if (!existsSync(projDir)) mkdirSync(projDir, { recursive: true });
     atomicWriteFile(join(projDir, 'statusline-last.json'), json);
   }
-  atomicWriteFile(join(ClaudeHome, '.claude', 'statusline-last.json'), json);
+  atomicWriteFile(join(ConfigHome, 'statusline-last.json'), json);
 }
 try {
   const absState = isNil(ctxUsed) ? null
@@ -1071,7 +1075,7 @@ try {
       else coldState = 'cold';
     } else coldState = 'idle-cold';
   }
-  const sidecarPath = cwd ? join(cwd, '.claude', 'statusline-last.json') : join(ClaudeHome, '.claude', 'statusline-last.json');
+  const sidecarPath = cwd ? join(cwd, '.claude', 'statusline-last.json') : join(ConfigHome, 'statusline-last.json');
   const prevSnap = readJson(sidecarPath);
   const prevGitRepo = (prevSnap && !isNil(prevSnap.gitRepo)) ? prevSnap.gitRepo : null;
   const snapshot = {

@@ -69,7 +69,9 @@ test('F1 — post-kill state (intact stats + orphaned temp): stats survive, rend
       cost: { total_cost_usd: cost, total_api_duration_ms: 60000 },
       workspace: { current_dir: cwd }, rate_limits: {},
     });
-    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
+    // CLAUDE_CONFIG_DIR is pinned POSITIVELY (never deleted) so the child's user-level state stays
+    // inside the temp home even when this suite is launched from a second-subscription session.
+    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
     const run = (cost) => execFileSync(process.execPath, [engine], { input: stdinFor(cost), env, maxBuffer: 64 * 1024 * 1024 });
 
     // Render 1 establishes the stats file. The costBaseline mechanism was removed 2026-07-27

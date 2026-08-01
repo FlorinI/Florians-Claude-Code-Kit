@@ -16,7 +16,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-import { runInstall, runUninstall, planInstall } from '../install.mjs';
+import { runInstall, runUninstall, planInstall, setupLauncher, removeLauncher } from '../install.mjs';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TEST_DIR, '..');
@@ -349,5 +349,107 @@ test('planInstall surfaces conflicts without writing', () => {
     const plan = planInstall(baseOpts(home));
     assert.ok(plan.conflicts.length >= 1, 'conflict surfaced in plan');
     assert.ok(!existsSync(join(home, '.fcck-install.json')), 'planning wrote nothing');
+  });
+});
+
+// --- launcher variants (rows V1–V6) ---------------------------------------------------------------
+// setupLauncher's optional `variants` emits extra launcher functions, with fixed leading args, inside
+// the SAME marker-bounded block. The rows below assert the EMITTED TEXT, because that is where this
+// feature fails: a variant whose --print-title probe doesn't carry the variant's own fixed args
+// resolves an unmarked title, and the tab silently loses its marker the instant Claude Code exits.
+// `platform` overrides the platform the form is generated for, so both shapes are asserted from one
+// machine. Names/values here are generic — this file ships in the public kit.
+
+const LAUNCH_SCRIPT = 'claude-launch.mjs';
+const VARIANTS = [
+  { command: 'ccalt', args: ['--config-dir', '/opt/alt-home', '--title-suffix', '·alt'] },
+  { command: 'ccnovsc', args: ['--no-vscode'] },
+];
+
+// Uses the profile path setupLauncher itself reports, not a candidate scan: with a platform
+// override the same throwaway home can hold BOTH a profile.ps1 and an rc file, and a scan would
+// keep returning whichever was written first.
+function writeBlock(home, opts = {}) {
+  const { profile } = setupLauncher({ claudeHome: home, shellHome: home, command: 'cc', script: LAUNCH_SCRIPT, log: quiet, ...opts });
+  assert.ok(existsSync(profile), `a shell profile was written at ${profile}`);
+  return { profile, body: readFileSync(profile, 'utf8') };
+}
+
+const fwdHome = (home) => resolve(home).replace(/\\/g, '/');
+
+test('V1 — with NO variants the emitted function is byte-identical to the pre-variants form', () => {
+  withHome((home) => {
+    const fwd = fwdHome(home);
+    const winExpected = `function cc { node "${fwd}/${LAUNCH_SCRIPT}" @args; try { $t = (node "${fwd}/${LAUNCH_SCRIPT}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${LAUNCH_SCRIPT}" --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`;
+    const posixExpected = `cc() { node "${fwd}/${LAUNCH_SCRIPT}" "$@"; }`;
+    const win = writeBlock(home, { platform: 'win32' });
+    assert.ok(win.body.includes(winExpected), 'Windows form unchanged with no variants');
+    const posix = writeBlock(home, { platform: 'linux' });
+    assert.ok(posix.body.includes(posixExpected), 'POSIX form unchanged with no variants');
+  });
+});
+
+test('V2 — variants share the ONE marked block, one function per line', () => {
+  withHome((home) => {
+    const { body } = writeBlock(home, { platform: 'win32', variants: VARIANTS });
+    assert.equal((body.match(/\(cc launcher\) >>>/g) || []).length, 1, 'exactly one block');
+    assert.equal((body.match(/\(cc launcher\) <<</g) || []).length, 1);
+    const block = body.slice(body.indexOf('(cc launcher) >>>'), body.indexOf('(cc launcher) <<<'));
+    for (const cmd of ['cc', 'ccalt', 'ccnovsc']) {
+      assert.equal((block.match(new RegExp(`function ${cmd} \\{`, 'g')) || []).length, 1, `${cmd} emitted once, inside the block`);
+    }
+    const lines = block.trim().split(/\r?\n/).filter((l) => l.startsWith('function '));
+    assert.equal(lines.length, 3, 'primary + 2 variants, one per line');
+  });
+});
+
+test('V3 — each variant carries its fixed args in ALL THREE invocations (probe-arg drift guard)', () => {
+  withHome((home) => {
+    const { body } = writeBlock(home, { platform: 'win32', variants: VARIANTS });
+    for (const v of VARIANTS) {
+      const line = body.split(/\r?\n/).find((l) => l.startsWith(`function ${v.command} {`));
+      assert.ok(line, `${v.command} emitted`);
+      const fixed = v.args.map((a) => `"${a}"`).join(' ');
+      const count = line.split(fixed).length - 1;
+      assert.equal(count, 3, `${v.command}: fixed args must appear in the launch AND both probe calls (saw ${count})`);
+      // …and specifically ahead of each seam, not merely somewhere on the line.
+      assert.ok(line.includes(`${fixed} @args`), `${v.command}: fixed args precede @args`);
+      assert.ok(line.includes(`${fixed} --print-title`), `${v.command}: fixed args precede --print-title`);
+      assert.ok(line.includes(`${fixed} --print-tabcolor`), `${v.command}: fixed args precede --print-tabcolor`);
+    }
+  });
+});
+
+test('V4 — POSIX form carries the fixed args ahead of "$@", and removeLauncher reverses it', () => {
+  withHome((home) => {
+    const fwd = fwdHome(home);
+    const { profile, body } = writeBlock(home, { platform: 'linux', variants: VARIANTS });
+    assert.ok(body.includes(`ccalt() { node "${fwd}/${LAUNCH_SCRIPT}" "--config-dir" "/opt/alt-home" "--title-suffix" "·alt" "$@"; }`),
+      'POSIX variant renders individually-quoted fixed args before "$@"');
+    assert.ok(body.includes(`ccnovsc() { node "${fwd}/${LAUNCH_SCRIPT}" "--no-vscode" "$@"; }`));
+    // The block is marker-bounded, so one removal takes the primary AND every variant with it.
+    removeLauncher({ claudeHome: home, shellHome: home, platform: 'linux', log: quiet });
+    const after = existsSync(profile) ? readFileSync(profile, 'utf8') : '';
+    for (const cmd of ['cc()', 'ccalt()', 'ccnovsc()']) assert.ok(!after.includes(cmd), `${cmd} removed`);
+    assert.ok(!after.includes(LAUNCH_SCRIPT), 'no launcher reference survives');
+  });
+});
+
+test('V5 — re-running with the same variants is idempotent', () => {
+  withHome((home) => {
+    const first = writeBlock(home, { platform: 'win32', variants: VARIANTS });
+    const second = writeBlock(home, { platform: 'win32', variants: VARIANTS });
+    assert.equal(second.body, first.body, 'second run is a no-op');
+    assert.equal((second.body.match(/\(cc launcher\) >>>/g) || []).length, 1, 'no duplicate block');
+  });
+});
+
+test('V6 — an embedded double quote is escaped with the shell’s own escape', () => {
+  withHome((home) => {
+    const tricky = [{ command: 'ccq', args: ['--title-suffix', 'a"b'] }];
+    const win = writeBlock(home, { platform: 'win32', variants: tricky });
+    assert.ok(win.body.includes('"a`"b"'), 'pwsh backtick escape');
+    const posix = writeBlock(home, { platform: 'linux', variants: tricky });
+    assert.ok(posix.body.includes('"a\\"b"'), 'POSIX backslash escape');
   });
 });

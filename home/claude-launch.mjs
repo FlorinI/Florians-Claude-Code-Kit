@@ -17,15 +17,61 @@
 //   model  -> `--model <model>`  if set
 //   effort -> `--effort <level>` if set
 //
-// Title/name = <identity name | repo name | folder leaf>@<branch>.
+// Title/name = [<title-prefix>] <identity name | repo name | folder leaf>@<branch> [<title-suffix>].
+//
+// Launcher-owned flags (self-consumed — never forwarded to claude, never seen by the prompt scan):
+//   --config-dir <path>    run claude against another config home (CLAUDE_CONFIG_DIR, child env only)
+//   --title-prefix <text>  prepend to the title   --title-suffix <text>  append to the title
+//   --no-vscode            force the VS Code co-launch (and tiling) off regardless of CC_VSCODE
+//   --print-title / --print-tabcolor   the shell-function seams (see below)
 
 import { readFileSync, existsSync, statSync, readdirSync, appendFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 
 const ESC = '\x1b';
 const BEL = '\x07';
 const loc = process.cwd();
+
+// --- launcher's own flags (self-consumed) -------------------------------------------------------
+// Four flags belong to the LAUNCHER, not to claude. They are stripped from the argv forwarded to
+// claude AND from the prompt scan, so `cc --config-dir <d> "do X"` still detects "do X" as the
+// user's prompt (and therefore still suppresses the /color injection). Because they never reach the
+// scan they need no VALUE_FLAGS entry. Malformed input is inert, never fatal: a value-taking flag
+// given as the last element is ignored and still stripped.
+//
+//   --config-dir <path>    launch claude against a different config home (CLAUDE_CONFIG_DIR in the
+//                          SPAWNED CHILD's env only). `~/` or `~\` expands; the result is absolute.
+//   --title-prefix <text>  prepended to the computed title, one space separator
+//   --title-suffix <text>  appended to the computed title, one space separator
+//   --no-vscode            force the VS Code co-launch (and hence tiling) off, whatever CC_VSCODE says
+//
+// Prefix/suffix are deliberately generic: `--config-dir` alone changes NOTHING visually. A caller
+// that wants a visual marker for a second subscription opts into it explicitly.
+function expandTilde(p) {
+  const s = String(p);
+  return (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) ? join(homedir(), s.slice(1)) : s;
+}
+function parseLauncherFlags(argv) {
+  const o = { configDir: null, titlePrefix: '', titleSuffix: '', noVsCode: false, rest: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--no-vscode') { o.noVsCode = true; continue; }
+    if (a === '--config-dir' || a === '--title-prefix' || a === '--title-suffix') {
+      const v = argv[i + 1];
+      i++;                                       // consume the value (or fall off the end — inert)
+      if (v == null) continue;
+      if (a === '--config-dir') o.configDir = resolve(expandTilde(v));
+      else if (a === '--title-prefix') o.titlePrefix = v;
+      else o.titleSuffix = v;
+      continue;
+    }
+    o.rest.push(a);
+  }
+  return o;
+}
+const flags = parseLauncherFlags(process.argv.slice(2));
 
 // --- identity ---------------------------------------------------------------------------------
 let id = {};
@@ -49,7 +95,11 @@ const origin = git(['config', '--get', 'remote.origin.url']);
 if (origin) { const m = origin.replace(/\.git$/, '').match(/([^:/]+)$/); if (m) repo = m[1]; }
 if (!repo) { const top = git(['rev-parse', '--show-toplevel']); if (top) repo = top.split(/[\\/]/).filter(Boolean).pop() || ''; }
 const base = idName || repo || folder;                            // 1st: explicit /identity name
-const title = branch ? `${base}@${branch}` : base;
+const core = branch ? `${base}@${branch}` : base;
+// ONE title computation, upstream of every consumer — the --print-title seam, the OSC 2 paints, the
+// `--name` handed to claude, and the tiler's titleMatch. So a marker supplied by the caller rides
+// into all of them by construction, with no second place to drift out of sync.
+const title = [flags.titlePrefix, core, flags.titleSuffix].filter(Boolean).join(' ');
 
 // --- `--print-title` seam: emit the resolved title and exit, nothing else ---------------------
 // The shell `cc` function calls this after Claude Code exits so that PWSH ITSELF re-owns the tab
@@ -58,7 +108,7 @@ const title = branch ? `${base}@${branch}` : base;
 // ("PowerShell"). Only the shell process setting $Host.UI.RawUI.WindowTitle makes it stick. So the
 // launcher exposes the computed title here; the shell writes it. Early-exit BEFORE any OSC / color /
 // VS Code / claude side effect — this call prints one line and does nothing else.
-if (process.argv.slice(2).includes('--print-title')) { process.stdout.write(title); process.exit(0); }
+if (flags.rest.includes('--print-title')) { process.stdout.write(title); process.exit(0); }
 
 // --- terminal title (OSC 2 — portable) + tab color (per terminal) -----------------------------
 function termWrite(seq) { try { if (process.stdout.isTTY) process.stdout.write(seq); } catch {} }
@@ -85,7 +135,7 @@ const wtTabColorOSC = (rgb && process.env.WT_SESSION)
 // function re-emits this escape from PWSH ITSELF after CC returns — the shell process outlives CC, so
 // the color sticks past the session exactly as $Host.UI.RawUI.WindowTitle makes the title stick.
 // Prints nothing on non-WT terminals or when no color is set.
-if (process.argv.slice(2).includes('--print-tabcolor')) { process.stdout.write(wtTabColorOSC); process.exit(0); }
+if (flags.rest.includes('--print-tabcolor')) { process.stdout.write(wtTabColorOSC); process.exit(0); }
 
 if (rgb) {
   const [r, g, b] = rgb;
@@ -109,7 +159,7 @@ const cli = [];
 if (idModel) cli.push('--model', idModel);
 if (idEffort) cli.push('--effort', idEffort);
 if (title) cli.push('--name', title);            // always set the session name/title (a flag)
-const userArgs = process.argv.slice(2);
+const userArgs = flags.rest;                     // the launcher's own flags never reach claude
 cli.push(...userArgs);
 
 // The single initial-prompt slot carries "/color <color>" — injected ONLY when the user gave no
@@ -165,6 +215,11 @@ function shimVector(exe, args) {
 }
 const claudeArgv = shimVector(claudePath, cli);
 
+// `--config-dir` scopes to the CLAUDE CHILD only — not the VS Code co-launch, not the tiler, and not
+// this launcher's own identity/git reads (those are per-project, not per-config-home).
+const childEnvDelta = flags.configDir ? { CLAUDE_CONFIG_DIR: flags.configDir } : null;
+const childEnv = childEnvDelta ? { ...process.env, ...childEnvDelta } : process.env;
+
 // --- VS Code co-launch (env-gated; default off) -------------------------------------------------
 // CC_VSCODE truthy → open VS Code on this project, detached, before claude launches. Exactly one
 // *.code-workspace at the cwd root opens that workspace; zero or multiple open the folder (never
@@ -172,7 +227,11 @@ const claudeArgv = shimVector(claudePath, cli);
 // or fails because of this step.
 const VS_SPAWN_OPTS = { detached: true, stdio: 'ignore' };
 let vsPlan = { action: 'off', target: null, exe: null };
-if (EnvTruthy(process.env.CC_VSCODE)) {
+// `--no-vscode` forces the co-launch off REGARDLESS of CC_VSCODE — the profile sets that var
+// globally, so an env-only opt-out can't express "this one session, without VS Code". vsPlan stays
+// {action:'off'}, so tiling gates off through the existing path (tileEnabled needs vsPlan.exe) and
+// reports the existing 'vscode-off' reason — the reason taxonomy is not extended.
+if (!flags.noVsCode && EnvTruthy(process.env.CC_VSCODE)) {
   let action = 'folder', target = '.';
   try {
     const ws = readdirSync(loc).filter((n) => n.toLowerCase().endsWith('.code-workspace'));
@@ -341,8 +400,14 @@ Dbg "snap: focusCode=$f1 winRight; focusTerm=$f2 winLeft DONE"
 // --- dry-run seam: print the launch plan as ONE JSON line, spawn nothing ------------------------
 if (EnvTruthy(process.env.CC_LAUNCH_DRYRUN)) {
   process.stdout.write(JSON.stringify({
+    launch: {
+      title, titlePrefix: flags.titlePrefix, titleSuffix: flags.titleSuffix,
+      configDir: flags.configDir, noVsCode: flags.noVsCode,
+    },
     vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true } },
-    claude: { argv: claudeArgv },
+    // envDelta is the DELTA ONLY — never the inherited environment, so a dry-run captured in a CI
+    // log can't spill anything. null when the launch adds nothing to the child's env.
+    claude: { argv: claudeArgv, envDelta: childEnvDelta },
     tile: {
       enabled: tilePlan.enabled, reason: tilePlan.reason, side: tilePlan.side, ratio: tilePlan.ratio,
       captureMethod: tilePlan.captureMethod, snapGroup: tilePlan.snapGroup, titleMatch: tilePlan.titleMatch,
@@ -371,7 +436,7 @@ if (vsPlan.exe) {
 if (tilePlan.enabled && termHwnd) { try { spawnTiler(termHwnd, tilePlan); tlog(`tiler spawned termHwnd=${termHwnd}`); } catch (e) { tlog(`tiler spawn threw ${e}`); } }
 else if (tilePlan.enabled) { tlog(`tiler NOT spawned (termHwnd=${termHwnd})`); }
 
-const res = spawnSync(claudeArgv[0], claudeArgv.slice(1), { stdio: 'inherit' });
+const res = spawnSync(claudeArgv[0], claudeArgv.slice(1), { stdio: 'inherit', env: childEnv });
 
 // Re-assert the tab title on exit. Claude Code retitles the terminal while it runs and leaves it on
 // its own title when it quits. This OSC 2 restores <name@branch> on terminals that keep a child's

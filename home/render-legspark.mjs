@@ -12,8 +12,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { resolveSidecarPath } from './sidecar-path.mjs';
+import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
 import { psRound, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 
 const argv = process.argv.slice(2);
@@ -28,12 +27,12 @@ const NDASH = '–';
 const W = 100; // fixed chart width — CC exposes no terminal width to scripts; buckets if more legs
 const R = 3;   // rows of vertical resolution → R*8 = 24 height levels
 
-const claudeHome = process.env.USERPROFILE || homedir();
+const configHome = resolveConfigHome();
 function done(s) { process.stdout.write(s); process.exit(0); }
 
 // --frozen: read the run-local snapshot handover-facts.mjs froze for THIS /handover-check, so all three
 // renderers see the SAME session even if a concurrent same-project session clobbers the live sidecar.
-const frozen = join(claudeHome, '.claude', 'handover-frozen.json');
+const frozen = join(configHome, 'handover-frozen.json');
 const sidecar = (Frozen && existsSync(frozen)) ? frozen : resolveSidecarPath(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 if (!sidecar || !existsSync(sidecar)) done('(no status-line snapshot yet — press Enter on an empty prompt to render one)');
 let snap;
@@ -170,7 +169,7 @@ if (n > W) hdr += `  ${MID}  ${n} legs → ${W} cols`;
 const chart = stamp + '\n' + hdr + '\n' + outRows.join('\n');
 
 // --- durable full copy in case the inline tool output ever clips ---
-try { writeFileSync(join(claudeHome, '.claude', 'legspark.ansi'), chart, 'utf8'); } catch { /* best effort */ }
+try { writeFileSync(join(configHome, 'legspark.ansi'), chart, 'utf8'); } catch { /* best effort */ }
 
 process.stdout.write(chart);
 process.exit(0);

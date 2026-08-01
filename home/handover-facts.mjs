@@ -15,8 +15,7 @@
 
 import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { resolveSidecarPath } from './sidecar-path.mjs';
+import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
 import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, M_CACHE_READ } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 
@@ -26,7 +25,7 @@ const TIMES = '×';  // ×
 const NDASH = '–';  // –
 const WARN = '⚠';   // ⚠
 
-const claudeHome = process.env.USERPROFILE || homedir();
+const configHome = resolveConfigHome();
 const lines = [];
 const emit = (s) => lines.push(s);
 function flushAndExit() { process.stdout.write(lines.join('\n')); process.exit(0); }
@@ -55,7 +54,7 @@ if (mySid && s.sessionId && String(mySid) !== String(s.sessionId)) {
 // Freeze the EXACT snapshot this run used → render-legspark/render-spikes (--frozen) read THIS file, so all
 // three renderers see the SAME session even if a concurrent same-project session clobbers the live sidecar
 // between reads. Best-effort; a freeze failure just falls them back to the live sidecar.
-try { copyFileSync(sidecar, join(claudeHome, '.claude', 'handover-frozen.json')); } catch { /* best effort */ }
+try { copyFileSync(sidecar, join(configHome, 'handover-frozen.json')); } catch { /* best effort */ }
 
 // Cold-tax facts come from the SAME single scan render-spikes uses (getScannedLegs + testColdLeg), NOT the
 // persisted incremental nColdLegs — that accumulator lags a full re-scan after any mid-session cold-logic

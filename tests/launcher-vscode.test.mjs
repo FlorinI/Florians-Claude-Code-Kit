@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -30,22 +30,39 @@ function makeShims({ withCode }) {
 
 // ccVscode: a string sets CC_VSCODE to that value; null leaves it UNSET in the child env.
 // ccVscodeTile: same convention for CC_VSCODE_TILE (the default-on tiling switch).
-function runLauncher({ workspaces = [], withCode = true, ccVscode = '1', ccVscodeTile = null }) {
+// args:     extra argv handed to the launcher (the launcher-owned flags, a user prompt, …).
+// identity: written to <proj>/.claude/session-identity.json so name/color are deterministic.
+// dryRun:   false runs WITHOUT the dry-run seam — for the --print-title / --print-tabcolor
+//           early exits, which return raw text (not JSON) and must fire before any side effect.
+// wtSession: sets WT_SESSION so the Windows-Terminal tab-color escape is non-empty.
+// USERPROFILE/HOME are pinned to the throwaway project dir so `~` expansion is deterministic and
+// the launcher can never resolve a path in the real home.
+function runLauncher({
+  workspaces = [], withCode = true, ccVscode = '1', ccVscodeTile = null,
+  args = [], identity = null, dryRun = true, wtSession = null,
+}) {
   const proj = mkdtempSync(join(tmpdir(), 'ccl-proj-'));
   const shims = makeShims({ withCode });
   try {
     for (const w of workspaces) writeFileSync(join(proj, w), '{}', 'utf8');
+    if (identity) {
+      mkdirSync(join(proj, '.claude'), { recursive: true });
+      writeFileSync(join(proj, '.claude', 'session-identity.json'), JSON.stringify(identity), 'utf8');
+    }
     const env = {
       PATH: shims,
       PATHEXT: '.COM;.EXE;.BAT;.CMD',
-      CC_LAUNCH_DRYRUN: '1',
+      USERPROFILE: proj, HOME: proj,
+      ...(dryRun ? { CC_LAUNCH_DRYRUN: '1' } : {}),
+      ...(wtSession === null ? {} : { WT_SESSION: wtSession }),
       ...(ccVscode === null ? {} : { CC_VSCODE: ccVscode }),
       ...(ccVscodeTile === null ? {} : { CC_VSCODE_TILE: ccVscodeTile }),
       ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
       TEMP: process.env.TEMP, TMP: process.env.TMP,
     };
-    const res = spawnSync(process.execPath, [launcher], { cwd: proj, env, encoding: 'utf8' });
-    return { res, plan: res.stdout.trim() ? JSON.parse(res.stdout.trim().split('\n').pop()) : null };
+    const res = spawnSync(process.execPath, [launcher, ...args], { cwd: proj, env, encoding: 'utf8' });
+    const plan = (dryRun && res.stdout.trim()) ? JSON.parse(res.stdout.trim().split('\n').pop()) : null;
+    return { res, plan, proj };
   } finally {
     rmSync(proj, { recursive: true, force: true });
     rmSync(shims, { recursive: true, force: true });
@@ -178,4 +195,175 @@ test('T7 — the launcher re-asserts the tab title after Claude Code exits (name
   const spawn = src.indexOf('spawnSync(claudeArgv[0]');
   const lastOsc = src.lastIndexOf('ESC}]2;${title}');
   assert.ok(spawn > 0 && lastOsc > spawn, 'an OSC 2 title write follows the claude spawnSync');
+});
+
+// --- launcher-owned flags (rows L1–L13) -----------------------------------------------------------
+// The four self-consumed flags — --config-dir / --title-prefix / --title-suffix / --no-vscode —
+// asserted through the same dry-run seam. Two properties carry the whole feature and each has a
+// dedicated row: a self-consumed flag NEVER reaches the claude argv (L3/L5/L10), and the marker
+// reaches EVERY title consumer from one computation (L2). Values here are deliberately generic —
+// this file ships in the public kit, so it carries no caller's naming policy.
+
+const IDENT = { name: 'projx', color: 'purple' };
+
+// The unmarked title for a given fixture, taken from the launcher itself: the repo/branch part is
+// environment-dependent, so every marker assertion is expressed relative to this baseline rather
+// than against a hardcoded string that would be wrong on someone else's checkout.
+function coreTitle(extra = {}) {
+  return runLauncher({ workspaces: [], identity: IDENT, ...extra }).plan.launch.title;
+}
+
+test('L1 — no launcher flags: the launch block is inert and the child env gains nothing', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT });
+  assert.equal(res.status, 0);
+  assert.equal(plan.launch.configDir, null);
+  assert.equal(plan.launch.titlePrefix, '');
+  assert.equal(plan.launch.titleSuffix, '');
+  assert.equal(plan.launch.noVsCode, false);
+  assert.equal(plan.claude.envDelta, null, 'no env delta when --config-dir is absent');
+  assert.equal(plan.launch.title, plan.tile.titleMatch);
+});
+
+test('L2 — prefix/suffix compose ONE title that reaches --name and the tiler alike', () => {
+  const core = coreTitle();
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P', '--title-suffix', '·s'] });
+  const marked = `P ${core} ·s`;
+  assert.equal(plan.launch.title, marked);
+  assert.equal(plan.launch.titlePrefix, 'P');
+  assert.equal(plan.launch.titleSuffix, '·s');
+  const nameAt = plan.claude.argv.indexOf('--name');
+  assert.ok(nameAt > 0, '--name is passed to claude');
+  assert.equal(plan.claude.argv[nameAt + 1], marked, 'the MARKED title is what claude is named');
+  assert.equal(plan.tile.titleMatch, marked, 'the tiler matches the marked window title');
+});
+
+test('L3 — --config-dir sets the child env delta and never leaks into the claude argv', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccl-cfg-'));
+  try {
+    const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', dir] });
+    assert.equal(plan.launch.configDir, resolve(dir));
+    assert.deepEqual(plan.claude.envDelta, { CLAUDE_CONFIG_DIR: resolve(dir) }, 'delta only — never the whole env');
+    assert.ok(!plan.claude.argv.includes('--config-dir'), 'flag stripped from the claude argv');
+    assert.ok(!plan.claude.argv.includes(dir), 'its VALUE is stripped too (never a stray positional)');
+    assert.ok(!plan.claude.argv.includes(resolve(dir)), 'nor the resolved form');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('L4 — --config-dir expands a leading ~ and resolves to an absolute path', () => {
+  for (const spec of ['~/alt', '~\\alt']) {
+    const { plan, proj } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', spec] });
+    assert.equal(plan.launch.configDir, resolve(join(proj, 'alt')), `${spec} expands against the home dir`);
+  }
+});
+
+test('L5 — all four flags at once: every effect holds simultaneously', () => {
+  const core = coreTitle();
+  const dir = mkdtempSync(join(tmpdir(), 'ccl-cfg-'));
+  try {
+    const { plan } = runLauncher({
+      workspaces: ['proj.code-workspace'], identity: IDENT,
+      args: ['--config-dir', dir, '--title-prefix', 'P', '--title-suffix', '·s', '--no-vscode'],
+    });
+    assert.equal(plan.launch.title, `P ${core} ·s`);
+    assert.deepEqual(plan.claude.envDelta, { CLAUDE_CONFIG_DIR: resolve(dir) });
+    assert.equal(plan.launch.noVsCode, true);
+    assert.equal(plan.vscode.action, 'off');
+    assert.equal(plan.tile.enabled, false);
+    for (const f of ['--config-dir', '--title-prefix', '--title-suffix', '--no-vscode', 'P', '·s', dir]) {
+      assert.ok(!plan.claude.argv.includes(f), `${f} never reaches claude`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('L6 — --print-title prints the MARKED title and exits before any side effect', () => {
+  const core = coreTitle();
+  const { res } = runLauncher({
+    workspaces: [], identity: IDENT, dryRun: false, wtSession: 'x',
+    args: ['--title-prefix', 'P', '--title-suffix', '·s', '--print-title'],
+  });
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, `P ${core} ·s`, 'exactly the marked title, nothing else');
+  assert.ok(!res.stdout.includes('\x1b'), 'the early exit precedes every OSC write');
+  assert.equal(res.stderr, '');
+});
+
+test('L7 — --print-tabcolor is byte-identical with and without the new flags', () => {
+  const bare = runLauncher({ workspaces: [], identity: IDENT, dryRun: false, wtSession: 'x', args: ['--print-tabcolor'] });
+  const flagged = runLauncher({
+    workspaces: [], identity: IDENT, dryRun: false, wtSession: 'x',
+    args: ['--config-dir', tmpdir(), '--title-prefix', 'P', '--title-suffix', '·s', '--no-vscode', '--print-tabcolor'],
+  });
+  assert.ok(bare.res.stdout.includes('\x1b]4;264;'), 'the WT tab-color escape is actually being produced');
+  assert.equal(flagged.res.stdout, bare.res.stdout, 'the tab-color seam is untouched by the new flags');
+});
+
+test('L8 — a user prompt is still detected THROUGH the launcher flags (no /color clobber)', () => {
+  const dir = tmpdir();
+  const { plan } = runLauncher({
+    workspaces: [], identity: IDENT,
+    args: ['--config-dir', dir, '--title-prefix', 'P', 'do X'],
+  });
+  assert.ok(plan.claude.argv.includes('do X'), 'the real prompt is forwarded');
+  assert.ok(!plan.claude.argv.some((a) => String(a).startsWith('/color')), 'no /color injected over a real prompt');
+});
+
+test('L9 — the same flags with NO prompt still self-color', () => {
+  const { plan } = runLauncher({
+    workspaces: [], identity: IDENT,
+    args: ['--config-dir', tmpdir(), '--title-prefix', 'P', '--title-suffix', '·s', '--no-vscode'],
+  });
+  assert.ok(plan.claude.argv.includes('/color purple'), 'the launcher flags are invisible to the prompt scan');
+});
+
+test('L10 — malformed input is inert: a dangling value-flag is stripped, never fatal', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir'] });
+  assert.equal(res.status, 0);
+  assert.equal(plan.launch.configDir, null);
+  assert.equal(plan.claude.envDelta, null);
+  assert.ok(!plan.claude.argv.includes('--config-dir'), 'still stripped from the claude argv');
+  assert.ok(plan.claude.argv.length > 0, 'claude still launches');
+});
+
+test('L11 — a non-ASCII title prefix survives the round-trip unchanged', () => {
+  const core = coreTitle();
+  const glyph = '🧪';
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', glyph] });
+  assert.equal(plan.launch.titlePrefix, glyph);
+  assert.equal(plan.launch.title, `${glyph} ${core}`);
+  assert.equal(plan.claude.argv[plan.claude.argv.indexOf('--name') + 1], `${glyph} ${core}`);
+});
+
+test('L12 — --no-vscode overrides CC_VSCODE=1: no co-launch, no tiling, claude unaffected', () => {
+  const { res, plan } = runLauncher({
+    workspaces: ['proj.code-workspace'], identity: IDENT, ccVscode: '1', args: ['--no-vscode'],
+  });
+  assert.equal(res.status, 0);
+  assert.equal(plan.launch.noVsCode, true);
+  assert.equal(plan.vscode.action, 'off');
+  assert.equal(plan.vscode.target, null);
+  assert.equal(plan.tile.enabled, false);
+  assert.equal(plan.tile.reason, 'vscode-off', 'gates off through the EXISTING reason, no new taxonomy');
+  assert.ok(plan.claude.argv.length > 0, 'claude still launches');
+});
+
+test('L13 — the tile reason taxonomy is unchanged by the new flags', () => {
+  const KNOWN = new Set(['on', 'vscode-off', 'not-win32', 'vscode-no-cli', 'disabled-flag', 'off']);
+  const reasons = [
+    runLauncher({ workspaces: [], identity: IDENT, args: ['--no-vscode'] }).plan.tile.reason,
+    runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', tmpdir()] }).plan.tile.reason,
+    runLauncher({ workspaces: [], identity: IDENT, withCode: false }).plan.tile.reason,
+    runLauncher({ workspaces: [], identity: IDENT, ccVscodeTile: 'off' }).plan.tile.reason,
+  ];
+  for (const r of reasons) assert.ok(KNOWN.has(r), `unknown tile reason introduced: ${r}`);
+  // …and the source itself grew no new reason literal. Only the RESULT positions of the ternary
+  // chain are reasons (`? 'x'` / `: 'x'`); a quoted operand like `!== 'win32'` is a condition.
+  const src = readFileSync(launcher, 'utf8');
+  const block = src.slice(src.indexOf('const tileReason'), src.indexOf('const projectMatch'));
+  const produced = [...block.matchAll(/[?:]\s*'([a-z0-9-]+)'/g)].map((m) => m[1]);
+  assert.ok(produced.length >= 5, 'the reason chain was found and parsed');
+  for (const lit of produced) assert.ok(KNOWN.has(lit), `new reason literal in source: '${lit}'`);
 });

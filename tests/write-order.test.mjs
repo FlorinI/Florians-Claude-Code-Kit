@@ -46,7 +46,9 @@ test('F3 — sidecar gitRepo reuses the previous snapshot value, not a fresh git
     writeFileSync(sidecar, JSON.stringify({ gitRepo: 'seeded/repo@main' }), 'utf8');
     execFileSync(process.execPath, [engine], {
       input: stdinFor(cwd),
-      env: { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) },
+      // CLAUDE_CONFIG_DIR is pinned POSITIVELY (never deleted) so the child's user-level state stays
+      // inside the temp home even when this suite is launched from a second-subscription session.
+      env: { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) },
       maxBuffer: 64 * 1024 * 1024,
     });
     const snap = JSON.parse(readFileSync(sidecar, 'utf8'));
@@ -72,7 +74,7 @@ test('F3 — instrumented order: git shim sees the sidecar already on disk', { s
       env: {
         ...process.env,
         PATH: shimDir + delimiter + (process.env.PATH || ''),
-        USERPROFILE: home, HOME: home, CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW),
+        USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW),
         SL_TEST_SIDECAR: sidecar, SL_TEST_MARKER: marker,
       },
       maxBuffer: 64 * 1024 * 1024,
@@ -106,7 +108,7 @@ test('gitRepo — render 1 in a real repo SEEDS the live slug; a branch switch p
     git(cwd, ['remote', 'add', 'origin', 'https://example.com/acme/widgets.git']);
     git(cwd, ['commit', '--allow-empty', '-m', 'x']);
     const sidecar = join(cwd, '.claude', 'statusline-last.json');
-    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
+    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
     const render = () => {
       execFileSync(process.execPath, [engine], { input: stdinFor(cwd), env, maxBuffer: 64 * 1024 * 1024 });
       return JSON.parse(readFileSync(sidecar, 'utf8'));

@@ -199,10 +199,21 @@ function escapeRegExp(s) {
 const LAUNCHER_BEGIN = `# >>> ${KIT_NAME} (cc launcher) >>>`;
 const LAUNCHER_END = `# <<< ${KIT_NAME} (cc launcher) <<<`;
 
-function launcherProfile(claudeHome, shellHome) {
+// `platform` defaults to process.platform and is the ONLY platform read in here — the win32 branch,
+// the bash/zsh rc choice and the darwin default all consult it, so an override produces a wholly
+// consistent POSIX (or Windows) form rather than a half-and-half one. That makes the generated
+// non-native line assertable from a single machine, which is the point of the seam.
+function launcherProfile(claudeHome, shellHome, platform = process.platform) {
   const home = shellHome || homedir();
   const fwd = toForwardSlash(claudeHome);
-  if (process.platform === 'win32') {
+  // Fixed args a variant always passes (e.g. a different config home). Each is emitted individually
+  // double-quoted with the shell's own escape for an embedded quote; nothing else is escaped. With no
+  // fixed args the rendered fragment is EMPTY, so the primary function stays byte-identical to the
+  // pre-variants form on both platforms.
+  const fixed = (args, esc) => (Array.isArray(args) && args.length)
+    ? ' ' + args.map((a) => `"${String(a).split('"').join(esc)}"`).join(' ')
+    : '';
+  if (platform === 'win32') {
     return {
       path: join(home, 'Documents', 'PowerShell', 'profile.ps1'),  // pwsh 7 CurrentUserAllHosts
       // After the launch returns, pwsh re-owns BOTH the tab title and its color: Windows Terminal
@@ -211,7 +222,13 @@ function launcherProfile(claudeHome, shellHome) {
       // CC. `--print-title` echoes the resolved title; `--print-tabcolor` echoes the OSC tab-color
       // escape (empty on non-WT); the launch itself paints both while CC runs. Wrapped in try/catch so a
       // headless/no-console host can't error the prompt.
-      fnLine: (cmd, script) => `function ${cmd} { node "${fwd}/${script}" @args; try { $t = (node "${fwd}/${script}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${script}" --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`,
+      // The fixed args go to ALL THREE invocations. They must: `--print-title` resolves the title from
+      // the same inputs as the launch, so a probe missing them would re-title the tab with an UNMARKED
+      // string the instant CC exits — the marker would appear to work and then silently vanish.
+      fnLine: (cmd, script, args) => {
+        const fx = fixed(args, '`"');
+        return `function ${cmd} { node "${fwd}/${script}"${fx} @args; try { $t = (node "${fwd}/${script}"${fx} --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${script}"${fx} --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`;
+      },
     };
   }
   const sh = (process.env.SHELL || '').toLowerCase();
@@ -220,24 +237,36 @@ function launcherProfile(claudeHome, shellHome) {
   // ~/.bashrc — so target .bash_profile there; on Linux, GUI terminals start non-login shells that
   // read ~/.bashrc.
   const rc = sh.includes('zsh') ? '.zshrc'
-    : sh.includes('bash') ? (process.platform === 'darwin' ? '.bash_profile' : '.bashrc')
-      : (process.platform === 'darwin' ? '.zshrc' : '.bashrc');
+    : sh.includes('bash') ? (platform === 'darwin' ? '.bash_profile' : '.bashrc')
+      : (platform === 'darwin' ? '.zshrc' : '.bashrc');
   return {
     path: join(home, rc),
-    fnLine: (cmd, script) => `${cmd}() { node "${fwd}/${script}" "$@"; }`,
+    fnLine: (cmd, script, args) => `${cmd}() { node "${fwd}/${script}"${fixed(args, '\\"')} "$@"; }`,
   };
 }
 
+// opts.variants: [{ command, args: [...] }] — extra launcher functions with fixed leading args,
+// emitted inside the SAME marker-bounded block as the primary, one per line. Content-free by design:
+// the caller supplies the names and the argument values, this only knows how to render them. With no
+// variants the block is byte-identical to the pre-variants form.
+// opts.platform: override the platform the profile path + function form are derived for (D9) —
+// defaults to process.platform; its only misuse is deliberately generating a foreign form.
 export function setupLauncher(opts = {}) {
   const log = opts.log || ((m) => console.log(m));
   const claudeHome = resolve(opts.claudeHome || join(homedir(), '.claude'));
   const command = opts.command || 'cc';
   const script = opts.script || 'claude-launch.mjs';
-  const { path: profilePath, fnLine } = launcherProfile(claudeHome, opts.shellHome);
+  const variants = Array.isArray(opts.variants) ? opts.variants : [];
+  const { path: profilePath, fnLine } = launcherProfile(claudeHome, opts.shellHome, opts.platform);
   const existed = existsSync(profilePath);
   const existing = existed ? readFileSync(profilePath, 'utf8') : '';
   const nl = existed ? detectNewline(existing) : '\n';
-  const block = `${LAUNCHER_BEGIN}\n${fnLine(command, script)}\n${LAUNCHER_END}`.split('\n').join(nl);
+  const lines = [fnLine(command, script, [])];
+  for (const v of variants) {
+    if (!v || !v.command) continue;
+    lines.push(fnLine(v.command, script, v.args || []));
+  }
+  const block = `${LAUNCHER_BEGIN}\n${lines.join('\n')}\n${LAUNCHER_END}`.split('\n').join(nl);
   const re = new RegExp(`${escapeRegExp(LAUNCHER_BEGIN)}[\\s\\S]*?${escapeRegExp(LAUNCHER_END)}`);
   let next;
   if (re.test(existing)) next = existing.replace(re, () => block);
@@ -253,7 +282,9 @@ export function setupLauncher(opts = {}) {
 export function removeLauncher(opts = {}) {
   const log = opts.log || ((m) => console.log(m));
   const claudeHome = resolve(opts.claudeHome || join(homedir(), '.claude'));
-  const { path: profilePath } = launcherProfile(claudeHome, opts.shellHome);
+  // opts.platform mirrors setupLauncher's override so a block written for a foreign platform can be
+  // removed again (the block is marker-bounded, so this removes the primary AND every variant).
+  const { path: profilePath } = launcherProfile(claudeHome, opts.shellHome, opts.platform);
   if (!existsSync(profilePath)) return;
   const text = readFileSync(profilePath, 'utf8');
   const re = new RegExp(`\\n*${escapeRegExp(LAUNCHER_BEGIN)}[\\s\\S]*?${escapeRegExp(LAUNCHER_END)}\\n*`);
@@ -397,7 +428,7 @@ export function runInstall(opts = {}) {
     if (plan.settingsPlan.hook) log(`  settings  ensure SessionStart hook (${basename(plan.settingsPlan.hook.hook.args?.[0] || 'hook')})`);
     if (plan.applyClaudeMd) log(`  CLAUDE.md  ${plan.claudeMdExisted ? (hasFcckBlock(plan.claudeMdText) ? 'update block' : 'append block') : 'create with block'}`);
     if (plan.launcherConfig) {
-      setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, shellHome: plan.shellHome, dryRun: true, log });
+      setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, variants: plan.launcherConfig.variants, shellHome: plan.shellHome, dryRun: true, log });
     }
     if (plan.conflicts.length) {
       log('  (--force) overwriting:');
@@ -477,7 +508,9 @@ export function runInstall(opts = {}) {
   // 3b. Launcher shell function (cross-platform). Skipped when applyLauncher is false / no config.
   let launcherProv = plan.provenance?.launcher || null;
   if (plan.launcherConfig) {
-    const r = setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, shellHome: plan.shellHome, log });
+    // `variants` is optional in the manifest (absent from manifest.public.json) — a kit user with two
+    // subscriptions can declare extra launcher functions declaratively instead of importing the module.
+    const r = setupLauncher({ claudeHome: plan.claudeHome, command: plan.launcherConfig.command, script: plan.launcherConfig.script, variants: plan.launcherConfig.variants, shellHome: plan.shellHome, log });
     launcherProv = { profile: r.profile, command: r.command };
   }
 

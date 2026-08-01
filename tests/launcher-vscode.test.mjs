@@ -252,9 +252,15 @@ test('L3 — --config-dir sets the child env delta and never leaks into the clau
 });
 
 test('L4 — --config-dir expands a leading ~ and resolves to an absolute path', () => {
-  for (const spec of ['~/alt', '~\\alt']) {
+  // Both separators expand the tilde on every platform, but they do NOT converge on the same path.
+  // Only Windows treats `\` as a separator; on POSIX it is an ordinary filename character, so `~\alt`
+  // legitimately means a file called `\alt` under the home dir. Asserting `~\alt === ~/alt` everywhere
+  // is a Windows-centric reading, so the expectation is computed per platform rather than skipped —
+  // the tilde expansion itself stays covered on all three CI legs.
+  const win = process.platform === 'win32';
+  for (const [spec, leaf] of [['~/alt', 'alt'], ['~\\alt', win ? 'alt' : '\\alt']]) {
     const { plan, proj } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', spec] });
-    assert.equal(plan.launch.configDir, resolve(join(proj, 'alt')), `${spec} expands against the home dir`);
+    assert.equal(plan.launch.configDir, resolve(join(proj, leaf)), `${spec} expands against the home dir`);
   }
 });
 

@@ -7,10 +7,11 @@
 // installer adds to your shell profile ($PROFILE on Windows, ~/.zshrc or ~/.bashrc on macOS/Linux).
 //
 // Reads <cwd>/.claude/session-identity.json:
-//   name   -> session name/title via `--name <name>@<branch>`, ALWAYS. Falls back through three tiers:
-//             identity name -> repo name (origin slug, else git top-level folder) -> cwd folder leaf.
-//             --name is a flag, so it sets the prompt box / /resume picker / terminal title without
-//             ever colliding with a user prompt.
+//   name   -> session name/title via `--name <name>@<branch>` on a FRESH launch; omitted when the
+//             user's argv is resume-shaped, so Claude Code restores that session's own stored name.
+//             Falls back through three tiers: identity name -> repo name (origin slug, else git
+//             top-level folder) -> cwd folder leaf. --name is a flag, so it sets the prompt box /
+//             /resume picker / terminal title without ever colliding with a user prompt.
 //   color  -> the terminal tab background (best-effort, per terminal: Windows Terminal & iTerm2) AND
 //             the Claude session color via a "/color <color>" initial prompt — but the initial-prompt
 //             slot holds one thing, so /color is injected only when the user supplied no prompt.
@@ -155,10 +156,20 @@ if (rgb) {
 }
 
 // --- build the claude command line ------------------------------------------------------------
+// Flags that mean "continue an EXISTING session". Claude Code persists a session's display name and
+// restores it on resume when `--name` is absent — but passing `--name` overwrites the restored name,
+// destroying any `: <topic>` suffix the user had set via /rename. So on a resume-shaped argv the
+// launcher stays out of the way and pushes no `--name`. Matched on the flag NAME, so `--resume <id>`
+// and `--resume=<id>` both count. Deliberately excluded: `--session-id` (names a NEW session),
+// `--cloud` (a bare description creates a new session), `--fork-session` (never appears without
+// `--resume`/`--continue`, so it is covered transitively).
+const RESUME_FLAGS = new Set(['-r', '--resume', '-c', '--continue', '--from-pr', '--teleport']);
+const isResume = flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')[0]));
+
 const cli = [];
 if (idModel) cli.push('--model', idModel);
 if (idEffort) cli.push('--effort', idEffort);
-if (title) cli.push('--name', title);            // always set the session name/title (a flag)
+if (title && !isResume) cli.push('--name', title);   // fresh launch only — a resume keeps its own name
 const userArgs = flags.rest;                     // the launcher's own flags never reach claude
 cli.push(...userArgs);
 
@@ -173,17 +184,34 @@ const VALUE_FLAGS = new Set([
   '--permission-mode', '--plugin-dir', '--plugin-url', '--remote-control-session-name-prefix',
   '--session-id', '--setting-sources', '--settings', '--system-prompt', '--tools',
 ]);
+// Flags whose value is OPTIONAL (`--flag [value]` in `claude --help`, Claude Code 2.1.233). Commander
+// gives such a flag the next argv token as its value iff one follows and it does not start with '-'.
+// So a bare `cc --resume` (= "open the picker") must NOT get "/color …" appended — claude would read
+// it as the session id. When the last user arg is one of these written bare, the picker is the
+// user's prompt and nothing is injected; `cc -r <id>` still gets /color as the prompt.
+const OPTIONAL_VALUE_FLAGS = new Set([
+  '--cloud', '-d', '--debug', '--from-pr', '--prompt-suggestions', '--remote-control',
+  '-r', '--resume', '--teleport', '-w', '--worktree',
+]);
 let userHasPrompt = false;
 for (let i = 0; i < userArgs.length; i++) {
   const a = userArgs[i];
   if (a.startsWith('-')) {
     const name = a.split('=')[0];
-    if (VALUE_FLAGS.has(name) && !a.includes('=')) i++;   // consume the flag's value
+    const bare = !a.includes('=');
+    if (VALUE_FLAGS.has(name) && bare) i++;               // consume the flag's value
+    else if (OPTIONAL_VALUE_FLAGS.has(name) && bare) {
+      const next = userArgs[i + 1];
+      if (next !== undefined && !next.startsWith('-')) i++;  // commander: next non-flag token = value
+    }
     continue;
   }
   userHasPrompt = true; break;                            // a bare positional = the user's prompt
 }
-if (!userHasPrompt && idColor) cli.push(`/color ${idColor}`);
+const lastArg = userArgs[userArgs.length - 1];
+const lastIsBareOptional = lastArg !== undefined && lastArg.startsWith('-')
+  && !lastArg.includes('=') && OPTIONAL_VALUE_FLAGS.has(lastArg);
+if (!userHasPrompt && !lastIsBareOptional && idColor) cli.push(`/color ${idColor}`);
 
 // --- resolve + launch claude ------------------------------------------------------------------
 // CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are
@@ -215,9 +243,16 @@ function shimVector(exe, args) {
 }
 const claudeArgv = shimVector(claudePath, cli);
 
-// `--config-dir` scopes to the CLAUDE CHILD only — not the VS Code co-launch, not the tiler, and not
-// this launcher's own identity/git reads (those are per-project, not per-config-home).
-const childEnvDelta = flags.configDir ? { CLAUDE_CONFIG_DIR: flags.configDir } : null;
+// The env delta scopes to the CLAUDE CHILD only — not the VS Code co-launch, not the tiler, and not
+// this launcher's own identity/git reads (those are per-project, not per-config-home). Three inputs,
+// each independent: `--config-dir` → CLAUDE_CONFIG_DIR; the title markers → CC_TITLE_PREFIX /
+// CC_TITLE_SUFFIX, exported so in-session title composition (the /identity rename lines) can
+// reproduce the full marked title. null when none apply — the delta is never the inherited env.
+const envDelta = {};
+if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
+if (flags.titlePrefix) envDelta.CC_TITLE_PREFIX = flags.titlePrefix;
+if (flags.titleSuffix) envDelta.CC_TITLE_SUFFIX = flags.titleSuffix;
+const childEnvDelta = Object.keys(envDelta).length ? envDelta : null;
 const childEnv = childEnvDelta ? { ...process.env, ...childEnvDelta } : process.env;
 
 // --- VS Code co-launch (env-gated; default off) -------------------------------------------------

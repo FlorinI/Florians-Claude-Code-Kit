@@ -87,11 +87,16 @@ test('S2 — handover-facts.mjs: corrected-direction prose in, pre-fit caveat an
   }
 });
 
+// The harvest is private-repo tooling and does not ship in the public kit, so its half is guarded
+// the way D4 guards the private docs below. The home/ half asserts in every checkout — those files
+// are the kit's own surface, and a new import there is exactly what this row exists to catch.
 test('S3 — import surface: the harvest imports only node: built-ins + ../../home/leg-driver.mjs; home/ imports nothing new', () => {
-  const hv = importSpecifiers(src('tools/calibration/harvest-froz5.mjs'));
-  assert.ok(hv.length >= 2, `harvest imports found: ${hv}`);
-  for (const spec of hv) {
-    assert.ok(spec.startsWith('node:') || spec === '../../home/leg-driver.mjs', `harvest-froz5.mjs imports ${spec}`);
+  if (existsSync(join(repo, 'tools', 'calibration', 'harvest-froz5.mjs'))) {
+    const hv = importSpecifiers(src('tools/calibration/harvest-froz5.mjs'));
+    assert.ok(hv.length >= 2, `harvest imports found: ${hv}`);
+    for (const spec of hv) {
+      assert.ok(spec.startsWith('node:') || spec === '../../home/leg-driver.mjs', `harvest-froz5.mjs imports ${spec}`);
+    }
   }
   for (const f of ['home/statusline.mjs', 'home/leg-driver.mjs', 'home/handover-facts.mjs']) {
     for (const spec of importSpecifiers(src(f))) {

@@ -100,8 +100,10 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
     CLAUDE_PROJECT_DIR: tempCwd,
     TZ: 'UTC',
     CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
-    ...(extraEnv || {}),
   };
+  // Inherited shell value must not flip goldens; a fixture that needs it sets it via meta.env.
+  delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+  Object.assign(env, extraEnv || {});
 
   let stdout = execFileSync(process.execPath, [nodeScript],
     { input: JSON.stringify(stdin), env, maxBuffer: 64 * 1024 * 1024 });

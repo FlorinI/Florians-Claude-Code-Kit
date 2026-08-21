@@ -3,3 +3,7 @@ top 3 cost spikes  ·  of 6 legs  ·  session-$ basis  ·  leg 1 = oldest
    Leg 1  ·  $6.59  ·  generated ~100k output
    Leg 2  ·  $6.59  ·  generated ~100k output
    Leg 3  ·  $6.59  ·  generated ~100k output
+
+top 2 agents  ·  of 2  ·  $0.48 (1%)  ·  whole-agent totals (agents never appear in the leg list above)
+   "2"  ·  $0.31  ·  1.3x med  ·  1 legs  ·  peak leg $0.31  ·  mostly re-reading its context (1 legs over ~175k)
+   "1"  ·  $0.18  ·  0.7x med  ·  1 legs  ·  peak leg $0.18  ·  mostly re-reading its context (1 legs over ~79k)

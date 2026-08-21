@@ -1,0 +1,5 @@
+from session today-st · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 13 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.50  ·  generated ~20k output
+   Leg 2  ·  $0.50  ·  generated ~20k output
+   Leg 3  ·  $0.50  ·  generated ~20k output

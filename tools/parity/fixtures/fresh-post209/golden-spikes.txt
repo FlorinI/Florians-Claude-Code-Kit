@@ -1,0 +1,5 @@
+from session fresh-po · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 8 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.58  ·  opened cold ~57k (whole context written, no cached prefix)
+   Leg 4  ·  $0.26  ·  loaded ~22k new context
+   Leg 8  ·  $0.10  ·  re-read deep context (~87k)

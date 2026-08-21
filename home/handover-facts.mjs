@@ -16,8 +16,9 @@
 import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, M_CACHE_READ } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, tierWeight, M_CACHE_READ, FRESH_N } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
+import { sanitizeSessionName } from './sanitize-name.mjs';
 
 const BT = '`';          // literal backtick → inline-code spans render light-blue in the assistant message
 const MID = '·';    // ·
@@ -43,11 +44,36 @@ if (!s) { process.stdout.write('MISSING'); process.exit(0); }
 // CLAUDE_CODE_SESSION_ID is set for spawned processes and the sidecar stores the full sessionId, so a
 // definite mismatch means "wrong session → abort". (Staleness stays a soft warning below.) When the env id
 // is absent we can't verify ownership — proceed unchanged.
+// Each side is named in words when a name is known (the id fragment stays in brackets so it still
+// cross-references `from session <hex>` stamps and tab titles), id fragment alone otherwise. The
+// snapshot's name was persisted in the sidecar at write time; THIS session's name comes from the
+// per-session stats file the status line writes (a session that never rendered one → id only).
+const sessionLabel = (name, sid8) => name ? `${name} [${sid8}]` : sid8;
+// Every name read from a file goes through the SHARED sanitizer (sanitize-name.mjs — the status line
+// runs the same function on write), so the single-line, control-free, capped invariant holds however
+// the file was written: by another tool, by a hand edit, or by a lagging machine's build.
+function readOwnSessionName(sid) {
+  const projRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  for (const dir of [join(projRoot, '.claude', 'statusline-stats'), join(configHome, 'statusline-stats')]) {
+    let name = null;
+    // try wraps ONE candidate's read+parse only: a corrupt or truncated project-local file must fall
+    // through to the config-home file, never abort the search.
+    try {
+      const p = join(dir, sid + '.json');
+      if (!existsSync(p)) continue;
+      name = sanitizeSessionName(JSON.parse(readFileSync(p, 'utf8'))?.sessionName);
+    } catch { continue; }
+    if (name) return name;
+  }
+  return null;
+}
 const mySid = process.env.CLAUDE_CODE_SESSION_ID;
 if (mySid && s.sessionId && String(mySid) !== String(s.sessionId)) {
   const snapSid8 = String(s.sessionId).slice(0, Math.min(8, String(s.sessionId).length));
   const mySid8 = String(mySid).slice(0, Math.min(8, String(mySid).length));
-  process.stdout.write(`FOREIGN\nthis session: ${mySid8}\nsnapshot belongs to: ${snapSid8} (${s.gitRepo ? s.gitRepo : '(no repo)'})`);
+  const myName = readOwnSessionName(String(mySid));
+  const snapName = sanitizeSessionName(s.sessionName);
+  process.stdout.write(`FOREIGN\nthis session: ${sessionLabel(myName, mySid8)}\nsnapshot belongs to: ${sessionLabel(snapName, snapSid8)} (${s.gitRepo ? s.gitRepo : '(no repo)'})`);
   process.exit(0);
 }
 
@@ -63,8 +89,12 @@ try { copyFileSync(sidecar, join(configHome, 'handover-frozen.json')); } catch {
 const scanLegs = getScannedLegs(s.transcriptPath);
 const coldLegs = scanLegs.filter(testColdLeg);
 const nColdScan = coldLegs.length;
+// Each leg's avoidable units are tier-weighted (tierWeight vs the main tier — the status line's own
+// per-leg weight), so a cold leg paid under another tier carries that tier's price, not the main's.
+const mainTierScan = ModelTier(s.model);
+const avoidableEff = (l) => (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTierScan);
 const coldWastedUsdScan = (nColdScan > 0 && s.base != null)
-  ? mathRoundD(coldLegs.reduce((a, l) => a + (l.cwUnits - l.cw * M_CACHE_READ), 0) * Number(s.base), 2)
+  ? mathRoundD(coldLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2)
   : 0;
 const lastColdLegsAgoScan = nColdScan > 0 ? scanLegs.length - Number(coldLegs[coldLegs.length - 1].idx) : null;
 
@@ -74,25 +104,32 @@ const lastColdLegsAgoScan = nColdScan > 0 ? scanLegs.length - Number(coldLegs[co
 // compacted, then bigRewrite; opening leg excluded), so a big cache write is billed into exactly one
 // of {cold tax, compacted, warm-rewrite tax} and the spikes label always agrees with the money.
 // Raw signal, no smoothing/caps. CC adopted cache-preserving mid-conversation injection, then
-// rolled it back on Sonnet 5 in 2.1.201 — so the tax is EXPECTED on Sonnet 5 and notable on
-// every other model (the per-model gloss at the emit site resolves which).
+// rolled it back on Sonnet 5 in 2.1.201 — so the tax is EXPECTED on Sonnet 5, informational on
+// older Sonnet generations (which never had the injection), and notable on every other model
+// (the per-model gloss at the emit site resolves which, keyed on the display string's generation).
 const warmRewriteLegs = scanLegs.filter(testWarmRewriteLeg);
 const nWarmScan = warmRewriteLegs.length;
 const warmTaxUsdScan = (nWarmScan > 0 && s.base != null)
-  ? mathRoundD(warmRewriteLegs.reduce((a, l) => a + (l.cwUnits - l.cw * M_CACHE_READ), 0) * Number(s.base), 2)
+  ? mathRoundD(warmRewriteLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2)
   : 0;
 
 // ---- TUNABLES (recalibrate here) ----
 const COST_FLOOR_FINE = 0.28;   // next-leg $ below this → cost verdict is FINE regardless of froz5
 const COST_FLOOR_STEEP = 0.45;  // between FINE and this, cost can read "climbing" at most — never "expensive"
-const FROZ5_CLIMB = 1.8;        // froz5 trend bands (aligned to the Froz5RGB gradient anchors)
-const FROZ5_STEEP = 2.8;
+// froz5 curve, anchors and residual thresholds are COPIES of tools/calibration/froz5-fit.json (the
+// fit artifact `tools/calibration/harvest-froz5.mjs` writes from the fleet's post-CC-2.1.209
+// cold-start sessions, era v5 — see docs/froz5-calibration-samples.md "Fit"). Re-run the harvest
+// and copy the numbers here + into statusline.mjs's Froz5RGB / froz5State together; a fit-sync
+// test pins the copies. FROZ5_CLIMB = anchors.yellow (= curve at 256k), FROZ5_STEEP = anchors.orange
+// (curve at 500k); FROZ5_CURVE_MINK = the first knot's k.
+const FROZ5_CLIMB = 2.3;        // froz5 trend bands (aligned to the Froz5RGB gradient anchors)
+const FROZ5_STEEP = 4.2;
 const WINDOW_1M = 700000;       // windowSize at/above this is the 1M regime (token-count leads quality)
 // froz5 CAUSE resolver — residual vs the empirical context→froz5 curve (1M regime).
-const FROZ5_CURVE = [{ k: 124, r: 0.7 }, { k: 252, r: 1.4 }, { k: 401, r: 2.3 }, { k: 555, r: 2.9 }, { k: 800, r: 3.9 }];
-const FROZ5_RESID_HEAVY = 0.70; // residual below → heavy/resumed start
-const FROZ5_RESID_LIGHT = 1.40; // residual above → light start
-const FROZ5_CURVE_MINK = 124;   // below this ctxK the curve extrapolates → confidence=low
+const FROZ5_CURVE = [{ k: 50, r: 1.38 }, { k: 150, r: 1.68 }, { k: 250, r: 2.27 }, { k: 350, r: 3.22 }, { k: 450, r: 3.72 }, { k: 550, r: 4.6 }, { k: 650, r: 5.72 }];
+const FROZ5_RESID_HEAVY = 0.70; // residual below → heavy start (p25 of the fit's residuals)
+const FROZ5_RESID_LIGHT = 1.30; // residual above → light start (p75)
+const FROZ5_CURVE_MINK = 50;   // below this ctxK the curve extrapolates → confidence=low
 
 // ---- number formatters (backticks ON — these fragments are FINAL; downstream must not reformat) ----
 function FmtUsd(v) { if (v == null) return `${BT}$?${BT}`; const d = Number(v); if (d >= 0 && d < 0.005) return `${BT}<$0.01${BT}`; return `${BT}$` + fmtN(d, 2) + BT; }
@@ -139,7 +176,11 @@ else ageF = `${psRound(ageSec / 86400)}d${String(psRound((ageSec % 86400) / 3600
 const stale = (ageSec != null && ageSec > 180);
 const sid8 = s.sessionId ? String(s.sessionId).slice(0, Math.min(8, String(s.sessionId).length)) : '????????';
 const repo = s.gitRepo ? s.gitRepo : '(no repo)';
-let identity = `**Reading** ${BT}${repo}${BT} ${MID} ${BT}${sid8}${BT} ${MID} ${s.model} ${MID} ${FmtK(s.ctxTokens)} ctx ${MID} rendered ${BT}${ageF}${BT} ago`;
+// Session name (sidecar `sessionName`, present only when the payload carried one) sits between the
+// repo and the id fragment; absent → the line is unchanged.
+const sidecarName = sanitizeSessionName(s.sessionName);
+const nameSpan = sidecarName ? `${BT}${sidecarName}${BT} ${MID} ` : '';
+let identity = `**Reading** ${BT}${repo}${BT} ${MID} ${nameSpan}${BT}${sid8}${BT} ${MID} ${s.model} ${MID} ${FmtK(s.ctxTokens)} ctx ${MID} rendered ${BT}${ageF}${BT} ago`;
 if (stale) identity += ` ${BT}${WARN} snapshot looks stale${BT}`;
 
 // ---- HEADLINE (cost+quality only; cold never touches it). FIXED cost rule: froz5 trend gated by $/leg. ----
@@ -162,22 +203,31 @@ const nextUsd = s.nextLegUsd != null ? Number(s.nextLegUsd) : null;
 // benign. A non-artifact (on-curve/unknown) ratio still drives the trend rule unchanged.
 const is1M = (Number(s.windowSize) >= WINDOW_1M);
 const ctxK = s.ctxTokens != null ? Number(s.ctxTokens) / 1000 : null;
-// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): the sidecar flags renders on CC ≥2.1.219,
-// where the curve (fit pre-Opus-5 prompt cut) reads high at every depth → confidence drops to low.
+// Warm-open marker (sidecar `froz5CalibStale`, behaviour-gated by the status line): the session's
+// leg 1 read a shared prefix from cache — the pre-CC-2.1.209 opener, or a sibling-warmed launch — so
+// its pristine floor is smaller than the post-2.1.209 cold-start sessions the curve was fit on and
+// the ratio can read a little ABOVE the curve → confidence drops to low, the cause stays indicative.
 const froz5Stale = s.froz5CalibStale === true;
+// Baseline provisional: fewer than FRESH_N warm legs found so far (window still open).
+const freshLegN = s.freshLegN != null ? Number(s.freshLegN) : null;
+const froz5Provisional = (freshLegN != null && freshLegN > 0 && freshLegN < FRESH_N);
 const coldInMedian = (lastColdLegsAgoScan != null && Number(lastColdLegsAgoScan) < 5);
 const sessionTier = ModelTier(s.model);
+// The fifth cause is GATED (bsl5.0.7.0): it preempts the other four only when the baseline is not at
+// full strength. The baseline is tier-free, so a mid-session tier switch no longer invalidates it —
+// both sides of the ratio are this session's own token-work at one price, and the depth curve still
+// applies. What the switch does invalidate is comparing per-leg DOLLARS across it, which is a caveat
+// (a COST_RUN_NOTE below), not a reason to disown the ratio. With a weak or absent anchor there is no
+// depth reading worth defending, so the switch still leads — as it did before.
+const froz5AnchorWeak = (freshLegN == null || freshLegN < FRESH_N);
 let froz5Cause = 'unknown', froz5Resid = null, froz5Exp = null, froz5Conf = 'low';
-if (s.modelSwitch) {
-  // Fifth cause, PREEMPTS the other four: a mid-session price-TIER switch invalidates the
-  // fresh-leg baseline — legs before and after the switch are priced on different models, so
-  // neither the ratio nor the depth curve is comparable across it.
+if (s.modelSwitch && froz5AnchorWeak) {
   froz5Cause = 'model-switched';
 } else if (froz5 != null && ctxK != null && is1M) {
   froz5Exp = Froz5Expected(ctxK);
   froz5Resid = froz5 / froz5Exp;
-  // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): stale curve forces confidence=low.
-  froz5Conf = (froz5Stale || ctxK < FROZ5_CURVE_MINK) ? 'low' : 'ok';
+  // Warm-open marker, an extrapolated curve, or a provisional baseline → confidence=low.
+  froz5Conf = (froz5Stale || ctxK < FROZ5_CURVE_MINK || froz5Provisional) ? 'low' : 'ok';
   froz5Cause = froz5Resid < FROZ5_RESID_HEAVY ? 'heavy-start'
     : (froz5Resid <= FROZ5_RESID_LIGHT ? 'on-curve'
       : (coldInMedian ? 'cold-pumped' : 'light-start'));
@@ -211,21 +261,23 @@ const costTotal = FmtUsd(s.costUsd) + ' total';
 let costChar;
 switch (froz5Cause) {
   case 'model-switched': costChar = 'the model switched mid-session (' + String(s.modelSwitch.from) + ' → ' + String(s.modelSwitch.to) + ' at leg ' + Math.trunc(Number(s.modelSwitch.atLeg)) + ') — legs before and after are priced on different models, so the ratio and the depth curve do not apply; the absolute next-leg $ is the number to trust'; break;
-  case 'heavy-start': costChar = 'started heavy — a big opening leg (often a resume that front-loads reads) lifts the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust'; break;
-  case 'light-start': costChar = 'started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number'; break;
+  case 'heavy-start': costChar = 'started heavy — the early warm legs were expensive (big outputs, or a doc-heavy opening that fell back to write-heavy legs), lifting the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust'; break;
+  case 'light-start': costChar = 'started cheap — the early warm legs were unusually light, so even modest context growth reads as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number'; break;
   case 'cold-pumped': costChar = 'a recent cold re-cache is pumping the next-leg forecast, so the multiple overstates steady-state escalation — it subsides as the cold leg ages out (see the cold line)'; break;
   case 'on-curve': costChar = 'tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio'; break;
   default:
     if (froz5 == null) costChar = 'no cost trend yet';
-    else if (froz5 < 1.0) costChar = 'sub-1 — caching is winning; the next leg is cheaper than a cold early leg';
+    else if (froz5 < 1.0) costChar = 'sub-1 — the next leg is cheaper than the session\'s early warm legs; context has not outgrown them';
     else if (froz5 < FROZ5_CLIMB) costChar = 'roughly breaking even with a fresh early leg';
     else if (froz5 < FROZ5_STEEP) costChar = 'climbing — context cost is outgrowing the early baseline';
     else costChar = 'steep — context cost is well above the early baseline';
 }
-// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): residual-derived causes get a stale-curve
-// caveat; model-switched (preempts the resolver) and the no-curve default branch stay untouched.
+// Warm-open marker: residual-derived causes get the corrected-direction caveat (the curve is fit on
+// post-2.1.209 cold-start sessions; a warm-open session's smaller pristine floor reads a little
+// ABOVE it, so a light-start call is the one to hold loosely); model-switched (preempts the
+// resolver) and the no-curve default branch stay untouched.
 if (froz5Stale && (froz5Cause === 'heavy-start' || froz5Cause === 'light-start' || froz5Cause === 'cold-pumped' || froz5Cause === 'on-curve')) {
-  costChar += ' — low confidence: the typical-depth curve predates the Opus-5 prompt cut (post-cut sessions read above it), so treat this cause as indicative; the absolute next-leg $ is still real';
+  costChar += ' — low confidence: this session opened on a warm shared prefix (pre-2.1.209 regime, or a sibling-warmed launch), so its pristine floor is smaller than the post-2.1.209 curve\'s and the ratio can read a little above the curve; treat a light-start call as indicative; the absolute next-leg $ is still real';
 }
 let costDetail = '(none)';
 if (Number(s.nAgents) > 0 && s.mainSessionUsd != null) {
@@ -270,11 +322,18 @@ if (nColdScan >= 1) {
 let fillBand = '';
 if (s.fillPct != null) {
   const f = Number(s.fillPct);
+  // The ≥85% band names the wall it is near — but with auto-compact off there IS no wall, and saying
+  // so here contradicted QUALITY_HEADROOM two lines down ("no compaction will fire"). The fact sheet
+  // never hands the composer a contradiction to smooth over. Cliff semantics below 85% are unchanged:
+  // the ~60% cliff is a quality effect of context depth, not a compaction artifact.
+  const topBand = s.autoCompactOff === true
+    ? ' fill — near the raw window limit'
+    : ' fill — near the auto-compact wall';
   fillBand = f < 50 ? ' fill — well under the ~60% cliff'
     : f < 60 ? ' fill — approaching the ~60% cliff'
       : f < 70 ? ' fill — at/just past the ~60% cliff'
         : f < 85 ? ' fill — well past the ~60% cliff'
-          : ' fill — near the auto-compact wall';
+          : topBand;
 }
 const tokSig = FmtK(s.ctxTokens) + ', ' + absState + ' band' + (qWord ? ' — ' + qWord : '');
 const fillSig = FmtPct(s.fillPct) + fillBand;
@@ -337,24 +396,59 @@ emit(`HEADLINE_BASIS: driver=${hDriver}; quality=${absState} (lvl ${qLevel}); co
 emit(`COST_LEAD: ${costLead}`);
 emit(`COST_TOTAL: ${costTotal}`);
 emit(`COST_CHAR: ${costChar}`);
-// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): stale-curve tag on the residual branch.
+// Residual branch tags: the warm-open era marker and/or the provisional-baseline count.
 emit(`COST_FROZ5: cause=${froz5Cause}` + (froz5Cause === 'model-switched'
   ? ' — ratio not comparable across the switch'
-  : (froz5Resid != null ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}` + (froz5Stale ? '; curve=stale (fit pre-Opus-5 prompt cut)' : '') : ' (curve n/a — 200k window or missing data)')));
+  : (froz5Resid != null
+    ? '; froz5 ' + FmtRatio(froz5) + ' vs ' + FmtRatio(froz5Exp) + ' typical at this depth (residual ' + fmtN(froz5Resid, 2) + TIMES + `); confidence=${froz5Conf}`
+      + (froz5Stale ? '; era=warm-open (curve fit on post-2.1.209 cold-start sessions)' : '')
+      + (froz5Provisional ? `; baseline=provisional (${freshLegN} of ${FRESH_N} warm legs)` : '')
+    : ' (curve n/a — 200k window or missing data)')));
 emit(`COST_DETAIL: ${costDetail}`);
 emit(`COST_AGENTS_TIER: ${agentTier}`);
 emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);
+// Run-window notes (schema 4): a detected resume, and/or the list-price tripwire the detection
+// cannot reach. Both may fire; the resumed line comes first.
+if (s.runStartLeg != null && Number(s.runStartLeg) > 0) {
+  emit(`COST_RUN_NOTE: resumed session — legs 1${NDASH}${Math.trunc(Number(s.runStartLeg))} predate this run; the total covers this run only, earlier legs are priced at this run's rate`);
+}
+if (s.legPricingSuspect === true) {
+  emit(`COST_RUN_NOTE: leg $ suspect — session rate far below list price (resumed without local history?); per-leg $ are understated, the total is CC's own`);
+}
+// A mid-session model switch with a FULL-STRENGTH anchor (the gate above): the depth cause resolved
+// normally, so the switch is reported here as a dollar-comparability footnote instead of replacing
+// the explanation. With a weak anchor it is the COST_CHAR lead instead, and this line is absent.
+if (s.modelSwitch && !froz5AnchorWeak) {
+  emit(`COST_RUN_NOTE: the model switched mid-session (${String(s.modelSwitch.from)} → ${String(s.modelSwitch.to)} at leg ${Math.trunc(Number(s.modelSwitch.atLeg))}) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like; the multiple and the depth curve still hold (both sides measure this session's own token-work at one price)`);
+}
+// Fast mode: CC's total_cost_usd omits the fast premium. Warn, don't recompute — no factor.
+if (s.fastMode === true) {
+  emit(`COST_FAST_NOTE: fast mode on — every $ in this sheet excludes the fast premium; per-leg $, the forecast and the total are understated (CC's own figure, not recomputed)`);
+}
+// Transcript-vs-display tier provenance (sidecar `tierMismatch`, present only when the labelled tier
+// has never served in this run): the label is wrong, no number is. Pure provenance, like the fast
+// caveat — never a reason to distrust the ratio, which is tier-free.
+if (s.tierMismatch && s.tierMismatch.serving) {
+  emit(`COST_TIER_NOTE: the model label reads ${BT}${s.model}${BT}, but every leg in this run was served by ${BT}${String(s.tierMismatch.serving)}${BT} — a label fact only: the $ and the multiple in this sheet do not depend on which label is shown`);
+}
 // temporary — removed by Stage B (dollar-gate re-anchor): the $ verdict floors (COST_FLOOR_*) are
 // calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main they grade too leniently.
 if (sessionTier === 'sonnet' || sessionTier === 'haiku') {
   emit('COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing');
 }
 emit(`COLD: ${coldOut}`);
+// Gloss keyed on the model GENERATION read off the sidecar's display string: Sonnet 5 (5.x) had
+// cache-preserving injection and lost it in CC 2.1.201 (expected); older Sonnet generations never
+// had it (informational, not a regression); every other tier — worth a look.
+const isSonnet5 = sessionTier === 'sonnet' && /sonnet[\s-]?5\b/i.test(String(s.model));
+const isOtherSonnet = sessionTier === 'sonnet' && !isSonnet5;
 emit('WARM_REWRITE_TAX: ' + (nWarmScan >= 1
   ? FmtUsd(warmTaxUsdScan) + ' over ' + BT + nWarmScan + BT + ' leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax'
-    + (sessionTier === 'sonnet'
+    + (isSonnet5
       ? '; expected — CC 2.1.201 dropped cache-preserving injection on Sonnet 5'
-      : '; unexpected on this model — worth a look')
+      : (isOtherSonnet
+        ? '; informational on this Sonnet generation — it never had cache-preserving injection, so a rewrite here is not a regression signal'
+        : '; unexpected on this model — worth a look'))
   : '(none)'));
 emit(`QUALITY_LEAD: ${qLead}`);
 emit(`QUALITY_SECONDARY: ${qSecondary}`);

@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-06-18T02:10:20.000Z","message":{"role":"user","content":"Draft the release notes for the progressive-usage fixture"}}
+{"type":"assistant","timestamp":"2026-06-18T02:10:30.000Z","message":{"id":"apa1","model":"claude-fable-5","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}
+{"type":"assistant","timestamp":"2026-06-18T02:10:40.000Z","message":{"id":"apa1","model":"claude-fable-5","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}
+{"type":"assistant","timestamp":"2026-06-18T02:10:50.000Z","message":{"id":"apa1","model":"claude-fable-5","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5000}}}

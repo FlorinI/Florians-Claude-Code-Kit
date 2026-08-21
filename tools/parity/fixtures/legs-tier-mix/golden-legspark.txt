@@ -1,0 +1,5 @@
+from session legs-tie · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=4  ·  range $0.28–$0.52  ·  raw peak $0.77  ·  height ∝ cost (peak = full)
+ █▆▃
+▅███
+████

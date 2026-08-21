@@ -1,0 +1,22 @@
+IDENTITY: **Reading** `(no repo)` · `froz5-ti` · Fable 5 (1M context) · `150k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: + Getting deeper
+HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 2.0927691234596604 / next 0.36003999999999997 (lvl 0)
+COST_LEAD: each leg `~$0.36`, `2.09×` a fresh leg
+COST_TOTAL: `$2.20` total
+COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
+COST_FROZ5: cause=on-curve; froz5 `2.09×` vs `1.68×` typical at this depth (residual 1.25×); confidence=ok
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COST_TIER_NOTE: the model label reads `Fable 5 (1M context)`, but every leg in this run was served by `opus` — a label fact only: the $ and the multiple in this sheet do not depend on which label is shown
+COLD: calm — idling past the cache lifetime would add `$5.70` to resume; no urgency
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `150k`, yellow band — mild weakening on hard multi-fact recall
+QUALITY_SECONDARY: `15%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `325k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: mostly flat with spikes, range `$0.08`–`$1.16`
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next

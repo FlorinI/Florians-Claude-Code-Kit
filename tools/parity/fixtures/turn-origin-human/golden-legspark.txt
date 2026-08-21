@@ -1,0 +1,5 @@
+from session turn-ori · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=14  ·  range $0.25–$0.25  ·  raw peak $0.25  ·  height ∝ cost (peak = full)
+██████████████
+██████████████
+██████████████

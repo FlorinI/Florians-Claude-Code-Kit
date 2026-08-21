@@ -1,5 +1,5 @@
 from session model-sw · (no repo) · rendered 0s ago
 top 3 cost spikes  ·  of 13 legs  ·  session-$ basis  ·  leg 1 = oldest
-   Leg 1  ·  $0.15  ·  generated ~20k output
-   Leg 2  ·  $0.15  ·  generated ~20k output
-   Leg 3  ·  $0.15  ·  generated ~20k output
+   Leg 1  ·  $1.00  ·  generated ~20k output
+   Leg 2  ·  $1.00  ·  generated ~20k output
+   Leg 3  ·  $1.00  ·  generated ~20k output

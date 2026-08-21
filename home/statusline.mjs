@@ -5,22 +5,24 @@
 // parsing goes through _sl-compat.mjs. Rendering is guarded by the Node golden test
 // (tools/parity/run-parity.mjs) against committed fixtures. See docs/roadmap.md.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, rmSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
-  nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs, atomicWriteFile,
+  nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs, atomicWriteFile, sweepStaleFiles,
 } from './_sl-compat.mjs';
 import {
-  getDriver, testColdLeg, ModelTier, TIER_BASE,
+  getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
+  FRESH_WINDOW, isColdStartLeg, pickFreshBaseline, isSyntheticLeg, servingTierReport,
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
+import { sanitizeSessionName } from './sanitize-name.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '4.3.2.0';
+export const SL_VERSION = '5.0.7.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json, stats-cache.json) and write (the global sidecar, the rollup caches)
@@ -90,42 +92,85 @@ function CacheWriteUnits(cw1h, cw5m, cwTotal) {
   return (cw1h + cw5m) > 0 ? cw1h * M_CACHE_WRITE_1H + cw5m * M_CACHE_WRITE_5M : cwTotal * M_CACHE_WRITE_5M;
 }
 
-// Auto-compact fires at `min(autoCompactWindow, model window)`. The window is NOT in the status-line
-// payload, but `/autocompact` PERSISTS the user's choice to ~/.claude/settings.json as top-level
-// `autoCompactWindow`, written the instant it changes — so we read it directly (authoritative, immediate,
-// no observer-effect). Three states: a NUMBER = an override; `null` = `auto`; key ABSENT = `auto`. `null`
-// and absent are IDENTICAL → fall back to the model-tuned default (hence the `typeof === 'number'` test,
-// never "key present"). On `auto` the default is server-delivered (~500k on the 1M models, via the
-// tengu_amber_redwood3 gate) so we can't read the exact number — we estimate it and flag the estimate.
+// Auto-compact fires at `min(auto-compact window, model window)`. The window is NOT in the status-line
+// payload; we resolve it the way CC does. CC's resolver (function `KV`, extracted from the running
+// binary 2.1.233 on 2026-08-16), first hit wins:
+//
+//   1. env CLAUDE_CODE_AUTO_COMPACT_WINDOW — when the string is non-empty. Parsed by CC's `Tg`:
+//      trim; an integer in exponent form (`5e5`) → that number; digits grouped by `_ , space NBSP
+//      NNBSP` (`500,000`, `500_000`) → separators stripped; otherwise `parseInt(v, 10)` (`500k` → 500,
+//      `abc` → NaN). NaN or ≤ 0 → INVALID → ignored, fall through to 2 (CC logs "using default").
+//      > 1e6 → CAPPED to 1e6; then FLOORED at 1e5 (`Math.max(1e5, n)`), so `500k` → 500 → 100k.
+//      `/autocompact` reports "CLAUDE_CODE_AUTO_COMPACT_WINDOW is set and takes precedence" — the
+//      setting is ignored while the env var is valid.
+//   2. settings `autoCompactWindow` (USER settings.json; /autocompact PERSISTS the user's choice
+//      there the instant it changes — authoritative, no observer-effect). Read through zod
+//      `.int().min(1e5).max(1e6).optional().catch(undefined)`: an integer in [1e5, 1e6] is used;
+//      ANYTHING else (non-integer, string, out of range, `null`, absent) is `undefined` = auto. NOT
+//      clamped — it DROPS to auto (asymmetric with the env channel, which clamps).
+//   3. client-data / experiment / model-tuned default — server-delivered (~500k on the 1M models via
+//      the tengu_amber_redwood3 gate), invisible to us → we estimate it and flag the estimate.
+//
+// Blind channel: the `--autocompact` CLI flag has no payload field; we do not guess it.
 // The old behaviour (model window × 0.95) overstated 1M headroom by ~450k and never warned before
 // compaction (caught live 2026-07: compacted at 466k while to-compact read 484k).
 const AUTO_COMPACT_1M = 500000;   // model-tuned `auto` default for the 1M regime (estimate; drifts server-side)
+const CW_GROUPED = /^[+-]?\d{1,3}([_,\u00A0\u202F ])\d{3}(?:\1\d{3})*$/;
+const CW_EXPONENT = /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/;
+function ccParseInt(v) {   // CC's `Tg`
+  const t = String(v).trim();
+  if (t.length <= 32 && CW_EXPONENT.test(t)) { const n = Number(t); return Number.isInteger(n) ? n : NaN; }
+  if (CW_GROUPED.test(t)) return parseInt(t.replace(/[_,\u00A0\u202F ]/g, ''), 10);
+  return parseInt(t, 10);
+}
 function readAutoCompactWindow() {
-  // Written to USER settings by /autocompact. (A project-level override would be a future refinement.)
-  const s = readJson(join(ConfigHome, 'settings.json'));
-  return (s && typeof s.autoCompactWindow === 'number') ? s.autoCompactWindow : null;
+  try {
+    const env = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    if (env !== undefined && env !== '') {
+      let n = ccParseInt(env);
+      if (!Number.isNaN(n) && n > 0) {
+        if (n > 1e6) n = 1e6;
+        return { win: Math.max(1e5, n), source: 'env' };
+      }
+    }
+    const s = readJson(join(ConfigHome, 'settings.json'));
+    const v = s ? s.autoCompactWindow : undefined;
+    if (Number.isInteger(v) && v >= 1e5 && v <= 1e6) return { win: v, source: 'settings' };
+  } catch {}
+  return { win: null, source: null };
 }
 // Effective auto-compact window + whether it's an ESTIMATE (on `auto`, using the default) vs an
-// authoritative override we read from settings.
+// authoritative value resolved from env / settings.
 function CompactWindow(ctxSize) {
-  const set = readAutoCompactWindow();
-  if (typeof set === 'number') return { win: Math.min(set, ctxSize), estimate: false };
+  const { win } = readAutoCompactWindow();
+  if (typeof win === 'number') return { win: Math.min(win, ctxSize), estimate: false };
   if (ctxSize >= 700000) return { win: AUTO_COMPACT_1M, estimate: true };   // 1M on `auto` → estimated default
   return { win: ctxSize, estimate: false };                                 // 200k `auto` ≈ the model window
 }
 function CompactAt(ctxSize) { return psRound(CompactWindow(ctxSize).win * 0.95); }
 // Auto-compact can also be OFF entirely — then the countdown (and its red `NOW`) is a lie: compaction
-// never fires. Two off switches: `/autocompact` persists `autoCompactEnabled: false` to the same
-// settings file, and the DISABLE_AUTO_COMPACT env var disables it per-process. Env semantics MIRROR
-// Claude Code's own env-truthiness parser: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed)
-// disable auto-compact; EVERY other value — including 'off', 'no', '0', 'false', '' and junk — leaves
-// it ON, so the countdown must keep rendering. Verified against the running CC binary 2026-07-04
-// (ticket 2026-07-04-acoff-env-predicate-vs-cc); if CC's parser drifts, this allowlist must follow.
+// never fires. CC checks THREE off switches, in this order, and so do we:
+//
+//   function GH(){ if(te.DISABLE_COMPACT) return!1;
+//                  if(_r(process.env.DISABLE_AUTO_COMPACT)) return!1;
+//                  return Ju("autoCompactEnabled",!0).value }
+//
+// Both env vars parse through the SAME truthiness rule: `te.DISABLE_COMPACT` is `Fe.bool()`, which is
+// `_r(String(v))`, and `_r` is `["1","true","yes","on"].includes(v.toLowerCase().trim())`. So only
+// '1' / 'true' / 'yes' / 'on' disable auto-compact; EVERY other value — including 'off', 'no', '0',
+// 'false', '' and junk — leaves it ON and the countdown must keep rendering.
+//
+// Extracted from the running CC binary: 2026-07-04 (2.1.198, DISABLE_AUTO_COMPACT only) and
+// re-extracted 2026-08-08 (2.1.225, all three + the shared parser). If CC's parser drifts, this
+// allowlist must follow. Tickets: 2026-07-04-acoff-env-predicate-vs-cc,
+// 2026-07-04-disable-compact-sibling-switch.
+const CC_TRUTHY = ['1', 'true', 'yes', 'on'];
+const ccEnvTrue = (v) => v != null && CC_TRUTHY.includes(String(v).toLowerCase().trim());
 function autoCompactDisabled() {
+  if (ccEnvTrue(process.env.DISABLE_COMPACT)) return true;
+  if (ccEnvTrue(process.env.DISABLE_AUTO_COMPACT)) return true;
   const s = readJson(join(ConfigHome, 'settings.json'));
   if (s && s.autoCompactEnabled === false) return true;
-  const env = process.env.DISABLE_AUTO_COMPACT;
-  if (env != null && ['1', 'true', 'yes', 'on'].includes(String(env).toLowerCase().trim())) return true;
   return false;
 }
 const AC_OFF = autoCompactDisabled();
@@ -221,13 +266,17 @@ function BgFill(pct, text) {
   if (pct < 85) return BgTint(BAND_ORANGE, text);
   return BgTint(BAND_RED, text);
 }
+// froz5 gradient anchors — COPIES of tools/calibration/froz5-fit.json `anchors` (era v5 fit on the
+// fleet's post-CC-2.1.209 cold-start sessions): green 0.5 / white 1.0 fixed (definitional), yellow =
+// curve at 256k, orange = curve at 500k, red = curve at 800k. Keep in lockstep with the froz5State
+// thresholds in the sidecar block and handover-facts.mjs's FROZ5_CLIMB / FROZ5_STEEP (fit-sync test).
 function Froz5RGB(ratio) {
   const stops = [
     [0.5, BAND_GREEN],
     [1.0, [230, 230, 230]],
-    [1.8, BAND_YELLOW],
-    [2.8, BAND_ORANGE],
-    [3.8, BAND_RED],
+    [2.3, BAND_YELLOW],
+    [4.2, BAND_ORANGE],
+    [7.4, BAND_RED],
   ];
   if (ratio <= stops[0][0]) return stops[0][1];
   if (ratio >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
@@ -249,25 +298,34 @@ function BgFroz5(ratio, text) {
 const DIM_SEP = Dim(' | ');
 
 // === Per-session cumulative-token rollups (incremental transcript scan) =====
-function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel) {
+function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel, sessionName) {
   if (!sessionId || !tpath || !existsSync(tpath)) return null;
   const statsDir = join(claudeStateDir(projRoot), 'statusline-stats');
   try { if (!existsSync(statsDir)) mkdirSync(statsDir, { recursive: true }); } catch {}
   const statsPath = join(statsDir, sessionId + '.json');
   let r = existsSync(statsPath) ? readJson(statsPath) : null;
   const hadPrior = r !== null;
+  // The stats file's own mtime = the last render's time (read BEFORE this render overwrites it); it
+  // is the sweep trigger's only state — see the housekeeping sweep below.
+  let priorMtimeSec = null;
+  if (hadPrior) { try { priorMtimeSec = statSync(statsPath).mtimeMs / 1000; } catch {} }
   const freshRollup = () => ({
     lastByteOffset: 0, nLegs: 0, sumUnits: 0, sumOutputTokens: 0, lastMsgId: '',
     lastInputBilled: 0, lastOutputTokens: 0, lastSeenCost: 0, lastLegCost: null,
-    perLegUnits: [], perLegOwnUnits: [], lastLegTs: null, lastWarm: 0,
+    perLegUnits: [], perLegOwnUnits: [], perLegModels: [], lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0,
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
+    runIdx: 0, runStartLeg: 0,
+    openingLegs: [], firstLegColdStart: null, openingLegCw: null,
   });
   if (!hadPrior) r = freshRollup();
 
+  // perLegModels (4.4) and openingLegs (5.0) are REQUIRED (not additive): a pre-5.0 stats file
+  // triggers the one-time full rescan so every banked leg gets its model and the opening window is
+  // banked (else old legs would stay flat-priced / the fresh baseline would have no material).
   const requiredFields = ['lastByteOffset', 'nLegs', 'sumUnits', 'sumOutputTokens',
     'lastMsgId', 'lastInputBilled', 'lastOutputTokens', 'lastSeenCost',
-    'lastLegCost', 'perLegUnits', 'perLegOwnUnits'];
+    'lastLegCost', 'perLegUnits', 'perLegOwnUnits', 'perLegModels', 'openingLegs'];
   let needsReset = false;
   for (const f of requiredFields) { if (!(f in r)) { needsReset = true; break; } }
   if (needsReset) {
@@ -288,8 +346,22 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   if (!('recentWriteTtls' in r)) r.recentWriteTtls = [];
   if (!('recentLegs' in r)) r.recentLegs = [];
   if (!('mainModel' in r)) r.mainModel = '';
+  if (!('runIdx' in r)) r.runIdx = 0;
+  if (!('runStartLeg' in r)) r.runStartLeg = 0;
   const skipLastLegCost = needsReset;
   const nLegsBefore = Number(r.nLegs);
+
+  // Resume detection — BEFORE the scan (it needs nLegs as of the previous run). total_cost_usd is
+  // per-run (CC resets it on resume/clear) while the rollup spans every run of the transcript, so a
+  // cost that fell below the last seen one marks a new run: the pricing window (base = this run's
+  // cost / this run's units) starts at the current leg count; earlier legs stay listed and are
+  // priced at this run's rate (sidecar runStartLeg says so).
+  if (hadPrior && !needsReset && Number(currentCost) < Number(r.lastSeenCost) - 1e-9) {
+    r.runIdx = Number(r.runIdx) + 1;
+    r.runStartLeg = Number(r.nLegs);
+    r.lastSeenCost = 0;
+    r.lastLegCost = null;
+  }
 
   try {
     if (existsSync(tpath)) {
@@ -299,6 +371,8 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
       if (Number(r.lastByteOffset) > totalLen) {
         r.lastByteOffset = 0; r.nLegs = 0; r.sumUnits = 0; r.sumOutputTokens = 0;
         r.lastInputBilled = 0; r.lastOutputTokens = 0; r.perLegUnits = []; r.perLegOwnUnits = [];
+        r.perLegModels = []; r.runStartLeg = 0;
+        r.openingLegs = []; r.firstLegColdStart = null; r.openingLegCw = null;
         if ('recentWriteTtls' in r) r.recentWriteTtls = [];
         if ('recentLegs' in r) r.recentLegs = [];
         if ('lastWarm' in r) r.lastWarm = 0;
@@ -317,6 +391,9 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               const p = JSON.parse(line);
               if (p.type !== 'assistant') continue;
               const msgId = p?.message?.id;
+              // First-wins adjacent dedup — HAZARD: exact for MAIN transcripts (per-block dup lines
+              // carry byte-identical usage); agent transcripts carry PROGRESSIVE output_tokens and
+              // are handled by the max-wins branch in UpdateAgentRollups, never by this scan.
               if (!msgId || msgId === r.lastMsgId) continue;
               const u = p?.message?.usage;
               if (!u) continue;
@@ -330,6 +407,15 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               const cwUnits = CacheWriteUnits(cw1h, cw5m, cwTok);
               const units = inTok * M_INPUT + cwUnits + crTok * M_CACHE_READ + outTok * M_OUTPUT;
               const ownUnits = inTok * M_INPUT + cwUnits + outTok * M_OUTPUT;
+              const legModel = String(p?.message?.model ?? '');
+              // Placeholder lines are NOT legs (isSyntheticLeg — the SAME predicate getScannedLegs
+              // uses, so the two scans can never disagree): a `<synthetic>` line or an all-zero-usage
+              // line processed no tokens. Skipped AFTER the message-id dedup and BEFORE any state is
+              // touched, so it consumes no leg index, no sparkline cell and no opening-window slot,
+              // and — critically — does not reset the cold-cache clock: it refreshed no cache.
+              // `lastMsgId` is deliberately left alone, so its own duplicate lines are dropped by
+              // this same test rather than by the adjacent-dedup slot a real leg needs.
+              if (isSyntheticLeg({ model: legModel, inT: inTok, cw: cwTok, cr: crTok, out: outTok })) continue;
               r.nLegs = Number(r.nLegs) + 1;
               r.sumUnits = Number(r.sumUnits) + units;
               r.sumOutputTokens = Number(r.sumOutputTokens) + outTok;
@@ -338,6 +424,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               r.lastOutputTokens = outTok;
               r.perLegUnits.push(units);
               r.perLegOwnUnits.push(ownUnits);
+              r.perLegModels.push(legModel);
               let legTs = null;
               if (p.timestamp) legTs = parseUtcEpoch(p.timestamp);
               const prevWarm = Number(r.lastWarm); // tokens warm one leg ago
@@ -361,8 +448,16 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               if (!('recentLegs' in r)) r.recentLegs = [];
               const blGap = (legTs != null && r.lastLegTs != null) ? legTs - Number(r.lastLegTs) : null;
               const blTtl = Number(r.lastLegTtlSec) > 0 ? Number(r.lastLegTtlSec) : 300;
-              r.recentLegs.push({ idx: Number(r.nLegs), inT: inTok, cw: cwTok, cwUnits, cr: crTok, out: outTok, units, gapToPrev: blGap, coldTtl: blTtl, prevWarm });
+              r.recentLegs.push({ idx: Number(r.nLegs), inT: inTok, cw: cwTok, cwUnits, cr: crTok, out: outTok, units, gapToPrev: blGap, coldTtl: blTtl, prevWarm, model: legModel });
               if (r.recentLegs.length > 12) r.recentLegs = r.recentLegs.slice(-12);
+              // Opening window for the froz5 fresh baseline (pickFreshBaseline at read time; the
+              // baseline is tier-free, so a later tier switch does not move it) + the leg-1 era
+              // signature. The placeholder skip above runs BEFORE banking, so this holds the first
+              // FRESH_WINDOW *real* legs by construction.
+              if (!Array.isArray(r.openingLegs)) r.openingLegs = [];
+              const openRec = { idx: Number(r.nLegs), inT: inTok, cw: cwTok, cr: crTok, out: outTok, units, model: legModel };
+              if (r.openingLegs.length < FRESH_WINDOW) r.openingLegs.push(openRec);
+              if (Number(r.nLegs) === 1) { r.firstLegColdStart = isColdStartLeg(openRec); r.openingLegCw = cwTok; }
               if (legTs != null) r.lastLegTs = legTs;
               r.lastWarm = crTok + cwTok;
               if (legTtlSec > 0) {
@@ -395,24 +490,34 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     r.modelSwitch = { atLeg: Number(r.nLegs), from: String(r.mainModel), to: String(mainModel) };
   }
   if (mainModel) r.mainModel = String(mainModel);
+  // Session name (payload session_name: /rename · --name, else the AI title) — persisted so the
+  // fact sheet's FOREIGN guard can name THIS session in words; a nameless render never clears it.
+  if (sessionName) r.sessionName = sessionName;
 
   try { atomicWriteFile(statsPath, JSON.stringify(r, null, 2)); } catch {}
 
-  if (!hadPrior) {
+  // Housekeeping sweep — runs on a NEW session's first render OR on a session's first render on a
+  // new UTC day (the stats file's pre-write mtime vs NOW, calendar-day compare). "New session only"
+  // was too rare: sessions here live for days, so nothing reclaimed stale entries for weeks; and
+  // ConfigHome/statusline-stats is only ever written when the payload has no cwd, so nothing else
+  // reclaims it. Cutoff 7 days. Stats dirs: .json = expired session state (incl. .agents.json /
+  // .nudge.json), .tmp. = an orphaned atomic-write temp — a concurrent writer's in-flight temp is
+  // never that old. The current session's own files (every `<sessionId>.` name) are never touched.
+  // Sidecar dirs (<cwd>/.claude and ConfigHome itself) are swept ONLY for the sidecar's own orphaned
+  // temps — never statusline-last.json, never any other file there. Best-effort, never throws.
+  const utcDay = (sec) => Math.floor(sec / 86400);
+  const doSweep = !hadPrior || (priorMtimeSec !== null && utcDay(priorMtimeSec) < utcDay(NOW));
+  if (doSweep) {
     try {
       const cutoff = NOW - 7 * 86400;
-      const self = sessionId + '.json';
-      for (const name of readdirSync(statsDir)) {
-        if (name === self) continue;
-        // .json = expired session state; .tmp. = an orphaned atomic-write temp (crash between
-        // write and rename). Same age cutoff for both — a concurrent writer's in-flight temp
-        // is never fresh enough to sweep.
-        if (!name.endsWith('.json') && !name.includes('.tmp.')) continue;
-        try {
-          const fp = join(statsDir, name);
-          if (statSync(fp).mtimeMs / 1000 < cutoff) rmSync(fp, { force: true });
-        } catch {}
-      }
+      const stateMatch = (n) => n.endsWith('.json') || n.includes('.tmp.');
+      const sidecarTmpMatch = (n) => n.startsWith('statusline-last.json.tmp.');
+      const keep = { match: stateMatch, keepPrefix: sessionId + '.' };
+      sweepStaleFiles(statsDir, cutoff, keep);
+      const globalStatsDir = join(ConfigHome, 'statusline-stats');
+      if (globalStatsDir !== statsDir) sweepStaleFiles(globalStatsDir, cutoff, keep);
+      if (projRoot) sweepStaleFiles(join(projRoot, '.claude'), cutoff, { match: sidecarTmpMatch });
+      sweepStaleFiles(ConfigHome, cutoff, { match: sidecarTmpMatch });
     } catch {}
   }
   return r;
@@ -466,7 +571,10 @@ function agentLabelFromFileHead(fp) {
 }
 function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replace(/\.jsonl$/, '').slice(0, 9); }
 // (Model → pricing tier lives in leg-driver.mjs's ModelTier — shared with handover-facts.)
-function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
+// `runIdx` = the main rollup's current run (see UpdateSessionRollups' resume detection). Every
+// entry is stamped with the run it was FIRST seen in; only this run's agents count toward the
+// aggregate, matching total_cost_usd's "this run" scope.
+function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
   if (!existsSync(subDir)) return null;
@@ -476,6 +584,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
   let cache = existsSync(cachePath) ? readJson(cachePath) : null;
   if (cache === null || !('agents' in cache)) cache = { lastScanTs: 0, agents: [] };
   if (isNil(cache.agents)) cache.agents = [];
+  runIdx = Number(runIdx) || 0;
   const nEpoch = NOW;
   const byPath = {};
   for (const a of cache.agents) { if (a && a.path) byPath[String(a.path)] = a; }
@@ -486,9 +595,15 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
       walkAgentFiles(subDir, files);
       for (const fp of files) {
         let e = byPath[fp];
-        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', model: '', lastMsgId: '' }; byPath[fp] = e; }
-        let len = 0; try { len = statSync(fp).size; } catch {}
-        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.model = ''; e.lastMsgId = ''; }
+        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', model: '', lastMsgId: '', lastOut: 0, lastLegUnits: 0, run: runIdx }; byPath[fp] = e; }
+        if (!('run' in e)) e.run = runIdx;
+        // Idle skip: an unchanged transcript (same mtime, same size as the banked offset) is not
+        // re-read and not label-backfilled. `mtimeMs` is bookkeeping only, never counted/displayed;
+        // an entry without it (older cache) takes the full path once and gains it.
+        let len = 0, mtimeMs = null; try { const st = statSync(fp); len = st.size; mtimeMs = st.mtimeMs; } catch {}
+        if (mtimeMs !== null && e.mtimeMs === mtimeMs && Number(e.offset) === len) continue;
+        if (mtimeMs !== null) e.mtimeMs = mtimeMs;
+        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.model = ''; e.lastMsgId = ''; e.lastOut = 0; e.lastLegUnits = 0; e.run = runIdx; }
         if (Number(e.offset) < len) {
           try {
             const buf = readFileSync(fp);
@@ -510,11 +625,30 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
                   if (p.type !== 'assistant') continue;
                   if (p?.message?.model) e.model = String(p.message.model);
                   const mid = p?.message?.id;
-                  if (!mid || mid === e.lastMsgId) continue;
+                  if (!mid) continue;
                   const u = p?.message?.usage;
                   if (!u) continue;
+                  const outTok = Number(u.output_tokens) || 0;
+                  if (mid === e.lastMsgId) {
+                    // Max-wins on output_tokens: agent transcripts stream one line per content
+                    // block with PROGRESSIVE output_tokens (the last line carries the total; the
+                    // first is a tiny partial). Input/cache fields are identical across the group,
+                    // so only the output delta is banked. lastOut/lastLegUnits persist per entry, so
+                    // a group straddling two scans still resolves.
+                    const prevOut = Number(e.lastOut) || 0;
+                    if (outTok > prevOut) {
+                      const dU = (outTok - prevOut) * M_OUTPUT;
+                      e.units = Number(e.units) + dU;
+                      e.ownUnits = Number(e.ownUnits) + dU;
+                      e.out = Number(e.out) + (outTok - prevOut);
+                      e.lastOut = outTok;
+                      e.lastLegUnits = Number(e.lastLegUnits) + dU;
+                      if (Number(e.lastLegUnits) > Number(e.maxLegUnits || 0)) e.maxLegUnits = Number(e.lastLegUnits);
+                    }
+                    continue;
+                  }
                   const inTok = Number(u.input_tokens) || 0, cwTok = Number(u.cache_creation_input_tokens) || 0;
-                  const crTok = Number(u.cache_read_input_tokens) || 0, outTok = Number(u.output_tokens) || 0;
+                  const crTok = Number(u.cache_read_input_tokens) || 0;
                   const cwUnits = CacheWriteUnits(u.cache_creation?.ephemeral_1h_input_tokens, u.cache_creation?.ephemeral_5m_input_tokens, cwTok);
                   const legU = inTok * M_INPUT + cwUnits + crTok * M_CACHE_READ + outTok * M_OUTPUT;
                   e.units = Number(e.units) + legU;
@@ -525,6 +659,8 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
                   const ctx = inTok + cwTok + crTok;
                   if (ctx > Number(e.maxCtx)) e.maxCtx = ctx;
                   e.lastMsgId = mid;
+                  e.lastOut = outTok;
+                  e.lastLegUnits = legU;
                 } catch {}
               }
               e.offset = Number(e.offset) + consumed;
@@ -534,24 +670,26 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier) {
         if (!e.label) e.label = agentLabelFromFileHead(fp) || agentIdFromPath(fp);
       }
       cache.lastScanTs = nEpoch;
+      cache.run = runIdx;
       cache.agents = Object.values(byPath);
       try { atomicWriteFile(cachePath, JSON.stringify(cache, null, 2)); } catch {}
     } catch {}
   }
-  const live = cache.agents.filter((a) => a && Number(a.legs) > 0);
+  // This run's agents only: a prior run's agents are not in total_cost_usd, so they leave the
+  // divisor AND the fleet line (one meaning — "this run's agents"). Entries without a run stamp
+  // (pre-4.4 caches, throttled seeds) count as current.
+  const live = cache.agents.filter((a) => a && Number(a.legs) > 0 && (a.run ?? runIdx) === runIdx);
   if (live.length === 0) return null;
   let sumUnits = 0, sumEffUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
   const ctxList = [];
   const tierCounts = {};
   for (const a of live) {
     const tier = ModelTier(a.model);
-    // Tier-weighted effective units: an agent's units scale by its tier's headline input price
-    // relative to the MAIN tier (TIER_BASE ratios), so the main-vs-agents $ split of
-    // total_cost_usd stays honest when tiers mix. The total itself is never recomputed — only
-    // its attribution. Absent/empty/unmapped tier (or an unmapped main) → weight 1.0: the
-    // recompute never guesses.
-    const w = (tier !== null && TIER_BASE[tier] != null && mainTier != null && TIER_BASE[mainTier] != null)
-      ? TIER_BASE[tier] / TIER_BASE[mainTier] : 1.0;
+    // Tier-weighted effective units (tierWeight — the same function render-spikes uses): an
+    // agent's units scale by its tier's headline input price relative to the MAIN tier, so the
+    // main-vs-agents $ split of total_cost_usd stays honest when tiers mix. The total itself is
+    // never recomputed — only its attribution.
+    const w = tierWeight(a.model, mainTier);
     sumUnits += Number(a.units); sumEffUnits += Number(a.units) * w;
     sumLegs += Number(a.legs); sumOut += Number(a.out);
     sumMaxCtx += Number(a.maxCtx); ctxList.push(Number(a.maxCtx));
@@ -570,23 +708,10 @@ const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
 // real 'other' tier): absent display_name → null → no tier-mix contribution, weight 1.0.
 const mainTier = ModelTier(d?.model?.display_name);
 const version = d?.version;
-// FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit) — the froz5 curve was fit pre-CC-2.1.219
-// (Opus 5 default + the ~80% system-prompt cut shrank freshUnits, inflating the ratio at every depth).
-// Version-only gate; absent/unparsable version → NOT stale (never mark on unknown).
-function verGte(v, min) {
-  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v ?? ''));
-  if (!m) return false;
-  for (let i = 0; i < 3; i++) {
-    const p = Number(m[i + 1]);
-    if (p > min[i]) return true;
-    if (p < min[i]) return false;
-  }
-  return true;
-}
-const froz5CalibStale = verGte(version, [2, 1, 219]);
 const effort = (d?.effort?.level) ? d.effort.level : '?';
 const style = (d?.output_style?.name) ? d.output_style.name : 'default';
 const fast = d?.fast_mode;
+const fastMode = fast === true;
 const thinking = d?.thinking?.enabled;
 
 const line1Parts = [];
@@ -597,7 +722,8 @@ if (!isNil(fast)) line1Parts.push(Dim('fast:') + (fast ? Magenta('on') : 'off'))
 if (!isNil(thinking)) line1Parts.push(Dim('think:') + (thinking ? 'on' : BrightCyan('off')));
 if (style && style !== 'default') line1Parts.push(Dim('style:') + style);
 line1Parts.push(DarkGray(`bsl${SL_VERSION}`));
-const line1 = line1Parts.join(DIM_SEP);
+// line1 is joined AFTER the rollup (below), so the serving-tier provenance chip can land inside the
+// model field. Nothing between here and there reads it.
 
 // === Cluster 2: context window =============================================
 const ctxPct = d?.context_window?.used_percentage;
@@ -638,53 +764,89 @@ const line2 = ctxParts.length > 0 ? ctxParts.join(DIM_SEP) : null;
 const cacheParts = [];
 const tpath = d?.transcript_path;
 const sessionId = d?.session_id;
+// session_name = the /rename · --name custom name, else the AI-generated title; absent when neither.
+// Sanitized through the SHARED sanitizer (sanitize-name.mjs — the fact sheet runs the same function
+// on read, so the invariant holds whoever wrote the file): single-line, control- and backtick-free,
+// capped, and null rather than '' when it reduces to nothing. Never rendered here (the tab title +
+// CC's header already carry it) — persisted for handover-facts only.
+const sessionName = sanitizeSessionName(d?.session_name);
 const costUsd = d?.cost?.total_cost_usd;
 const ctxTok = d?.context_window?.total_input_tokens;
 const cwd = (d?.workspace?.current_dir) ? d.workspace.current_dir : d?.cwd;
 
 if (!isNil(costUsd)) cacheParts.push(ColorCost(costUsd, '$' + fmtN(costUsd, 2)));
 let rollup = null;
-if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '');
+if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '', sessionName);
 
 let sessionCost = costUsd;
 let agentAgg = null;
-if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier); } catch {} }
-// Effective (tier-weighted) agent units — the divisor and the $ split both use these, so
-// mainSessionUsd + agentsUsd ≡ total_cost_usd to the cent, before and after the weighting.
+const runIdx = rollup ? Number(rollup.runIdx) || 0 : 0;
+const runStartLeg = rollup ? Number(rollup.runStartLeg) || 0 : 0;
+if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier, runIdx); } catch {} }
+// Transcript-vs-display tier PROVENANCE — "the label names a tier that has never served in this
+// run". Pure provenance: it drives the dim cluster-1 chip, a conditional sidecar key and a
+// fact-sheet caveat, and gates NO number (the froz5 baseline is tier-free, so no tier can be got
+// wrong). Reads arrays already in hand — no extra file read, no transcript re-scan on the hot path.
+const tierMismatch = rollup ? servingTierReport(rollup.perLegModels, runStartLeg, d?.model?.display_name ?? '') : null;
+// Dim, never coloured: provenance, not alarm. It sits inside the model field, so it never displaces
+// the froz5 chip's `?` warm-open marker.
+if (tierMismatch) line1Parts[0] += Dim(` ⚠ serving:${tierMismatch.serving}`);
+const line1 = line1Parts.join(DIM_SEP);
+// Per-leg EFFECTIVE units = raw units × the leg's tier weight relative to the main tier (a Sonnet
+// opening leg on a Fable session weighs 0.2). `base` = this run's total_cost_usd over this run's
+// effective units (main legs from runStartLeg on + this run's tier-weighted agents), so every $
+// derived from units below is tier-true and run-anchored, and mainSessionUsd + agentsUsd ≡
+// total_cost_usd by construction (both are shares of the same divisor). Legs before runStartLeg
+// (a resumed session's earlier runs) are still priced — at this run's rate.
+const perLegEff = rollup ? rollup.perLegUnits.map((u, i) => Number(u) * tierWeight(rollup.perLegModels?.[i], mainTier)) : [];
+let runMainEff = 0; for (let i = runStartLeg; i < perLegEff.length; i++) runMainEff += perLegEff[i];
 const agentUnits = agentAgg ? Number(agentAgg.sumEffUnits) : 0;
-const mainUnits = rollup ? Number(rollup.sumUnits) : 0;
-const totalUnits = mainUnits + agentUnits;
+const totalUnits = runMainEff + agentUnits;
 let agentsUsd = null, mainSessionUsd = null, baseTrue = null;
 if (totalUnits > 0 && sessionCost > 0) {
   baseTrue = Number(sessionCost) / totalUnits;
-  mainSessionUsd = baseTrue * mainUnits;
+  mainSessionUsd = baseTrue * runMainEff;
   agentsUsd = baseTrue * agentUnits;
 }
+// Sanity tripwire for the resume the detection cannot reach (no local history): a base far below
+// the main tier's list price means the units span more than the cost does. Flag, never recompute.
+const listUnitUsd = (mainTier != null && mainTier in TIER_BASE) ? TIER_BASE[mainTier] / 1e6 : null; // list $/unit at the main tier
+const legPricingSuspect = (listUnitUsd != null && baseTrue != null && baseTrue < 0.5 * listUnitUsd);
 let perLegCostArr = [];
 let nextPart = null;
-if (rollup && !isNil(rollup.perLegUnits) && Number(rollup.sumUnits) > 0 && sessionCost > 0) {
-  const base = Number(sessionCost) / totalUnits;
-  perLegCostArr = rollup.perLegUnits.map((u) => base * Number(u));
+if (rollup && totalUnits > 0 && sessionCost > 0) {
+  perLegCostArr = perLegEff.map((u) => baseTrue * u);
 }
+// Fresh-leg baseline (shape-based, bsl5.0.0.0): the median of the first FRESH_N warm legs inside the
+// first FRESH_WINDOW legs, over RAW units — TIER-FREE since bsl5.0.7.0, exactly like the forecast it
+// is divided into, so the ratio is a token-work (depth) ratio and the depth-fitted gradient is a
+// legitimate colouring of it. `next $X = R× $Y (fresh)` stays arithmetically exact either way
+// (`base` cancels). Null until the first warm leg is seen — the cost cluster then shows `next $X`
+// alone, never a ratio against the opener. See pickFreshBaseline in leg-driver.mjs for the window /
+// fallback rules.
+const fb = rollup ? pickFreshBaseline(rollup.openingLegs) : null;
+// Low-confidence marker = "the session opened warm": leg 1 read a shared prefix from cache (the
+// pre-CC-2.1.209 opener signature, or a sibling-warmed launch), so its pristine floor is smaller
+// than the post-2.1.209 cold-start sessions the curve was fit on and the ratio can read a little
+// above the curve. Behaviour-gated, never version-gated; an unknown leg-1 shape never marks.
+const froz5CalibStale = rollup?.firstLegColdStart === false && Number(rollup.openingLegs?.[0]?.cr) > 0;
 let forecast = null, ratio = null, freshBaseline = null;
 if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
-  && Number(rollup.sumUnits) > 0 && !isNil(ctxTok) && ctxTok > 0) {
-  const base = Number(sessionCost) / totalUnits;
+  && totalUnits > 0 && !isNil(ctxTok) && ctxTok > 0) {
+  const base = baseTrue;
   const floorUnits = M_CACHE_READ * Number(ctxTok);
   const ownArr = rollup.perLegOwnUnits.slice();
   const ownTail = ownArr.length > 5 ? ownArr.slice(ownArr.length - 5) : ownArr;
+  // Raw — the next leg runs at the CURRENT tier (weight 1 against itself).
   const nextUnits = floorUnits + Median(ownTail);
   forecast = base * nextUnits;
-  const unitsArr = rollup.perLegUnits.slice();
-  const bn = Math.min(5, unitsArr.length);
-  let freshUnits = 0; for (let i = 0; i < bn; i++) freshUnits += Number(unitsArr[i]);
-  if (bn > 0) freshUnits = freshUnits / bn;
+  const freshUnits = fb?.units ?? 0;
   freshBaseline = freshUnits > 0 ? base * freshUnits : null;
   ratio = freshUnits > 0 ? nextUnits / freshUnits : null;
   const forecastStr = '$' + fmtN(forecast, 2);
   let part = Dim('next ') + ColorLegCell(forecast, forecastStr);
   if (!isNil(ratio)) {
-    // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): `?` suffix marks low confidence.
+    // `?` suffix = the warm-open low-confidence marker (froz5CalibStale above).
     const ratioStr = fmtN(ratio, 1) + 'x' + (froz5CalibStale ? '?' : '');
     const freshStr = '$' + fmtN(freshBaseline, 2);
     part += Dim(' =') + BgFroz5(ratio, ratioStr) + Dim(`${freshStr} (fresh)`);
@@ -701,6 +863,11 @@ if (nextPart) cacheParts.push(nextPart);
 if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
   cacheParts.push(Dim('⚠ $-gates Fable/Opus-calibrated'));
 }
+// Fast mode: CC's total_cost_usd omits the fast premium, so every $ shown is low. Warn, don't
+// recompute — no factor is quoted here by design (it lives in watch/dependency-surface.md).
+if (fastMode && !isNil(costUsd)) {
+  cacheParts.push(Dim('⚠ $ excludes fast premium (understated)'));
+}
 
 // === Cold-cache stats line =================================================
 const snow = '❆ ';
@@ -709,8 +876,8 @@ let coldStakes = null, coldRemain = null, coldBand = null;
 let coldRecent = false;
 const RECENT_COLD_WINDOW = 8;
 const coldParts = [];
-if (rollup && Number(rollup.nColdLegs) >= 1 && Number(rollup.sumUnits) > 0 && sessionCost > 0) {
-  const coldBaseRate = Number(sessionCost) / totalUnits;
+if (rollup && Number(rollup.nColdLegs) >= 1 && totalUnits > 0 && sessionCost > 0) {
+  const coldBaseRate = baseTrue;
   const coldTax = coldBaseRate * Number(rollup.coldWastedUnits);
   const nCold = Number(rollup.nColdLegs);
   const taxPct = (!isNil(costUsd) && Number(costUsd) > 0) ? psRound(100.0 * coldTax / Number(costUsd)) : 0;
@@ -731,8 +898,8 @@ if (rollup && Number(rollup.nColdLegs) >= 1 && Number(rollup.sumUnits) > 0 && se
   const legPct = nL > 0 ? psRound(100.0 * nCold / nL) : 0;
   coldParts.push(Dim(`legs ${nCold}/${nL} (${legPct}%)`));
 }
-if (rollup && !isNil(ctxTok) && ctxTok > 0 && Number(rollup.sumUnits) > 0 && sessionCost > 0) {
-  const coldBase = Number(sessionCost) / totalUnits;
+if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0) {
+  const coldBase = baseTrue;
   const ttlSec = ('lastLegTtlSec' in rollup && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : 300;
   coldStakes = coldBase * Number(ctxTok) * (CacheWriteMult(ttlSec) - M_CACHE_READ);
   if (coldStakes >= 0.25) {
@@ -803,7 +970,9 @@ if (tpath && existsSync(tpath)) {
       if (!/"timestamp"/.test(line)) continue;
       if (/"tool_result"/.test(line)) continue;
       if (/"isMeta"\s*:\s*true/.test(line)) continue;
-      if (/"origin"\s*:\s*\{/.test(line)) continue;
+      // Since ~CC 2.1.209 every user line carries "origin":{"kind":...}: typed prompts are
+      // "human"; system-injected entries (task-notification etc.) are anything else — skip those only.
+      if (/"origin"\s*:\s*\{/.test(line) && !/"origin"\s*:\s*\{[^}]*"kind"\s*:\s*"human"/.test(line)) continue;
       const lastTsIdx = line.lastIndexOf('"timestamp"');
       if (lastTsIdx < 0) continue;
       const tsSection = line.substring(lastTsIdx, lastTsIdx + Math.min(120, line.length - lastTsIdx));
@@ -818,7 +987,9 @@ if (tpath && existsSync(tpath)) {
       let outputSum = 0;
       // The Bun-era writer (≥ ~2.1.215) emits one assistant line PER CONTENT BLOCK, each repeating
       // the same message.id + full usage — dedup on message.id so a K-block reply counts once.
-      // Id-less usage lines keep counting individually (cannot be deduped).
+      // Id-less usage lines keep counting individually (cannot be deduped). HAZARD: first-wins is
+      // exact for MAIN transcripts only (identical usage per dup line); agent transcripts carry
+      // PROGRESSIVE output_tokens — see the max-wins branch in UpdateAgentRollups.
       const seenTpsIds = new Set();
       for (let i = latestUserIdx + 1; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -878,6 +1049,7 @@ if (perLegCostArr.length > 0) {
   const cells = bucketAvgs.map((c) => isNil(c) ? Dim(' ····· ') : BgTint(LegRGB(c), '$' + fmtN(c, 2)));
   const legLabel = n <= maxBuckets ? '$/leg: ' : '$/leg avg: ';
   legsLine = Dim(legLabel) + Dim('[old] ') + cells.join('') + Dim(' [new]') + Dim(` (${n})`);
+  if (legPricingSuspect) legsLine += Dim(' ⚠ leg $ suspect: base far below list (resumed without history?)');
 }
 
 // === Cluster 5b: sub-agent fleet ===========================================
@@ -985,15 +1157,15 @@ const BIG_LEG_WINDOW = 8;
 let bigLegLines = [];
 if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   && !isNil(rollup.perLegUnits) && rollup.perLegUnits.length >= 1) {
-  const allUnits = rollup.perLegUnits.map(Number);
-  const medTail = allUnits.length > 20 ? allUnits.slice(allUnits.length - 20) : allUnits;
+  // Effective (tier-weighted) units throughout, like the sparkline.
+  const medTail = perLegEff.length > 20 ? perLegEff.slice(perLegEff.length - 20) : perLegEff;
   const medUsd = Number(baseTrue) * Median(medTail);
   const nL = Number(rollup.nLegs);
   const blRows = [];
   for (const rec of rollup.recentLegs) {
     const legsAgo = nL - Number(rec.idx);
     if (legsAgo < 0 || legsAgo >= BIG_LEG_WINDOW) continue;
-    const usd = Number(baseTrue) * Number(rec.units);
+    const usd = Number(baseTrue) * Number(rec.units) * tierWeight(rec.model, mainTier);
     const isBig = (usd >= BIG_LEG_FLOOR_USD) || (medUsd > 0 && usd >= (BIG_LEG_MULT * medUsd) && usd >= BIG_LEG_MIN_USD);
     if (!isBig) continue;
     const drv = getDriver(rec);
@@ -1024,16 +1196,27 @@ if (!isNil(d?.cost?.total_lines_added) || !isNil(d?.cost?.total_lines_removed)) 
 }
 if (tpsRendered) costParts.push(tpsRendered);
 if (tailWarning) costParts.push(RedBold('tail!'));
+// today: chip — CC's stats-cache.json aggregates every session of this config home. A row is one
+// blended number per model; since CC 2.1.221 (dailyModelTokensVersion 5) that number includes cache
+// reads/writes, older files count input+output only — the label says which. Sidecar `todayTokens`
+// carries the same fact (conditional key, present only when the chip fires).
+let todayTokens = null;
 const dailyStatsPath = join(ConfigHome, 'stats-cache.json');
 if (existsSync(dailyStatsPath)) {
   try {
     const stats = readJson(dailyStatsPath);
-    const today = new Date(NOW * 1000).toISOString().slice(0, 10); // UTC yyyy-MM-dd (matches Get-NowLocal under TZ=UTC)
-    const todayEntry = stats?.dailyModelTokens?.find((e) => e.date === today);
+    const today = new Date(NOW * 1000).toISOString().slice(0, 10); // UTC yyyy-MM-dd — CC keys rows by toISOString().split('T')[0]
+    const todayEntry = Array.isArray(stats?.dailyModelTokens) ? stats.dailyModelTokens.find((e) => e && e.date === today) : null;
     if (todayEntry) {
       let sumToday = 0;
       for (const k of Object.keys(todayEntry.tokensByModel || {})) sumToday += Number(todayEntry.tokensByModel[k]) || 0;
-      if (sumToday > 0) costParts.push(Dim('today:' + FmtNum(sumToday)));
+      if (sumToday > 0) {
+        const dmv = Number(stats.dailyModelTokensVersion) || 0;
+        const includesCache = dmv >= 5;
+        const n = sumToday >= 1e9 ? fmtN(sumToday / 1e9, 2) + 'B' : FmtNum(sumToday);
+        costParts.push(Dim(`today: ${n} tokens ${includesCache ? 'incl. cache' : 'in+out only'} · all sessions`));
+        todayTokens = { date: today, tokens: sumToday, includesCache, dailyModelTokensVersion: dmv };
+      }
     }
   } catch {}
 }
@@ -1061,8 +1244,9 @@ try {
     : ctxUsed < 32000 ? 'pristine' : ctxUsed < 128000 ? 'green' : ctxUsed < 256000 ? 'yellow' : ctxUsed < 500000 ? 'orange' : 'red';
   const fillStateV = isNil(ctxPct) ? null
     : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
+  // Thresholds = the Froz5RGB anchors (white 1.0 / yellow / orange / red from froz5-fit.json).
   const froz5State = isNil(ratio) ? null
-    : ratio < 1.0 ? 'green' : ratio < 1.8 ? 'white' : ratio < 2.8 ? 'yellow' : ratio < 3.8 ? 'orange' : 'red';
+    : ratio < 1.0 ? 'green' : ratio < 2.3 ? 'white' : ratio < 4.2 ? 'yellow' : ratio < 7.4 ? 'orange' : 'red';
   // Auto-compact off → toCompact is null (there is no compaction point) + the always-present
   // autoCompactOff flag, so handover-facts can phrase headroom honestly instead of "N to compact".
   const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
@@ -1079,7 +1263,7 @@ try {
   const prevSnap = readJson(sidecarPath);
   const prevGitRepo = (prevSnap && !isNil(prevSnap.gitRepo)) ? prevSnap.gitRepo : null;
   const snapshot = {
-    schema: 3,
+    schema: 5,
     sessionId: sessionId ?? null,
     renderedAt: NOW,
     transcriptPath: tpath ?? null,
@@ -1087,8 +1271,20 @@ try {
     // Present ONLY when a mid-session tier switch occurred (keeps the golden blast radius to the
     // switch fixtures; consumers already handle absent keys).
     ...(rollup && rollup.modelSwitch ? { modelSwitch: rollup.modelSwitch } : {}),
-    // FROZ5-STALE-CURVE interim (delete at the Phase 2 re-fit): present ONLY when stale, like modelSwitch.
+    // Present ONLY when the display tier is mapped and has NEVER served in this run (see
+    // servingTierReport): { display, serving }. Provenance for the fact sheet's COST_TIER_NOTE — it
+    // gates no number. Additive + conditional, so no schema bump (the fastMode / sessionName
+    // precedent).
+    ...(tierMismatch ? { tierMismatch } : {}),
+    // Warm-open low-confidence marker: present ONLY when the session opened warm (see the gate
+    // above the cost cluster), like modelSwitch.
     ...(froz5CalibStale ? { froz5CalibStale: true } : {}),
+    // Era signature + fresh-baseline material (schema 5): leg 1's cold-start verdict and its cache
+    // write (the pristine floor), and how many warm legs the baseline stands on (< FRESH_N →
+    // provisional; 0 → no baseline yet). Null when no rollup exists.
+    firstLegColdStart: rollup ? (rollup.firstLegColdStart ?? null) : null,
+    openingLegCw: rollup ? (rollup.openingLegCw ?? null) : null,
+    freshLegN: rollup ? (fb?.n ?? 0) : null,
     windowSize: ctxSize ?? null,
     effort,
     ctxTokens: ctxUsed ?? null,
@@ -1104,9 +1300,23 @@ try {
     freshLegUsd: freshBaseline,
     lastLegUsd: rollup ? (rollup.lastLegCost ?? null) : null,
     nLegs: rollup ? Number(rollup.nLegs) : null,
+    // First leg of the CURRENT run (0 = the session's first run); legs before it predate this
+    // run and are priced at this run's rate. Present whenever a rollup exists.
+    runStartLeg: rollup ? Number(rollup.runStartLeg) : null,
+    // Present ONLY when the base sits far below the main tier's list price (a resume the
+    // detection could not see — no local history); the $ are flagged, never recomputed.
+    ...(legPricingSuspect ? { legPricingSuspect: true } : {}),
+    // Present ONLY when fast mode is on: every $ in this sidecar excludes the fast premium.
+    ...(fastMode ? { fastMode: true } : {}),
+    // Present ONLY when the payload carries a session_name: the snapshot owner's name, persisted at
+    // write time so the fact sheet's FOREIGN guard can name that side in words.
+    ...(sessionName ? { sessionName } : {}),
+    // Present ONLY when today's row exists in stats-cache.json with a positive sum: what the
+    // today: chip (session line) states, incl. whether the number counts cache tokens.
+    ...(todayTokens ? { todayTokens } : {}),
     nColdLegs: rollup ? Number(rollup.nColdLegs) : null,
-    coldWastedUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.coldWastedUnits), 2) : null,
-    lastColdTaxUsd: (rollup && Number(rollup.sumUnits) > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD((Number(sessionCost) / totalUnits) * Number(rollup.lastColdWastedUnits), 2) : null,
+    coldWastedUsd: (rollup && totalUnits > 0 && sessionCost > 0) ? mathRoundD(baseTrue * Number(rollup.coldWastedUnits), 2) : null,
+    lastColdTaxUsd: (rollup && totalUnits > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * Number(rollup.lastColdWastedUnits), 2) : null,
     lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
     coldStakeUsd,
     coldState,
@@ -1182,6 +1392,7 @@ try {
   }
 } catch {}
 
+// Session line display-gated off by Florian's choice (2026-08-17); it still builds and feeds the sidecar.
 const ShowSessionLine = false;
 
 const out = [];

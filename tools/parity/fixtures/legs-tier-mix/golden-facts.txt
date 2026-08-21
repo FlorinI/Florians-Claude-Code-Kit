@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `legs-tie` · Fable 5 (1M context) · `107k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=froz5 2.0233333333333334 / next 0.6070000000000001 (lvl 2)
+COST_LEAD: each leg `~$0.61`, `2.02×` a fresh leg
+COST_TOTAL: `$1.65` total
+COST_CHAR: started cheap — the early warm legs were unusually light, so even modest context growth reads as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
+COST_FROZ5: cause=light-start; froz5 `2.02×` vs `1.55×` typical at this depth (residual 1.30×); confidence=low; baseline=provisional (2 of 5 warm legs)
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COLD: the ~1-hour cache is starting to cool (`~40 min` of warmth left) — a send keeps it warm
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `107k`, green band — sharp
+QUALITY_SECONDARY: `15%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `368k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: flat, range `$0.20`–`$0.77`
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

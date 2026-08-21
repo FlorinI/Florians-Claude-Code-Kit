@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, getDriver, M_CACHE_READ, M_OUTPUT } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, getDriver, ModelTier, tierWeight, M_CACHE_READ, M_OUTPUT } from './leg-driver.mjs';
 import { fmtN, nowEpoch, psRound } from './_sl-compat.mjs';
 
 const argv = process.argv.slice(2);
@@ -66,30 +66,33 @@ if (snap.renderedAt) {
 }
 
 // --- scan transcript via the ONE shared scan, so the panel and the fact sheet agree by construction ---
-const legs = getScannedLegs(tpath);
-const sumUnits = legs.reduce((a, l) => a + l.units, 0);
+// Effective units = raw × the leg's tier weight relative to the MAIN tier (tierWeight, shared with
+// the status line) — so a Sonnet leg on a Fable session prices at Sonnet, exactly as the sparkline.
+const mainTier = ModelTier(snap.model);
+const legs = getScannedLegs(tpath).map((l) => ({ ...l, eff: l.units * tierWeight(l.model, mainTier) }));
+const sumUnits = legs.reduce((a, l) => a + l.eff, 0);
 if (legs.length === 0 || sumUnits <= 0) done('(no priced legs in the transcript yet)');
 
 // --- session cost — total_cost_usd IS session-local (CC resets it on /clear since 2.1.211) ---
 let sessionCost = Number(snap.costUsd);
-// Use the status line's DE-INFLATED base (sessionCost / (main + sub-agent units)) from the sidecar, so the
-// spike $ and the avoidable cold tax reconcile with the status line. Fall back to the local main-only base
-// only for pre-bsl4.0.0.0 snapshots that lack the field.
+// Use the status line's DE-INFLATED base (this run's sessionCost / (main + sub-agent EFFECTIVE units))
+// from the sidecar, so the spike $ and the avoidable cold tax reconcile with the status line. Fall back
+// to the local main-only base only for pre-bsl4.0.0.0 snapshots that lack the field.
 const base = snap.base != null ? Number(snap.base) : (sessionCost > 0 ? sessionCost / sumUnits : 0);
 
-// --- top-N by cost (units is monotonic with $, base flat), oldest=leg 1 ---
-const topLegs = [...legs].sort((a, b) => b.units - a.units).slice(0, Top);
+// --- top-N by cost (effective units are monotonic with $, base flat), oldest=leg 1 ---
+const topLegs = [...legs].sort((a, b) => b.eff - a.eff).slice(0, Top);
 let anyCold = false;
 const bodyLines = [];
 for (const l of topLegs) {
-  const usd = '$' + fmtN(l.units * base, 2);
+  const usd = '$' + fmtN(l.eff * base, 2);
   let drv = getDriver(l);
   const isCold = testColdLeg(l);
   if (isCold) {
     anyCold = true;
     // Surface THIS leg's avoidable premium INSIDE the driver text: (write units − read-equivalent) × base —
     // the exact quantity the status line's cumulative tax sums.
-    const legTax = (l.cwUnits - l.cw * M_CACHE_READ) * base;
+    const legTax = (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base;
     if (drv.endsWith(')')) drv = drv.slice(0, -1) + ('; $' + fmtN(legTax, 2) + ' avoidable cold tax)');
   }
   const mark = isCold ? `${snow} ` : '  ';
@@ -107,11 +110,16 @@ outLines.push(...bodyLines);
 if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
   try {
     const acache = JSON.parse(readFileSync(snap.agentsCachePath, 'utf8'));
-    const liveAg = (acache.agents || []).filter((a) => a && Number(a.legs) > 0);
+    // This run's agents only (same filter as the status line's fleet aggregate), priced on EFFECTIVE
+    // units (raw × tierWeight vs the main tier — the same weight the agents chip uses), so the panel
+    // total equals the sidecar's agentsUsd to the cent, tier-mix or not.
+    const liveAg = (acache.agents || [])
+      .filter((a) => a && Number(a.legs) > 0 && (a.run ?? acache.run) === acache.run)
+      .map((a) => ({ ...a, effU: Number(a.units) * tierWeight(a.model, mainTier) }));
     if (liveAg.length > 0) {
-      const medU = median(liveAg.map((a) => Number(a.units)));
-      const topAg = [...liveAg].sort((a, b) => Number(b.units) - Number(a.units)).slice(0, Top);
-      const agUsd = liveAg.reduce((s, a) => s + Number(a.units), 0) * base;
+      const medU = median(liveAg.map((a) => a.effU));
+      const topAg = [...liveAg].sort((a, b) => b.effU - a.effU).slice(0, Top);
+      const agUsd = liveAg.reduce((s, a) => s + a.effU, 0) * base;
       const agPct = sessionCost > 0 ? ` (${psRound(100 * agUsd / sessionCost)}%)` : '';
       // Workflow siblings can share a long identical preamble even past the TASK marker; re-window
       // colliding labels to start near their mutual divergence point so each row shows what DIFFERS.
@@ -136,8 +144,8 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
         if (label.length > 58) label = label.slice(0, 57) + '…';
         if (seen[label]) label = label.slice(0, 50) + ` [${aid.slice(0, 5)}]`;
         seen[label] = true;
-        const usd = '$' + fmtN(Number(a.units) * base, 2);
-        const xMed = medU > 0 ? `${fmtN(Number(a.units) / medU, 1)}x med` : '—';
+        const usd = '$' + fmtN(a.effU * base, 2);
+        const xMed = medU > 0 ? `${fmtN(a.effU / medU, 1)}x med` : '—';
         // decomposition from the stored aggregates: re-read (cache_read) / ingest (input+cache_write) / output
         const reRead = Number(a.units) - Number(a.ownUnits);
         const outU = Number(a.out) * M_OUTPUT;
@@ -146,7 +154,7 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
         if (reRead >= ingest && reRead >= outU) cause = `mostly re-reading its context (${a.legs} legs over ~${psRound(Number(a.maxCtx) / 1000)}k)`;
         else if (ingest >= outU) cause = `mostly loading content (ctx grew to ~${psRound(Number(a.maxCtx) / 1000)}k)`;
         else cause = `mostly generating output (~${psRound(Number(a.out) / 1000)}k out)`;
-        const peak = Number(a.maxLegUnits) > 0 ? `  ${MID}  peak leg $${fmtN(Number(a.maxLegUnits) * base, 2)}` : '';
+        const peak = Number(a.maxLegUnits) > 0 ? `  ${MID}  peak leg $${fmtN(Number(a.maxLegUnits) * tierWeight(a.model, mainTier) * base, 2)}` : '';
         agLines.push(`   "${label}"  ${MID}  ${usd}  ${MID}  ${xMed}  ${MID}  ${a.legs} legs${peak}  ${MID}  ${cause}`);
       }
       outLines.push('');

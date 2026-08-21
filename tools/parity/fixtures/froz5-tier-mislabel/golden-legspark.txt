@@ -1,0 +1,5 @@
+from session froz5-ti · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=124  ·  range $0.12–$2.36  ·  raw peak $7.13  ·  height ∝ cost (peak = full)  ·  124 legs → 100 cols
+                                                                                                ▇▇██
+▁                                                                                              ▅████
+█▅▃▃▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▂▂▁▁▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▃▃▃▃▃▂▂▂▂▂▂▂▂▃▃▂▃█████

@@ -16,7 +16,10 @@
     66200,
     13580
   ],
-  "costBaseline": 1,
+  "perLegModels": [
+    "",
+    ""
+  ],
   "lastLegTs": 1781759750,
   "lastWarm": 33000,
   "nColdLegs": 0,
@@ -39,7 +42,8 @@
       "units": 66200,
       "gapToPrev": null,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": ""
     },
     {
       "idx": 2,
@@ -51,7 +55,32 @@
       "units": 16580,
       "gapToPrev": 50,
       "coldTtl": 3600,
-      "prevWarm": 30000
+      "prevWarm": 30000,
+      "model": ""
     }
-  ]
+  ],
+  "runIdx": 0,
+  "runStartLeg": 0,
+  "openingLegs": [
+    {
+      "idx": 1,
+      "inT": 200,
+      "cw": 30000,
+      "cr": 0,
+      "out": 1200,
+      "units": 66200,
+      "model": ""
+    },
+    {
+      "idx": 2,
+      "inT": 80,
+      "cw": 3000,
+      "cr": 30000,
+      "out": 1500,
+      "units": 16580,
+      "model": ""
+    }
+  ],
+  "firstLegColdStart": false,
+  "openingLegCw": 30000
 }

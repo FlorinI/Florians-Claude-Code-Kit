@@ -1,0 +1,5 @@
+from session fresh-fa · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 13 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.58  ·  opened cold ~57k (whole context written, no cached prefix)
+   Leg 12  ·  $0.43  ·  compacted ~40k (context collapsed, no idle gap)
+   Leg 11  ·  $0.41  ·  compacted ~38k (context collapsed, no idle gap)

@@ -1,0 +1,5 @@
+from session froz5-ti · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 12 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $1.16  ·  opened cold ~57k (whole context written, no cached prefix)
+   Leg 12  ·  $0.11  ·  re-read deep context (~80k)
+   Leg 11  ·  $0.11  ·  re-read deep context (~77k)

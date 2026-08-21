@@ -1,11 +1,11 @@
 IDENTITY: **Reading** `(no repo)` · `agents-t` · Opus 4.8 (1M context) · `51k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: + Plenty of room · sub-agents are 65% of spend
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 0.6111873961118739 / next 0.3348650811513742 (lvl 0)
-COST_LEAD: each leg `~$0.33`, `0.61×` a fresh leg
+HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 1.1126899546082494 / next 0.3348650811513742 (lvl 0)
+COST_LEAD: each leg `~$0.33`, `1.11×` a fresh leg
 COST_TOTAL: `$4.75` total
-COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
-COST_FROZ5: cause=light-start; froz5 `0.61×` vs `0.30×` typical at this depth (residual 2.03×); confidence=low
+COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
+COST_FROZ5: cause=on-curve; froz5 `1.11×` vs `1.38×` typical at this depth (residual 0.80×); confidence=low; baseline=provisional (2 of 5 warm legs)
 COST_DETAIL: main `$1.64` · agents `$3.11` over `3` legs
 COST_AGENTS_TIER: lead
 COST_AGENTS_LEAD: most of the spend is sub-agents — `$3.11` of `$4.75` (`65%`) across `3` legs from `3` agents

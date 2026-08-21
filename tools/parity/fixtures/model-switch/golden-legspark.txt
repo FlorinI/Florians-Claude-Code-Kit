@@ -1,5 +1,5 @@
 from session model-sw · (no repo) · rendered 0s ago
-per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=13  ·  range $0.15–$0.15  ·  raw peak $0.15  ·  height ∝ cost (peak = full)
-█████████████
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=13  ·  range $0.92–$1  ·  raw peak $1  ·  height ∝ cost (peak = full)
+████████████▆
 █████████████
 █████████████

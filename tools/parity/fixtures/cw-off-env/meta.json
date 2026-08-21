@@ -1,0 +1,7 @@
+{
+  "nowEpoch": 1781750000,
+  "env": {
+    "DISABLE_AUTO_COMPACT": "1",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000"
+  }
+}

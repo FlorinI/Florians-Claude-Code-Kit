@@ -6,7 +6,7 @@
   "lastMsgId": "msw12",
   "lastInputBilled": 0,
   "lastOutputTokens": 20000,
-  "lastSeenCost": 1.8,
+  "lastSeenCost": 12,
   "lastLegCost": null,
   "perLegUnits": [
     100000,
@@ -36,7 +36,20 @@
     100000,
     100000
   ],
-  "costBaseline": 0,
+  "perLegModels": [
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5",
+    "claude-fable-5"
+  ],
   "lastLegTs": 1781749260,
   "lastWarm": 0,
   "nColdLegs": 0,
@@ -56,7 +69,8 @@
       "units": 100000,
       "gapToPrev": null,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 2,
@@ -68,7 +82,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 3,
@@ -80,7 +95,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 4,
@@ -92,7 +108,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 5,
@@ -104,7 +121,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 6,
@@ -116,7 +134,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 7,
@@ -128,7 +147,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 8,
@@ -140,7 +160,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 9,
@@ -152,7 +173,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 10,
@@ -164,7 +186,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 11,
@@ -176,7 +199,8 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     },
     {
       "idx": 12,
@@ -188,8 +212,123 @@
       "units": 100000,
       "gapToPrev": 60,
       "coldTtl": 300,
-      "prevWarm": 0
+      "prevWarm": 0,
+      "model": "claude-fable-5"
     }
   ],
-  "mainModel": "Fable 5 (1M context)"
+  "mainModel": "Fable 5 (1M context)",
+  "runIdx": 0,
+  "runStartLeg": 0,
+  "openingLegs": [
+    {
+      "idx": 1,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 2,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 3,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 4,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 5,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 6,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 7,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 8,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 9,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 10,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 11,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    },
+    {
+      "idx": 12,
+      "inT": 0,
+      "cw": 0,
+      "cr": 0,
+      "out": 20000,
+      "units": 100000,
+      "model": "claude-fable-5"
+    }
+  ],
+  "firstLegColdStart": false,
+  "openingLegCw": 0
 }

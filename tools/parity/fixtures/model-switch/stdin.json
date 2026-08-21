@@ -14,7 +14,7 @@
   "transcript_path": "P",
   "session_id": "model-switch-1",
   "cost": {
-    "total_cost_usd": 2,
+    "total_cost_usd": 12.2,
     "total_api_duration_ms": 300000,
     "total_lines_added": 0,
     "total_lines_removed": 0

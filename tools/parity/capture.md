@@ -56,6 +56,10 @@ the main transcript path: `<transcript-minus-.jsonl>/subagents`).
 | `no-transcript`| missing transcript file → rollup null, null-safety, quota only |
 | `agents`       | sub-agent fleet → agents line + base de-inflation over the combined unit pool |
 | `incremental`  | pre-seeded stats (`seed/`) → `hadPrior` + last-leg-cost delta |
+| `legs-tier-mix` | Sonnet opening leg on a Fable main → per-leg tier weight (leg 1 $0.28, not the blend's $0.83) |
+| `resumed-run`  | 12 legs banked in `seed/` at $6, stdin cost $0.50 → detected resume (`runStartLeg 12`, `COST_RUN_NOTE`) |
+| `resumed-nohistory` | same 13-leg transcript, no seed → `legPricingSuspect` tripwire (chip + facts note) |
+| `agents-progressive` | one agent message id on 3 lines, `output_tokens` 5/5/5000 → max-wins banking (agents $0.25) |
 
 ## Capturing a real fixture
 

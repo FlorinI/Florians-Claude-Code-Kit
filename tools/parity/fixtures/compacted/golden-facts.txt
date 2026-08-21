@@ -1,11 +1,11 @@
 IDENTITY: **Reading** `(no repo)` · `compacte` · Opus 4.8 (1M context) · `49k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: + Plenty of room
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 0.3969658659924147 / next 0.1256 (lvl 0)
-COST_LEAD: each leg `~$0.13`, `0.40×` a fresh leg
+HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 0.98125 / next 0.1256 (lvl 0)
+COST_LEAD: each leg `~$0.13`, `0.98×` a fresh leg
 COST_TOTAL: `$1.71` total
 COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
-COST_FROZ5: cause=on-curve; froz5 `0.40×` vs `0.29×` typical at this depth (residual 1.37×); confidence=low
+COST_FROZ5: cause=on-curve; froz5 `0.98×` vs `1.38×` typical at this depth (residual 0.71×); confidence=low
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

@@ -1,11 +1,11 @@
 IDENTITY: **Reading** `(no repo)` · `b1-chip-` · Fable 5 (1M context) · `51k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: - Wind down soon
-HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=froz5 1.0102 / next 6.608834458575391 (lvl 2)
-COST_LEAD: each leg `~$6.61`, `1.01×` a fresh leg
+HEADLINE_DIFF: + Plenty of room
+HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 null / next 6.608834458575391 (lvl 0)
+COST_LEAD: each leg `~$6.61`, `?` a fresh leg
 COST_TOTAL: `$40.00` total
-COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
-COST_FROZ5: cause=light-start; froz5 `1.01×` vs `0.30×` typical at this depth (residual 3.36×); confidence=low
+COST_CHAR: no cost trend yet
+COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
 COST_DETAIL: main `$39.25` · agents `$0.75` over `12` legs
 COST_AGENTS_TIER: minor
 COST_AGENTS_LEAD: (none)
@@ -17,5 +17,5 @@ QUALITY_HEADROOM: `424k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit — 12 sub-agents ran; activity% folds their parallel compute, so it does not signal your work pattern)
 TRAJECTORY: flat, range `$6.54`–`$6.54`
-YOURCALL_POLARITY: -
-YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: both axes fine — room to continue on recent context

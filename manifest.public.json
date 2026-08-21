@@ -8,6 +8,7 @@
     { "source": "home/_sl-compat.mjs", "dest": "_sl-compat.mjs" },
     { "source": "home/leg-driver.mjs", "dest": "leg-driver.mjs" },
     { "source": "home/sidecar-path.mjs", "dest": "sidecar-path.mjs" },
+    { "source": "home/sanitize-name.mjs", "dest": "sanitize-name.mjs" },
     { "source": "home/render-legspark.mjs", "dest": "render-legspark.mjs" },
     { "source": "home/render-spikes.mjs", "dest": "render-spikes.mjs" },
     { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },

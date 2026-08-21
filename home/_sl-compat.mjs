@@ -16,7 +16,8 @@
 //   3. UTC timestamp parsing. The .NET DateTimeOffset.Parse(..., AssumeUniversal) treats
 //      a bare (offset-less) ISO datetime as UTC; JS Date.parse treats it as LOCAL. → parseUtcEpoch.
 
-import { writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { writeFileSync, renameSync, unlinkSync, readdirSync, statSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // atomicWriteFile(path, text) — crash-safe state write: write to a temp file in the SAME directory
@@ -32,6 +33,25 @@ export function atomicWriteFile(path, text) {
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* best effort */ }
     throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// sweepStaleFiles(dir, cutoffEpoch, { match, keepPrefix }) — the writers' housekeeping sweep for
+// the state files atomicWriteFile produces. Removes every entry of `dir` (non-recursive) whose
+// mtime (epoch seconds) is older than `cutoffEpoch` and whose name passes `match(name)`, skipping
+// names that start with `keepPrefix` (the caller's own live files). Best-effort by contract: a
+// missing dir, an unreadable entry, a concurrent delete — every error is swallowed, nothing throws.
+export function sweepStaleFiles(dir, cutoffEpoch, { match, keepPrefix } = {}) {
+  let names;
+  try { names = readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    try {
+      if (keepPrefix && name.startsWith(keepPrefix)) continue;
+      if (typeof match === 'function' && !match(name)) continue;
+      const fp = join(dir, name);
+      if (statSync(fp).mtimeMs / 1000 < cutoffEpoch) rmSync(fp, { force: true });
+    } catch { /* best effort */ }
   }
 }
 

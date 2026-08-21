@@ -3,3 +3,7 @@ top 3 cost spikes  ·  of 3 legs  ·  session-$ basis  ·  leg 1 = oldest
    Leg 1  ·  $1.71  ·  loaded ~40k new context
    Leg 3  ·  $0.54  ·  loaded ~6k new context
    Leg 2  ·  $0.45  ·  loaded ~5k new context
+
+top 2 agents  ·  of 2  ·  $2.06 (43%)  ·  whole-agent totals (agents never appear in the leg list above)
+   "1"  ·  $1.58  ·  1.5x med  ·  2 legs  ·  peak leg $1.07  ·  mostly loading content (ctx grew to ~22k)
+   "2"  ·  $0.48  ·  0.5x med  ·  3 legs  ·  peak leg $0.24  ·  mostly generating output (~7k out)

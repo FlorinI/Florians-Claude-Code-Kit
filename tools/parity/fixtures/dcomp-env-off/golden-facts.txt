@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `dcomp-en` · Opus 4.8 (1M context) · `400k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=quality; quality=orange (lvl 2); cost=froz5 null / next null (lvl 0)
+COST_LEAD: each leg `~$?`, `?` a fresh leg
+COST_TOTAL: `$4.75` total
+COST_CHAR: no cost trend yet
+COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COLD: (omit)
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `400k`, orange band — real degradation on complex full-context reasoning
+QUALITY_SECONDARY: `40%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `75k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: flat, range `?`
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work

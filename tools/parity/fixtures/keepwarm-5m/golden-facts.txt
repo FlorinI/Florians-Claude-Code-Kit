@@ -4,8 +4,8 @@ HEADLINE_DIFF: + Getting deeper
 HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 2.2 / next 0.44000000000000006 (lvl 0)
 COST_LEAD: each leg `~$0.44`, `2.20×` a fresh leg
 COST_TOTAL: `$2.00` total
-COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
-COST_FROZ5: cause=light-start; froz5 `2.20×` vs `0.95×` typical at this depth (residual 2.31×); confidence=ok
+COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
+COST_FROZ5: cause=on-curve; froz5 `2.20×` vs `1.80×` typical at this depth (residual 1.22×); confidence=low; baseline=provisional (4 of 5 warm legs)
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

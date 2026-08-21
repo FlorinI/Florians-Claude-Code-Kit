@@ -1,11 +1,11 @@
 IDENTITY: **Reading** `(no repo)` · `incr-1` · Opus 4.8 (1M context) · `38k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: + Plenty of room
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 0.6750494489968918 / next 0.36002637279834226 (lvl 0)
-COST_LEAD: each leg `~$0.36`, `0.68×` a fresh leg
+HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 1.195396547410558 / next 0.36002637279834226 (lvl 0)
+COST_LEAD: each leg `~$0.36`, `1.20×` a fresh leg
 COST_TOTAL: `$1.60` total
-COST_CHAR: started cheap — a light opening leg makes even modest context growth read as a high multiple; the ratio overstates escalation, so the absolute next-leg $ is the grounding number
-COST_FROZ5: cause=light-start; froz5 `0.68×` vs `0.23×` typical at this depth (residual 2.94×); confidence=low
+COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
+COST_FROZ5: cause=on-curve; froz5 `1.20×` vs `1.34×` typical at this depth (residual 0.89×); confidence=low; baseline=provisional (2 of 5 warm legs)
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

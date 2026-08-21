@@ -1,0 +1,5 @@
+from session froz5-of · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 150 legs  ·  session-$ basis  ·  leg 1 = oldest  ·  ❆ = counted in the cold tax
+❆  Leg 117  ·  $5.81  ·  re-cached ~557k (cold — cache expired after idle; $5.35 avoidable cold tax)
+❆  Leg 52  ·  $3.51  ·  re-cached ~339k (cold — cache expired after idle; $3.26 avoidable cold tax)
+   Leg 53  ·  $3.51  ·  compacted ~344k (context collapsed, no idle gap)

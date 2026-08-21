@@ -13,9 +13,15 @@
 // against future drift. Determinism mirrors run-parity.mjs: a throwaway temp HOME + project dir, the
 // fixture's frozen nowEpoch (CLAUDE_SL_NOW_EPOCH) + TZ=UTC, and CLAUDE_CODE_SESSION_ID UNSET so the
 // FOREIGN ownership guard doesn't fire on the harness's own session id.
+//
+// Fixtures WITH sub-agents (transcript/subagents/) first run the status-line engine once into the temp
+// cwd — same stdin rewrite, seeds and env as run-parity.mjs — so the agents cache exists there; the golden
+// sidecar's agentsCachePath is then rewritten to that temp cache and render-spikes renders the agent
+// panel. Fixtures without agents keep the plain path (no engine run).
 
 import {
   readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, readdirSync, statSync,
+  copyFileSync, utimesSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,19 +38,52 @@ const SCRIPTS = {
   spikes: { file: join(homeDir, 'render-spikes.mjs'), args: ['--mono', '--frozen'], golden: 'golden-spikes.txt' },
 };
 
-function runTrio(fixDir, nowEpoch) {
+const engineScript = join(homeDir, 'statusline.mjs');
+
+function copyDirInto(srcDir, dstDir) {
+  if (!existsSync(srcDir)) return;
+  for (const name of readdirSync(srcDir)) {
+    const s = join(srcDir, name);
+    const d = join(dstDir, name);
+    if (statSync(s).isDirectory()) { mkdirSync(d, { recursive: true }); copyDirInto(s, d); }
+    else copyFileSync(s, d);
+  }
+}
+
+// Latest "timestamp" in the transcript (epoch ms) — pins the file mtime like run-parity.mjs does.
+function latestTimestampMs(file) {
+  let max = null;
+  const re = /"timestamp"\s*:\s*"([^"]+)"/g;
+  const text = readFileSync(file, 'utf8');
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const ms = Date.parse(m[1]);
+    if (!Number.isNaN(ms) && (max === null || ms > max)) max = ms;
+  }
+  return max;
+}
+
+// One engine render into the temp dirs (mirrors run-parity.mjs's runNode) — used only for fixtures
+// with sub-agents, so their agents cache exists under <tempCwd>/.claude/statusline-stats/.
+function preRunEngine(fixDir, tempHome, tempCwd, transcript, env, meta) {
+  copyDirInto(join(fixDir, 'home-seed'), join(tempHome, '.claude'));
+  copyDirInto(join(fixDir, 'seed'), join(tempCwd, '.claude'));
+  const stdin = JSON.parse(readFileSync(join(fixDir, 'stdin.json'), 'utf8'));
+  stdin.transcript_path = transcript;
+  const endMs = latestTimestampMs(transcript);
+  if (endMs != null) { const s = endMs / 1000; utimesSync(transcript, s, s); }
+  stdin.workspace = stdin.workspace || {};
+  stdin.workspace.current_dir = tempCwd;
+  if ('cwd' in stdin) stdin.cwd = tempCwd;
+  execFileSync(process.execPath, [engineScript],
+    { input: JSON.stringify(stdin), env: { ...env, ...(meta.env || {}) }, maxBuffer: 64 * 1024 * 1024 });
+}
+
+function runTrio(fixDir, nowEpoch, meta) {
   const tempHome = mkdtempSync(join(tmpdir(), 'trio-home-'));
   const tempCwd = mkdtempSync(join(tmpdir(), 'trio-cwd-'));
   mkdirSync(join(tempHome, '.claude'), { recursive: true });
   mkdirSync(join(tempCwd, '.claude'), { recursive: true });
-
-  // Frozen snapshot = the fixture's golden sidecar, with transcriptPath pointed at the fixture transcript.
-  const sidecar = JSON.parse(readFileSync(join(fixDir, 'golden-sidecar.json'), 'utf8'));
-  const transcript = join(fixDir, 'transcript.jsonl');
-  if (existsSync(transcript)) sidecar.transcriptPath = transcript;
-  else sidecar.transcriptPath = null;
-  // handover-facts reads the live sidecar (project-local) then freezes it; render-* read the freeze.
-  writeFileSync(join(tempCwd, '.claude', 'statusline-last.json'), JSON.stringify(sidecar), 'utf8');
 
   const env = {
     ...process.env,
@@ -59,6 +98,21 @@ function runTrio(fixDir, nowEpoch) {
     CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
   };
   delete env.CLAUDE_CODE_SESSION_ID; // else the FOREIGN guard fires on the harness's own session
+
+  // Frozen snapshot = the fixture's golden sidecar, with transcriptPath pointed at the fixture transcript.
+  const sidecar = JSON.parse(readFileSync(join(fixDir, 'golden-sidecar.json'), 'utf8'));
+  const transcript = join(fixDir, 'transcript.jsonl');
+  if (existsSync(transcript)) sidecar.transcriptPath = transcript;
+  else sidecar.transcriptPath = null;
+  // Sub-agent fixtures: pre-run the engine so the agents cache exists in the temp cwd, then point the
+  // golden sidecar's agentsCachePath at it (the committed path is a long-deleted temp dir).
+  if (existsSync(transcript) && existsSync(join(fixDir, 'transcript', 'subagents'))) {
+    preRunEngine(fixDir, tempHome, tempCwd, transcript, env, meta);
+    if (sidecar.sessionId) sidecar.agentsCachePath = join(tempCwd, '.claude', 'statusline-stats', `${sidecar.sessionId}.agents.json`);
+  }
+  // handover-facts reads the live sidecar (project-local) then freezes it; render-* read the freeze.
+  // (Written AFTER the pre-run, so the trio sees the committed golden, not the engine's fresh sidecar.)
+  writeFileSync(join(tempCwd, '.claude', 'statusline-last.json'), JSON.stringify(sidecar), 'utf8');
 
   const out = {};
   for (const [key, spec] of Object.entries(SCRIPTS)) {
@@ -88,7 +142,7 @@ function main() {
     const nowEpoch = meta.nowEpoch ?? Math.floor(Date.now() / 1000);
 
     let out, err = null;
-    try { out = runTrio(fixDir, nowEpoch); }
+    try { out = runTrio(fixDir, nowEpoch, meta); }
     catch (e) { err = e.stderr ? e.stderr.toString() : e.message; }
     if (err) { results.push({ name, ok: false, detail: `ERROR:\n${err}` }); continue; }
 

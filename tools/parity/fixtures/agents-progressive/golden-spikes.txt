@@ -1,0 +1,6 @@
+from session agents-p · (no repo) · rendered 0s ago
+top 1 cost spikes  ·  of 1 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.50  ·  generated ~10k output
+
+top 1 agents  ·  of 1  ·  $0.25 (33%)  ·  whole-agent totals (agents never appear in the leg list above)
+   "Draft the release notes for the progressive-usage fixture"  ·  $0.25  ·  1.0x med  ·  1 legs  ·  peak leg $0.25  ·  mostly generating output (~5k out)

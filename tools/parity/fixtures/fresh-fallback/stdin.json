@@ -1,0 +1,26 @@
+{
+  "model": {
+    "display_name": "Opus 5"
+  },
+  "version": "2.1.233",
+  "effort": {
+    "level": "high"
+  },
+  "context_window": {
+    "used_percentage": 8,
+    "total_input_tokens": 80500,
+    "context_window_size": 1000000
+  },
+  "transcript_path": "P",
+  "session_id": "fresh-fallback-1",
+  "cost": {
+    "total_cost_usd": 4.22763,
+    "total_api_duration_ms": 300000,
+    "total_lines_added": 0,
+    "total_lines_removed": 0
+  },
+  "workspace": {
+    "current_dir": "P"
+  },
+  "rate_limits": {}
+}

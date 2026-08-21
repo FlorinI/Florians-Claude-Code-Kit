@@ -57,6 +57,49 @@ test('F3 — sidecar snapshot block sits above the git cluster', () => {
   assert.ok(sidecarAt < gitAt, 'sidecar write must precede the git subprocess cluster');
 });
 
+// ---- froz5-recal (2026-08-16 sprint 2): S1–S3 -------------------------------------------------
+// The version gate, its interim comments and the pre-fit caveat prose have no runtime observable once
+// gone; the harvest's zero-deps rule and home/'s closed import surface likewise.
+const importSpecifiers = (s) => [...s.matchAll(/^import[\s\S]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+
+test('S1 — statusline.mjs: no version gate / interim marker left; SL_VERSION is 5.x', () => {
+  const s = src('home/statusline.mjs');
+  for (const bad of ['verGte', '[2, 1, 219]', 'FROZ5-STALE-CURVE interim', 'delete at the Phase 2']) {
+    assert.ok(!s.includes(bad), `statusline.mjs must not contain: ${bad}`);
+  }
+  assert.match(s, /export const SL_VERSION = '5\.\d+\.\d+\.\d+';/);
+});
+
+test('S2 — handover-facts.mjs: corrected-direction prose in, pre-fit caveat and tier-keyed gloss out', () => {
+  const s = src('home/handover-facts.mjs');
+  for (const bad of ['pre-Opus-5 prompt cut', 'curve=stale', 'predates the Opus-5 prompt cut']) {
+    assert.ok(!s.includes(bad), `handover-facts.mjs must not contain: ${bad}`);
+  }
+  assert.ok(!/sessionTier === 'sonnet'\s*\?/.test(s), 'the tier-keyed warm-rewrite gloss must be gone (generation-keyed now)');
+  for (const good of ['era=warm-open (curve fit on post-2.1.209 cold-start sessions)', 'baseline=provisional', 'never had cache-preserving injection', 'opened on a warm shared prefix']) {
+    assert.ok(s.includes(good), `handover-facts.mjs must contain: ${good}`);
+  }
+  // A5 still holds with the new leg-driver exports
+  const ld = src('home/leg-driver.mjs');
+  for (const bad of ['fetch(', 'node:http', 'node:https', 'process.env']) assert.ok(!ld.includes(bad), `leg-driver.mjs must not contain: ${bad}`);
+  for (const exp of ['FRESH_N', 'FRESH_WINDOW', 'FRESH_WRITE_SHARE', 'median', 'writeShare', 'isWriteHeavyLeg', 'isColdStartLeg', 'pickFreshBaseline']) {
+    assert.match(ld, new RegExp(`export (const|function) ${exp}\\b`), `leg-driver.mjs exports ${exp}`);
+  }
+});
+
+test('S3 — import surface: the harvest imports only node: built-ins + ../../home/leg-driver.mjs; home/ imports nothing new', () => {
+  const hv = importSpecifiers(src('tools/calibration/harvest-froz5.mjs'));
+  assert.ok(hv.length >= 2, `harvest imports found: ${hv}`);
+  for (const spec of hv) {
+    assert.ok(spec.startsWith('node:') || spec === '../../home/leg-driver.mjs', `harvest-froz5.mjs imports ${spec}`);
+  }
+  for (const f of ['home/statusline.mjs', 'home/leg-driver.mjs', 'home/handover-facts.mjs']) {
+    for (const spec of importSpecifiers(src(f))) {
+      assert.ok(spec.startsWith('node:') || /^\.\/[\w-]+\.mjs$/.test(spec), `${f} imports ${spec}`);
+    }
+  }
+});
+
 // ---- D4: calibration sample rows carry the session model ---------------------------------------
 // Private-repo docs; skipped when absent so this suite stays runnable from a public checkout.
 test('D4 — samples table header + interpret-statusline row template carry a model column', (t) => {

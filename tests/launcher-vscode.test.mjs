@@ -197,7 +197,7 @@ test('T7 — the launcher re-asserts the tab title after Claude Code exits (name
   assert.ok(spawn > 0 && lastOsc > spawn, 'an OSC 2 title write follows the claude spawnSync');
 });
 
-// --- launcher-owned flags (rows L1–L13) -----------------------------------------------------------
+// --- launcher-owned flags (rows L1–L18) -----------------------------------------------------------
 // The four self-consumed flags — --config-dir / --title-prefix / --title-suffix / --no-vscode —
 // asserted through the same dry-run seam. Two properties carry the whole feature and each has a
 // dedicated row: a self-consumed flag NEVER reaches the claude argv (L3/L5/L10), and the marker
@@ -220,7 +220,7 @@ test('L1 — no launcher flags: the launch block is inert and the child env gain
   assert.equal(plan.launch.titlePrefix, '');
   assert.equal(plan.launch.titleSuffix, '');
   assert.equal(plan.launch.noVsCode, false);
-  assert.equal(plan.claude.envDelta, null, 'no env delta when --config-dir is absent');
+  assert.equal(plan.claude.envDelta, null, 'no env delta when no env-carrying flag is given');
   assert.equal(plan.launch.title, plan.tile.titleMatch);
 });
 
@@ -273,7 +273,9 @@ test('L5 — all four flags at once: every effect holds simultaneously', () => {
       args: ['--config-dir', dir, '--title-prefix', 'P', '--title-suffix', '·s', '--no-vscode'],
     });
     assert.equal(plan.launch.title, `P ${core} ·s`);
-    assert.deepEqual(plan.claude.envDelta, { CLAUDE_CONFIG_DIR: resolve(dir) });
+    assert.deepEqual(plan.claude.envDelta, {
+      CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s',
+    }, 'config-dir + markers → all three keys, delta only');
     assert.equal(plan.launch.noVsCode, true);
     assert.equal(plan.vscode.action, 'off');
     assert.equal(plan.tile.enabled, false);
@@ -372,4 +374,131 @@ test('L13 — the tile reason taxonomy is unchanged by the new flags', () => {
   const produced = [...block.matchAll(/[?:]\s*'([a-z0-9-]+)'/g)].map((m) => m[1]);
   assert.ok(produced.length >= 5, 'the reason chain was found and parsed');
   for (const lit of produced) assert.ok(KNOWN.has(lit), `new reason literal in source: '${lit}'`);
+});
+
+// Rows L14–L18: the title markers reach the claude child env as CC_TITLE_PREFIX / CC_TITLE_SUFFIX —
+// delta-only alongside CLAUDE_CONFIG_DIR (L5 asserts the three-key shape) — so an in-session
+// consumer (/identity's rename lines) can re-compose the marked title. Each key appears iff its
+// flag was given with a NON-EMPTY value; with no key applicable the delta stays null.
+
+test('L14 — markers without --config-dir: the env delta is exactly the two marker keys', () => {
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P', '--title-suffix', '·s'] });
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s' },
+    'two keys, no CLAUDE_CONFIG_DIR — delta only, never the whole env');
+});
+
+test('L15 — a one-sided marker exports only its own key', () => {
+  const pre = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P'] });
+  assert.deepEqual(pre.plan.claude.envDelta, { CC_TITLE_PREFIX: 'P' }, 'prefix alone → prefix key only');
+  const suf = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-suffix', '·s'] });
+  assert.deepEqual(suf.plan.claude.envDelta, { CC_TITLE_SUFFIX: '·s' }, 'suffix alone → suffix key only');
+});
+
+test('L16 — an empty-string marker value exports nothing: the delta stays null', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', ''] });
+  assert.equal(res.status, 0);
+  assert.equal(plan.claude.envDelta, null, 'the key is non-empty-gated, and nothing else applies');
+});
+
+test('L17 — a dangling --title-prefix is inert: stripped, no env key, never fatal', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix'] });
+  assert.equal(res.status, 0);
+  assert.equal(plan.claude.envDelta, null);
+  assert.ok(!plan.claude.argv.includes('--title-prefix'), 'still stripped from the claude argv');
+  assert.ok(plan.claude.argv.length > 0, 'claude still launches');
+});
+
+test('L18 — a non-ASCII marker round-trips into the env delta unchanged', () => {
+  const glyph = '🧪';
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', glyph] });
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph });
+});
+
+// --- /color injection vs optional-value flags (rows C1–C12) --------------------------------------
+// Spec: .claude/plans/2026-08-16-launcher-and-settings-hygiene-spec.md §1 (A1–A4). Claude Code's
+// commander gives an OPTIONAL-value flag (`--resume [value]`, …) the next argv token as its value
+// iff one follows and does not start with '-'. So a bare `cc --resume` must NOT get "/color …"
+// appended — claude would read the colour as a session id. Asserted through the same dry-run seam:
+// `plan.claude.argv` IS the argv the live path spawns.
+
+const argvFor = (args) => runLauncher({ workspaces: [], identity: IDENT, args }).plan.claude.argv;
+const COLOR = `/color ${IDENT.color}`;
+const hasColor = (argv) => argv.some((a) => String(a).startsWith('/color'));
+
+test('C1 — bare `cc`: the last token is `/color <colour>` (A2)', () => {
+  const argv = argvFor([]);
+  assert.equal(argv.at(-1), COLOR);
+});
+
+test('C2 — `cc --resume` (bare = picker): argv ends with --resume, no /color anywhere (A1)', () => {
+  const argv = argvFor(['--resume']);
+  assert.equal(argv.at(-1), '--resume');
+  assert.ok(!hasColor(argv), `no /color: ${argv.join(' ')}`);
+});
+
+test('C3 — `cc -r` (short bare form): no /color', () => {
+  const argv = argvFor(['-r']);
+  assert.equal(argv.at(-1), '-r');
+  assert.ok(!hasColor(argv));
+});
+
+test('C4 — `cc -r <id>`: the id stays the flag\'s value and /color follows as the prompt (A3)', () => {
+  const argv = argvFor(['-r', '0f3a']);
+  assert.deepEqual(argv.slice(-3), ['-r', '0f3a', COLOR]);
+});
+
+test('C5 — `cc --resume=<id>` (value glued with `=` is not bare): /color injected', () => {
+  const argv = argvFor(['--resume=0f3a']);
+  assert.deepEqual(argv.slice(-2), ['--resume=0f3a', COLOR]);
+});
+
+test('C6 — `cc "do X"`: the user prompt is the last token, no /color (A4)', () => {
+  const argv = argvFor(['do X']);
+  assert.equal(argv.at(-1), 'do X');
+  assert.ok(!hasColor(argv));
+});
+
+test('C7 — `cc --chrome` (boolean flag): still self-colours', () => {
+  const argv = argvFor(['--chrome']);
+  assert.deepEqual(argv.slice(-2), ['--chrome', COLOR]);
+});
+
+test('C8 — bare `--debug` / `--teleport` / `--cloud`: no /color (each is an optional-value flag)', () => {
+  for (const f of ['--debug', '--teleport', '--cloud', '-d']) {
+    const argv = argvFor([f]);
+    assert.equal(argv.at(-1), f, `${f} stays last`);
+    assert.ok(!hasColor(argv), `${f}: no /color injected`);
+  }
+});
+
+test('C9 — `cc -w feat` (optional flag WITH a value): /color injected as the prompt', () => {
+  const argv = argvFor(['-w', 'feat']);
+  assert.deepEqual(argv.slice(-3), ['-w', 'feat', COLOR]);
+});
+
+test('C10 — a bare optional flag followed by another flag: the flag is not its value; injection follows the LAST arg', () => {
+  // `--resume --chrome`: --resume is bare (next token starts with '-'), but the last arg is a boolean
+  // flag, so the picker is not the prompt slot — /color is injected. Mirrors commander exactly.
+  assert.deepEqual(argvFor(['--resume', '--chrome']).slice(-3), ['--resume', '--chrome', COLOR]);
+  // `--chrome --resume`: last arg is bare optional → nothing injected.
+  const argv = argvFor(['--chrome', '--resume']);
+  assert.equal(argv.at(-1), '--resume');
+  assert.ok(!hasColor(argv));
+});
+
+test('C11 — a real prompt after an optional flag is never clobbered', () => {
+  const argv = argvFor(['-r', '0f3a', 'do X']);
+  assert.equal(argv.at(-1), 'do X');
+  assert.ok(!hasColor(argv));
+});
+
+test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `claude --help` (2.1.233)', () => {
+  const src = readFileSync(launcher, 'utf8');
+  const m = src.match(/const OPTIONAL_VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(m, 'OPTIONAL_VALUE_FLAGS literal found');
+  const flags = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+  assert.deepEqual(flags, ['--cloud', '--debug', '--from-pr', '--prompt-suggestions', '--remote-control',
+    '--resume', '--teleport', '--worktree', '-d', '-r', '-w'].sort());
+  // Public file: zero deps, zero private references (the launcher ships in the kit).
+  assert.ok(!/from\s+['"](?!node:)/.test(src), 'no non-builtin imports');
 });

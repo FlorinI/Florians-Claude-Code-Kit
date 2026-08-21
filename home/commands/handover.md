@@ -116,7 +116,11 @@ If a D item lands in a project doc, it no longer needs to live in the handover b
 
 Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons so it's a filesystem-safe filename on every OS — colons are invalid on Windows).
 
-Write to `<cwd>/.claude/handovers/<timestamp>.md`. Create the `.claude/handovers/` directory if it doesn't exist.
+Then add a **slug** naming what the handover is *about*: 2–4 kebab-case words drawn from the semantics of the H payload — `sprint-chain-flight`, `cold-tax-recal`, `handover-file-naming` — never a generic filler like `session`, `work`, or `misc`. A handover usually has one dominant topic; when the payload genuinely splits across two or three unrelated topics, join their slugs with commas and no spaces (`sprint-chain-flight,inbox-triage`). Lowercase ASCII letters, digits, hyphens, and those separating commas only.
+
+Write to `<cwd>/.claude/handovers/<timestamp>-<slug>.md`. Create the `.claude/handovers/` directory if it doesn't exist.
+
+The timestamp stays the leading component so the files still sort chronologically by name (which is how session pickup finds the most recent one); the slug is what makes a directory listing readable months later.
 
 The file carries the **H** items as its forward-looking payload (in their eight-section structure), plus a short **Resolved before clear** section recording what was executed (X, with outcomes), persisted to memory (M), and documented in the project (D), so the next session sees the full picture.
 

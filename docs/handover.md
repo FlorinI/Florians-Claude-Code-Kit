@@ -6,7 +6,8 @@ to a file the next session automatically picks up.
 ## /handover
 
 Run `/handover` to dump the in-flight topics of the current session, triage each, and write a
-timestamped handover file to `<cwd>/.claude/handovers/`.
+handover file to `<cwd>/.claude/handovers/`, named `<timestamp>-<slug>.md` — the timestamp keeps
+the directory sorted chronologically, the slug says what that handover is about.
 
 ## Auto-pickup
 

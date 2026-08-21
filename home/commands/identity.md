@@ -77,6 +77,13 @@ If a clause is malformed or you can't tell what to change, ask one short questio
    detached; if the project isn't a git repo or has no branch, emit the bare `/rename <name>`. `/color`
    takes no suffix.
 
+   **Title markers:** when the session environment carries `CC_TITLE_PREFIX` / `CC_TITLE_SUFFIX`
+   (the `cc` launcher exports them when it was launched with `--title-prefix` / `--title-suffix`),
+   wrap the `/rename` name with them — `<prefix> <name>@<branch> <suffix>`, single-space joins,
+   empty/unset parts dropped — so the pasted name matches the tab title exactly. Check them with
+   `node -e "console.log(process.env.CC_TITLE_PREFIX, process.env.CC_TITLE_SUFFIX)"` or your shell's
+   equivalent. When neither is set, compose exactly as above.
+
    Chained slash commands don't parse past the first, so they **must be pasted separately** — say so.
    On a `show`, frame them as "to restore this session's identity, paste each."
 

@@ -1,11 +1,10 @@
 IDENTITY: **Reading** `(no repo)` · `bucketed` · Opus 4.8 (1M context) · `250k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: - Wind down soon
-HEADLINE_BASIS: driver=quality; quality=yellow (lvl 2); cost=froz5 1 / next 0.36195085539543226 (lvl 0)
-COST_LEAD: each leg `~$0.36`, `1.00×` a fresh leg
+HEADLINE_BASIS: driver=both; quality=yellow (lvl 2); cost=next 0.36195085539543226 (lvl 2)
+COST_LEAD: each leg `~$0.36`
 COST_TOTAL: `$8.00` total
-COST_CHAR: started heavy — the early warm legs were expensive (big outputs, or a doc-heavy opening that fell back to write-heavy legs), lifting the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust — low confidence: this session opened on a warm shared prefix (pre-2.1.209 regime, or a sibling-warmed launch), so its pristine floor is smaller than the post-2.1.209 curve's and the ratio can read a little above the curve; treat a light-start call as indicative; the absolute next-leg $ is still real
-COST_FROZ5: cause=heavy-start; froz5 `1.00×` vs `2.27×` typical at this depth (residual 0.44×); confidence=low; era=warm-open (curve fit on post-2.1.209 cold-start sessions)
+COST_RECENT: last `8` legs median `$0.36`/leg; session mean `$0.40` over `20` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
@@ -18,4 +17,4 @@ QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep 
 ACTIVITY: (omit)
 TRAJECTORY: mostly flat with spikes, range `$0.36`–`$0.95`
 YOURCALL_POLARITY: -
-YOURCALL_BASIS: quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work
+YOURCALL_BASIS: quality is in the degradation band and each leg is already pricey — cost is high but flat, not climbing — lean toward handing over

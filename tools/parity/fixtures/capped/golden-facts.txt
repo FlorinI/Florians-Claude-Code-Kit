@@ -1,11 +1,10 @@
 IDENTITY: **Reading** `(no repo)` · `mixed-fi` · Opus 4.8 (1M context) · `93k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: + Plenty of room
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 1.4903640256959314 / next 0.7972247676397434 (lvl 0)
-COST_LEAD: each leg `~$0.80`, `1.49×` a fresh leg
+HEADLINE_DIFF: - Time to hand over
+HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 0.7972247676397434 (lvl 3)
+COST_LEAD: each leg `~$0.80`
 COST_TOTAL: `$2.50` total
-COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
-COST_FROZ5: cause=on-curve; froz5 `1.49×` vs `1.51×` typical at this depth (residual 0.99×); confidence=low; baseline=provisional (2 of 5 warm legs)
+COST_RECENT: last `3` legs median `$0.60`/leg; session mean `$0.83` over `3` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
@@ -17,5 +16,5 @@ QUALITY_HEADROOM: `382k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
 TRAJECTORY: flat, range `$0.47`–`$1.43`
-YOURCALL_POLARITY: +
-YOURCALL_BASIS: both axes fine — room to continue on recent context
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

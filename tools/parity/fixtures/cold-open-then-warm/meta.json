@@ -1,0 +1,4 @@
+{
+  "note": "8 Opus legs, one tier: a cold-start opener (~57k written, nothing cached) then warm legs, with one mid-run doc-load write spike at leg 4.",
+  "nowEpoch": 1781750000
+}

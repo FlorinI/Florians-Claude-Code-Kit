@@ -1,11 +1,10 @@
 IDENTITY: **Reading** `(no repo)` · `b2-mytho` · Opus 4.8 (1M context) · `51k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: + Plenty of room · sub-agents are 40% of spend
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 null / next 5.051 (lvl 0)
-COST_LEAD: each leg `~$5.05`, `?` a fresh leg
+HEADLINE_DIFF: - Time to hand over · sub-agents are 40% of spend
+HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 5.051 (lvl 3)
+COST_LEAD: each leg `~$5.05`
 COST_TOTAL: `$50.00` total
-COST_CHAR: no cost trend yet
-COST_FROZ5: cause=unknown (curve n/a — 200k window or missing data)
+COST_RECENT: last `6` legs median `$5.00`/leg; session mean `$5.00` over `6` legs
 COST_DETAIL: main `$30.00` · agents `$20.00` over `1` legs
 COST_AGENTS_TIER: headline
 COST_AGENTS_LEAD: (none)
@@ -17,5 +16,5 @@ QUALITY_HEADROOM: `424k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit — 1 sub-agents ran; activity% folds their parallel compute, so it does not signal your work pattern)
 TRAJECTORY: flat, range `$5.00`–`$5.00`
-YOURCALL_POLARITY: +
-YOURCALL_BASIS: both axes fine — room to continue on recent context
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

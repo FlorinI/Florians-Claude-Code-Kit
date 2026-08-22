@@ -1,0 +1,4 @@
+{
+  "note": "keepwarm-1h reshaped so leg 1 also reads a 12k cached prefix - the session that did NOT open cold; 6 legs, inside the act-soon keep-warm window, 5x spike on the current leg.",
+  "nowEpoch": 1781780300
+}

@@ -108,9 +108,8 @@ test('D3 — same-tier upgrade (Opus 4.7 → Opus 4.8): no switch stamped', () =
 
 const FABLE = 'claude-fable-5', OPUS = 'claude-opus-5', SONNET = 'claude-sonnet-5';
 
-// A leg table with a real token mix, so the froz5 baseline reaches full strength (freshLegN 5) and
-// D11's gate can be exercised at the boundary. Leg 1 is a post-2.1.209 cold-start opener unless
-// `warmOpen`, which makes it read a cached prefix instead (that is what raises froz5CalibStale).
+// A leg table with a real token mix. Leg 1 is a post-2.1.209 cold-start opener unless `warmOpen`,
+// which makes it read a cached prefix instead — the shape that used to raise the warm-open marker.
 function tokenLeg(i, model, [inT, cw, cr, out]) {
   return JSON.stringify({
     type: 'assistant',
@@ -137,19 +136,21 @@ function renderTable(dirs, T, display, tierBase) {
 }
 const withModel = (model, fn) => withDirs((dirs) => fn({ ...dirs, model }));
 
-test('S10 — the sidecar key is present only when the report fires, and the schema does NOT bump', () => {
+test('S10 — the sidecar key is present only when the report fires', () => {
+  // The "and the schema does NOT bump" half of this row retired with the froz5 removal: schema is 6
+  // now, bumped for the seven DELETED keys, not for this additive one. The anchor-strength assertion
+  // went with `freshLegN`.
   // FIRES: 12 opus legs under a Fable label — fable is mapped and has never served.
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table(), 'Fable 5 (1M context)', 10);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'fable', serving: 'opus' });
-    assert.equal(r.sidecar.schema, 5, 'additive key, no schema bump (D17)');
-    assert.equal(r.sidecar.freshLegN, 5, 'and the anchor is full strength');
+    assert.equal(r.sidecar.schema, 6);
   });
   // SILENT: the same legs under the label that actually served.
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table(), 'Opus 5', 5);
     assert.ok(!('tierMismatch' in r.sidecar), 'the label is accurate → no key at all');
-    assert.equal(r.sidecar.schema, 5);
+    assert.equal(r.sidecar.schema, 6);
   });
   // SILENT: an unmapped label has nothing to check.
   withModel(OPUS, (dirs) => {
@@ -158,7 +159,10 @@ test('S10 — the sidecar key is present only when the report fires, and the sch
   });
 });
 
-test('S11 — the chip is DIM, sits in the model field, and never displaces the froz5 `?` warm-open marker', () => {
+test('S11 — the chip is DIM and sits in the model field', () => {
+  // REDUCED by the froz5 removal (2026-08-21). The row's second half paired this chip with the froz5
+  // `?` warm-open marker, asserting the two never displaced each other. The marker is gone, so what
+  // remains is the chip's own contract: dim, uncoloured, inside cluster 1's model field.
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table(), 'Fable 5 (1M context)', 10);
     // Dim is ESC[2m … ESC[0m — provenance, not alarm. Assert the exact wrapper, so a future change
@@ -170,28 +174,30 @@ test('S11 — the chip is DIM, sits in the model field, and never displaces the 
     const line1 = r.plain.split('\n')[0];
     assert.match(line1, /^Fable 5 \(1M context\) v2\.1\.142 ⚠ serving:opus \| /, `cluster 1: ${line1}`);
   });
-  // Both markers at once: a warm-open leg 1 raises froz5CalibStale (the ratio's `?`) while the label
-  // still names a tier that never served. The two occupy different fields and must both appear.
+  // A warm-open leg 1 (what used to raise the `?` marker) still renders the chip, and no ratio tail
+  // comes back with it — the negative half of AE-1, driven live rather than read off a golden.
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table({ warmOpen: true }), 'Fable 5 (1M context)', 10);
-    assert.equal(r.sidecar.froz5CalibStale, true, 'warm-open leg 1');
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'fable', serving: 'opus' });
     const lines = r.plain.split('\n');
     assert.match(lines[0], /⚠ serving:opus/, 'chip still in cluster 1');
-    assert.match(lines[2], /=\s*[\d.]+x\?\s/, `the froz5 `+"`?`"+` marker survives in cluster 3: ${lines[2]}`);
+    assert.ok(!r.plain.includes('(fresh)'), 'no ratio tail');
+    assert.ok(!/=\s*[\d.]+x/.test(r.plain), 'and no `= N.Nx` multiple anywhere on any line');
   });
 });
 
 test('S12 — the fact sheet emits COST_TIER_NOTE exactly once, naming both the label and the serving tier', () => {
   const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
-  // Present: froz5-tier-unserved is the fixture built for this (12 opus legs, Fable label).
-  const fired = readFileSync(join(FIX, 'froz5-tier-unserved', 'golden-facts.txt'), 'utf8');
+  // Present: label-never-served is the fixture built for this (12 opus legs, Fable label).
+  const fired = readFileSync(join(FIX, 'label-never-served', 'golden-facts.txt'), 'utf8');
   const notes = fired.split('\n').filter((l) => l.startsWith('COST_TIER_NOTE:'));
   assert.equal(notes.length, 1, `exactly one note: ${JSON.stringify(notes)}`);
   assert.match(notes[0], /Fable 5 \(1M context\)/, 'names the LABEL');
   assert.match(notes[0], /served by `opus`/, 'and names the tier that did serve');
-  // It is a label fact only — it must not claim a number changed.
-  assert.match(notes[0], /do not depend on which label is shown/, 'states it gates no number');
+  // It is a label fact only — it must not claim a number changed. D2d (froz5-removal) cut "and the
+  // multiple" from the claim, so it now reads "the `$` in this sheet does not depend …".
+  assert.match(notes[0], /does not depend on which label is shown/, 'states it gates no number');
+  assert.ok(!notes[0].includes('the multiple'), 'and no longer claims anything about a multiple');
   // Absent everywhere the key is absent — checked across every fixture, so the blast radius is pinned.
   for (const f of readdirSync(FIX)) {
     const sc = join(FIX, f, 'golden-sidecar.json');
@@ -203,46 +209,50 @@ test('S12 — the fact sheet emits COST_TIER_NOTE exactly once, naming both the 
   }
 });
 
-test('S13 — handover-check.md names COST_TIER_NOTE among the relayable caveats', () => {
+test('S13 — handover-check.md registers every caveat label the fact sheet can emit', () => {
   // Not documentation: that file enumerates the labels the composer may relay, so an UNLISTED label
-  // is silently dropped and the caveat never reaches the reader. The composer instruction must name
-  // it alongside the two caveats that already exist.
+  // is silently dropped and the caveat never reaches the reader. D7 (froz5-removal) retired the
+  // shared COST_RUN_NOTE and split it three ways, which makes this row the guard that the split was
+  // registered as well as implemented.
   const md = readFileSync(join(here, '..', 'home', 'commands', 'handover-check.md'), 'utf8');
-  const cost = md.split('\n').find((l) => l.includes('COST_RUN_NOTE'));
+  const cost = md.split('\n').find((l) => l.includes('COST_FAST_NOTE'));
   assert.ok(cost, 'the Cost bullet enumerates caveat labels');
-  assert.match(cost, /COST_RUN_NOTE/, 'run caveat still listed');
-  assert.match(cost, /COST_FAST_NOTE/, 'fast caveat still listed');
-  assert.match(cost, /COST_TIER_NOTE/, 'the new tier caveat is listed — otherwise it is dropped');
-  // …and the file tells the composer what to SAY about it, not merely that it exists.
+  for (const label of ['COST_RESUME_NOTE', 'COST_LEGPRICE_NOTE', 'COST_MODELSWITCH_NOTE',
+    'COST_FAST_NOTE', 'COST_TIER_NOTE']) {
+    assert.ok(cost.includes(label), `${label} is not in the relayable list — it would be silently dropped`);
+  }
+  assert.ok(!md.includes('COST_RUN_NOTE'), 'the retired shared label must be gone from the list too');
+  // …and the file tells the composer what to SAY about each, not merely that they exist.
   assert.match(md, /tier caveat/i, 'the composer is told how to render the tier caveat');
+  assert.match(md, /partway through|mid-session/i, 'and how to render the model-switch caveat');
+  assert.match(md, /COST_RECENT/, 'the new recent-leg-median key is registered (D2g)');
+  assert.ok(!md.includes('COST_FROZ5') && !md.includes('COST_CHAR'), 'and the two deleted keys are gone');
 });
 
-test('S14 — D11 gate: full-strength anchor keeps the depth cause and appends the switch as a caveat; one below, the switch preempts', () => {
+test('S14 — the switch note is UNCONDITIONAL on modelSwitch, with no ratio/curve tail', () => {
+  // REWRITTEN by froz5-removal (2026-08-21, D2c + D7). The D11 gate this row used to exercise —
+  // full-strength anchor keeps the depth cause, one below and the switch preempts — had both of its
+  // branches deleted with the baseline. One note now fires on `modelSwitch` alone.
   const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
-  // AT full strength (freshLegN === FRESH_N): model-switch is the fixture. The depth cause resolves
-  // and the switch becomes a dollar-comparability caveat — the sprint's own win, kept.
   const ms = JSON.parse(readFileSync(join(FIX, 'model-switch', 'golden-sidecar.json'), 'utf8'));
-  assert.equal(ms.freshLegN, 5, 'full strength');
   assert.deepEqual(ms.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' });
   const f = readFileSync(join(FIX, 'model-switch', 'golden-facts.txt'), 'utf8');
-  assert.ok(!/cause=model-switched/.test(f), 'the fifth cause must NOT preempt at full strength');
-  assert.match(f, /COST_FROZ5: cause=(heavy-start|light-start|cold-pumped|on-curve)/, 'a depth cause resolves');
-  assert.match(f, /switched mid-session .* comparing per-leg \$ across the switch is not like-for-like/,
-    'and the switch is appended as a dollar-comparability caveat');
-  assert.match(f, /the multiple and the depth curve still hold/, 'the caveat does not disown the number');
-  // ONE BELOW full strength: the switch preempts, exactly as before the sprint. Driven live, because
-  // no committed fixture has both a switch and a provisional baseline.
+  assert.ok(!/cause=model-switched/.test(f), 'the COST_CHAR cause is gone');
+  assert.ok(!f.includes('COST_FROZ5'), 'and so is the ratio line');
+  assert.match(f, /COST_MODELSWITCH_NOTE: the model switched mid-session .* comparing per-leg \$ across the switch is not like-for-like/,
+    'the switch is stated once, under its own label, as a dollar-comparability caveat');
+  assert.ok(!f.includes('the multiple and the depth curve still hold'), 'the ratio/curve tail is cut');
+  // A LIVE switch on a session too short to have had a full-strength anchor: under the old gate this
+  // was the branch where the switch preempted the depth cause. It must now produce the same single
+  // note, because the note no longer depends on anchor strength at all.
   withModel(OPUS, (dirs) => {
-    // Legs 1–3 only: a write-heavy opener plus two warm legs → freshLegN 2, window still open.
     const T = table({ nWarm: 2 }).slice(0, 3);
     writeFileSync(dirs.transcript, T.map((t, i) => tokenLeg(i + 1, OPUS, t)).join(''), 'utf8');
     const cost = T.reduce((a, t) => a + unitsOf(t), 0) * 5e-6;
-    const r1 = render(dirs, 'Opus 5', cost);
-    assert.ok(r1.sidecar.freshLegN < 5 && r1.sidecar.freshLegN > 0, `provisional: ${r1.sidecar.freshLegN}`);
-    // now the label switches tier → modelSwitch stamps on a provisional baseline
+    render(dirs, 'Opus 5', cost);
     const r2 = render(dirs, 'Sonnet 5', cost + 0.01);
-    assert.ok(r2.sidecar.modelSwitch, 'the switch stamped');
-    assert.ok(r2.sidecar.freshLegN < 5, 'and the anchor is below full strength');
+    assert.ok(r2.sidecar.modelSwitch, 'the switch stamped on a 3-leg session');
+    assert.ok(!('freshLegN' in r2.sidecar), 'and there is no anchor-strength key left to gate on');
   });
 });
 
@@ -272,14 +282,13 @@ test('S16 — BOTH transpositions render the chip: label dearer than served, and
     assert.match(r.plain.split('\n')[0], /⚠ serving:opus/);
   });
   // The TRANSPOSE — label sonnet (2) over fable legs (10). Same predicate, opposite price direction.
-  // Worth its own row because the ratio correction's SIGN flips with the transposition: with a dearer
-  // label the old baseline was too small and the multiple fell; with a cheaper label it was too large
-  // and the multiple RISES. The report itself is indifferent to the direction, and that is the point.
+  // Worth its own row because the report must be indifferent to which side is dearer: it answers
+  // "did the labelled tier ever serve", never "which way would a price correction go".
   withModel(FABLE, (dirs) => {
     const r = renderTable(dirs, table(), 'Sonnet 5', 2);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'sonnet', serving: 'fable' });
     assert.match(r.plain.split('\n')[0], /⚠ serving:fable/);
-    assert.equal(r.sidecar.schema, 5);
+    assert.equal(r.sidecar.schema, 6);
   });
   // …and a third tier pair, so nothing is hard-coded to fable/opus/sonnet.
   withModel(SONNET, (dirs) => {

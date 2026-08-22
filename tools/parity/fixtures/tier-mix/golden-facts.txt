@@ -1,11 +1,10 @@
 IDENTITY: **Reading** `(no repo)` · `tier-mix` · Opus 4.8 (1M context) · `51k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: + Plenty of room · sub-agents are 43% of spend
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=froz5 1.1126899546082494 / next 0.5486593131028379 (lvl 0)
-COST_LEAD: each leg `~$0.55`, `1.11×` a fresh leg
+HEADLINE_DIFF: - Time to hand over · sub-agents are 43% of spend
+HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 0.5486593131028379 (lvl 3)
+COST_LEAD: each leg `~$0.55`
 COST_TOTAL: `$4.75` total
-COST_CHAR: tracking the normal cost-vs-depth curve — neither a heavy/light start nor a cold leg is distorting the ratio
-COST_FROZ5: cause=on-curve; froz5 `1.11×` vs `1.38×` typical at this depth (residual 0.80×); confidence=low; baseline=provisional (2 of 5 warm legs)
+COST_RECENT: last `3` legs median `$0.54`/leg; session mean `$0.90` over `3` legs
 COST_DETAIL: main `$2.69` · agents `$2.06` over `5` legs
 COST_AGENTS_TIER: headline
 COST_AGENTS_LEAD: (none)
@@ -17,5 +16,5 @@ QUALITY_HEADROOM: `424k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit — 2 sub-agents ran; activity% folds their parallel compute, so it does not signal your work pattern)
 TRAJECTORY: mostly flat with spikes, range `$0.45`–`$1.71`
-YOURCALL_POLARITY: +
-YOURCALL_BASIS: both axes fine — room to continue on recent context
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

@@ -22,7 +22,7 @@ Each piece guards against a specific way agentic coding goes wrong:
 - **`/handover`** — *guards continuity.* Dumps a session's in-flight state to a handover file the next
   session auto-picks up, so you stop losing the thread between sessions.
 - **A dense, drillable status line** (`statusline.mjs`) — *guards cost & context.* Per-leg cost with a
-  composition-weighted forecast, a baseline-ratio chip, a per-leg sparkline, dual-axis context usage,
+  composition-weighted forecast, a recent-leg median chip, a per-leg sparkline, dual-axis context usage,
   to-compact headroom, cold-cache tax tracking, and 5h/7d quota chips that surface only when they matter.
 - **The `rca` skill** — *guards debugging.* Forces a falsifiable hypothesis and a disconfirming check
   before any fix, and right-sizes itself: a quick inline diagnosis for a cheap bug, a full documented

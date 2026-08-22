@@ -1,15 +1,14 @@
 IDENTITY: **Reading** `(no repo)` · `model-sw` · Sonnet 5 · `150k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: + Getting deeper
-HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 1.15 / next 0.22999999999999998 (lvl 0)
-COST_LEAD: each leg `~$0.23`, `1.15×` a fresh leg
+HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=next 0.22999999999999998 (lvl 0)
+COST_LEAD: each leg `~$0.23`
 COST_TOTAL: `$12.20` total
-COST_CHAR: started heavy — the early warm legs were expensive (big outputs, or a doc-heavy opening that fell back to write-heavy legs), lifting the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust
-COST_FROZ5: cause=heavy-start; froz5 `1.15×` vs `1.68×` typical at this depth (residual 0.68×); confidence=ok
+COST_RECENT: last `8` legs median `$1.00`/leg; session mean `$0.94` over `13` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
-COST_RUN_NOTE: the model switched mid-session (Fable 5 (1M context) → Sonnet 5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like; the multiple and the depth curve still hold (both sides measure this session's own token-work at one price)
+COST_MODELSWITCH_NOTE: the model switched mid-session (Fable 5 (1M context) → Sonnet 5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
 COLD: your recent resume re-cached the context for `$0.34` — already paid; you are warm again now
 WARM_REWRITE_TAX: (none)

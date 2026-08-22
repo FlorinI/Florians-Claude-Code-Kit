@@ -6,8 +6,10 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   getScannedLegs, getDriver, testColdLeg, testWarmRewriteLeg, tierWeight, TIER_BASE,
-  servingTierReport, isSyntheticLeg, pickFreshBaseline,
+  servingTierReport, isSyntheticLeg,
 } from '../home/leg-driver.mjs';
+// `pickFreshBaseline` left this import list with the froz5 removal (2026-08-21, D5). Keeping it here
+// would take the WHOLE file down at module load, not just the one row that used it.
 import { writeFileSync as writeFile } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -173,7 +175,7 @@ test('S2 — display tier present as a MINORITY (one leg out of many): NO report
   // modal rule would still fire here, because fable is not the modal tier. Presence, not majority.
   const models = [...Array(11).fill(OPUS), FABLE];
   assert.equal(rep(models, 0, 'Fable 5 (1M context)'), null, 'one fable leg is enough to silence it');
-  // and froz5-tier-mislabel's real shape: 117 opus then 7 fable, label fable
+  // and label-served-late's real shape: 117 opus then 7 fable, label fable
   const real = [...Array(117).fill(OPUS), ...Array(7).fill(FABLE)];
   assert.equal(rep(real, 0, 'Fable 5 (1M context)'), null, 'the real 124-leg shape reports nothing');
 });
@@ -239,10 +241,8 @@ test('S8 — ties in "which tier did serve" break to the higher TIER_BASE, and n
   assert.deepEqual(a, { display: 'haiku', serving: 'fable' }, 'fable (base 10) beats opus (base 5)');
   assert.deepEqual(b, a, 'and the answer does not depend on which tier was seen first');
   assert.ok(TIER_BASE.fable > TIER_BASE.opus, 'the tie-break really is on TIER_BASE');
-  // The tie decides CHIP TEXT only. The same legs through the baseline picker give one answer,
-  // whichever order they arrive in — because the picker no longer knows what a tier is.
-  const legs = (models) => models.map((m, i) => ({ idx: i + 1, inT: 2, cw: 500, cr: 50000, out: 100, units: 2 + 1000 + 5000 + 500, model: m }));
-  assert.deepEqual(pickFreshBaseline(legs([OPUS, OPUS, FABLE, FABLE])), pickFreshBaseline(legs([FABLE, FABLE, OPUS, OPUS])));
+  // The tie decides CHIP TEXT only. Its old second half — the same legs through the tier-blind
+  // baseline picker giving one answer either way — went with pickFreshBaseline (froz5-removal, D5).
 });
 
 test('S9 — the report reads arrays already in hand: no file read, no transcript re-scan', () => {

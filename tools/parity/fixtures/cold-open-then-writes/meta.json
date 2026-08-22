@@ -1,0 +1,4 @@
+{
+  "note": "13 Opus legs, one tier: the same cold-start opener, then eleven write-heavy legs over a fixed 50k cached prefix, and one warm leg last.",
+  "nowEpoch": 1781750000
+}

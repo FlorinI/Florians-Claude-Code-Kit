@@ -1,15 +1,14 @@
 IDENTITY: **Reading** `(no repo)` · `turn-ori` · Opus 5 · `150k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: + Getting deeper
-HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=froz5 1.15 / next 0.28750000000000003 (lvl 0)
-COST_LEAD: each leg `~$0.29`, `1.15×` a fresh leg
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=cost; quality=yellow (lvl 1); cost=next 0.28750000000000003 (lvl 2)
+COST_LEAD: each leg `~$0.29`
 COST_TOTAL: `$0.50` total
-COST_CHAR: started heavy — the early warm legs were expensive (big outputs, or a doc-heavy opening that fell back to write-heavy legs), lifting the fresh-leg baseline, so the ratio sits low for this depth; cost is flat-to-falling, not escalating — the absolute next-leg $ is the number to trust
-COST_FROZ5: cause=heavy-start; froz5 `1.15×` vs `1.68×` typical at this depth (residual 0.68×); confidence=ok
+COST_RECENT: last `8` legs median `$0.25`/leg; session mean `$0.25` over `14` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
-COST_RUN_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced at this run's rate
+COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced at this run's rate
 COLD: your recent resume re-cached the context for `$0.43` — already paid; you are warm again now
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `150k`, yellow band — mild weakening on hard multi-fact recall
@@ -18,5 +17,5 @@ QUALITY_HEADROOM: `325k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
 TRAJECTORY: flat, range `$0.25`–`$0.25`
-YOURCALL_POLARITY: +
-YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

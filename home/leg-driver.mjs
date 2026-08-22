@@ -53,7 +53,9 @@ export function tierWeight(model, mainTier) {
 
 // Transcript-vs-display tier PROVENANCE — "the model label names a tier that has never served in
 // this run". Drives a dim chip, a conditional sidecar key and a fact-sheet caveat; it gates NO
-// number (the froz5 baseline is tier-free, so there is no tier for it to get wrong).
+// number. The display tier CANCELS out of per-leg dollars: `base` = cost / Σ(rawᵢ × wᵢ /
+// TIER_BASE[mainTier]) and each leg's dollars are rawᵢ × wᵢ × base, so TIER_BASE[mainTier] appears
+// once in each and divides out — a mislabelled display tier misprices no dollar figure.
 // `legModels` = the run's per-leg raw model strings, sampled from `runStartLeg` on (a resumed
 // session's earlier runs may legitimately be another tier). Returns { display, serving } or null.
 //
@@ -146,9 +148,9 @@ export function testWarmRewriteLeg(l) {
 
 // Placeholder line, not a leg — the ONE synthetic predicate, shared by BOTH transcript scans
 // (getScannedLegs below and statusline.mjs's UpdateSessionRollups), so the leg count, the sparkline
-// and the froz5 opening window can never disagree about what counts as a turn. Claude Code records
+// and the recent-leg median chip can never disagree about what counts as a turn. Claude Code records
 // an API overload (a 529) as an assistant line with no billed tokens; counting it distorts the leg
-// count, the sparkline (a $0.00 cell) and the opening window's composition.
+// count and the sparkline (a $0.00 cell).
 //
 // EITHER signal fires, deliberately: the model string alone would decay silently if CC renamed the
 // literal, and all-zero-usage alone would miss a synthetic line that reported a stray counter.
@@ -163,20 +165,7 @@ export function isSyntheticLeg({ model, inT, cw, cr, out } = {}) {
     && (Number(cr) || 0) === 0 && (Number(out) || 0) === 0;
 }
 
-// === froz5 fresh-leg baseline (shape-based, since bsl5.0.0.0) ==================================
-// Since CC 2.1.209 a fresh session's leg 1 reads nothing and writes the whole context (a 1h cache
-// write of ~55-70k), so a POSITIONAL baseline (mean of the first legs) is ~3× a warm leg and the
-// froz5 ratio reads low. The baseline is therefore the MEDIAN of the first FRESH_N WARM legs found
-// among the first FRESH_WINDOW legs — a leg is write-heavy when its cache write exceeds
-// FRESH_WRITE_SHARE of its prompt (the opener is 1.0, doc ingestions 0.16-0.30, real warm legs
-// ≤ 0.15 at p90 on the fleet); warm = not write-heavy. Shared by the status line (read time), the
-// calibration harvest and the tests. Pure functions on leg records { idx, inT, cw, cr, out, units,
-// model } (the rollup's openingLegs / recentLegs shape).
-export const FRESH_N = 5;
-export const FRESH_WINDOW = 12;
-export const FRESH_WRITE_SHARE = 0.20;
-
-// True median — even count → mean of the middle two; empty → null.
+// True median — even count → mean of the middle two; empty → null. Used by the next-leg forecast.
 export function median(arr) {
   const vals = arr.filter((x) => x !== null && x !== undefined && !Number.isNaN(Number(x))).map(Number).sort((a, b) => a - b);
   const n = vals.length;
@@ -185,50 +174,13 @@ export function median(arr) {
   return n % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2.0;
 }
 
-// Cache-write share of the prompt (in + cw + cr). A prompt of 0 (an output-only leg) ranks as fully
-// write-heavy (share 1) — it is never a warm leg.
-export function writeShare(l) {
-  const inT = Number(l?.inT) || 0, cw = Number(l?.cw) || 0, cr = Number(l?.cr) || 0;
-  const prompt = inT + cw + cr;
-  return prompt <= 0 ? 1 : cw / prompt;
-}
-export function isWriteHeavyLeg(l) { return writeShare(l) > FRESH_WRITE_SHARE; }
-
 // The post-CC-2.1.209 opener signature on leg 1: nothing read from cache, (near-)zero fresh input,
 // the whole context written. The cw ≥ 8000 floor keeps a zero-usage `<synthetic>` line or a
 // no-cache stub from reading as a cold start (a real opener writes ≥ 8k by construction).
-export function isColdStartLeg(l) {
+// INTERNAL — the one consumer is getDriver above, which uses it to label leg 1 `opened cold`.
+function isColdStartLeg(l) {
   const inT = Number(l?.inT) || 0, cw = Number(l?.cw) || 0, cr = Number(l?.cr) || 0;
   return cr === 0 && inT <= 100 && cw >= 8000;
-}
-
-// Fresh baseline over the opening window. Returns { units, n, fallback } or null (no baseline yet).
-// units = median of the picked legs' RAW (tier-free) units — the same measure the forecast uses, so
-// the froz5 ratio is a token-work ratio and the depth-fitted gradient is a legitimate colouring of
-// it. It takes NO tier: the era-v5 curve was fitted exclusively on single-mapped-tier sessions
-// (harvest-froz5.mjs excludes any other), where every leg's tierWeight was exactly 1.0, so raw units
-// ARE the basis the thresholds were derived under. Weighting the baseline against the display tier
-// (the pre-5.0.7.0 behaviour) divided a tier-free forecast by a tier-priced baseline and read up to
-// 2x too alarming on a tier-mixed or tier-mislabelled session.
-//   • window open (< FRESH_WINDOW legs): the first ≤ FRESH_N warm legs seen so far; 0 warm → null.
-//   • window closed with ≥ FRESH_N warm legs: the first FRESH_N warm legs by index.
-//   • window closed with < FRESH_N warm legs: fallback = the FRESH_N least-write-heavy legs of the
-//     window (ascending share, ties by idx; prompt 0 ranks as share 1) — a doc-heavy opening
-//     calibrates against its own character rather than staying ratio-less.
-// Once FRESH_N warm legs exist inside the window the pick is frozen (later legs never enter).
-export function pickFreshBaseline(openingLegs) {
-  const legs = (openingLegs || []).slice(0, FRESH_WINDOW);
-  if (legs.length === 0) return null;
-  const eff = (l) => (Number(l.units) || 0);
-  const warm = legs.filter((l) => !isWriteHeavyLeg(l)).slice(0, FRESH_N);
-  if (warm.length >= FRESH_N || (legs.length < FRESH_WINDOW && warm.length > 0)) {
-    return { units: median(warm.map(eff)), n: warm.length, fallback: false };
-  }
-  if (legs.length < FRESH_WINDOW) return null;
-  const ranked = legs.map((l, i) => ({ l, i, share: writeShare(l) }))
-    .sort((a, b) => (a.share - b.share) || (a.i - b.i))
-    .slice(0, FRESH_N);
-  return { units: median(ranked.map((x) => eff(x.l))), n: ranked.length, fallback: true };
 }
 
 // Get-ScannedLegs — authoritative transcript scan for the /handover-check renderers. Per-leg

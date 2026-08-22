@@ -14,7 +14,7 @@ import {
 import {
   getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
-  FRESH_WINDOW, isColdStartLeg, pickFreshBaseline, isSyntheticLeg, servingTierReport,
+  isSyntheticLeg, servingTierReport, median,
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
@@ -22,7 +22,7 @@ import { sanitizeSessionName } from './sanitize-name.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '5.0.7.0';
+export const SL_VERSION = '6.0.0.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json, stats-cache.json) and write (the global sidecar, the rollup caches)
@@ -266,34 +266,6 @@ function BgFill(pct, text) {
   if (pct < 85) return BgTint(BAND_ORANGE, text);
   return BgTint(BAND_RED, text);
 }
-// froz5 gradient anchors — COPIES of tools/calibration/froz5-fit.json `anchors` (era v5 fit on the
-// fleet's post-CC-2.1.209 cold-start sessions): green 0.5 / white 1.0 fixed (definitional), yellow =
-// curve at 256k, orange = curve at 500k, red = curve at 800k. Keep in lockstep with the froz5State
-// thresholds in the sidecar block and handover-facts.mjs's FROZ5_CLIMB / FROZ5_STEEP (fit-sync test).
-function Froz5RGB(ratio) {
-  const stops = [
-    [0.5, BAND_GREEN],
-    [1.0, [230, 230, 230]],
-    [2.3, BAND_YELLOW],
-    [4.2, BAND_ORANGE],
-    [7.4, BAND_RED],
-  ];
-  if (ratio <= stops[0][0]) return stops[0][1];
-  if (ratio >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
-  for (let i = 0; i < stops.length - 1; i++) {
-    const lo = stops[i], hi = stops[i + 1];
-    if (ratio <= hi[0]) {
-      const t = (ratio - lo[0]) / (hi[0] - lo[0]);
-      const a = lo[1], b = hi[1];
-      return [psRound(a[0] + (b[0] - a[0]) * t), psRound(a[1] + (b[1] - a[1]) * t), psRound(a[2] + (b[2] - a[2]) * t)];
-    }
-  }
-  return stops[stops.length - 1][1];
-}
-function BgFroz5(ratio, text) {
-  if (isNil(ratio)) return Dim(text);
-  return BgTint(Froz5RGB(ratio), text);
-}
 
 const DIM_SEP = Dim(' | ');
 
@@ -316,16 +288,36 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0,
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
     runIdx: 0, runStartLeg: 0,
-    openingLegs: [], firstLegColdStart: null, openingLegCw: null,
   });
+  // The stats file is written as a PROJECTION of the declared shape, never as "the object we read
+  // plus whatever it already had": UpdateSessionRollups mutates what it reads and writes it back, so
+  // a key nothing writes any more rides along for the life of the session file (a retired key
+  // survives even a forced full re-bank). The key list is DERIVED from freshRollup(), not
+  // hand-maintained — a field added to the fresh shape is preserved automatically and only genuinely
+  // unknown keys drop. The three optional keys are the ones assigned outside the fresh shape, all
+  // conditional and all live; losing sessionName would silently break the fact sheet's FOREIGN
+  // naming. No version marker: a marker is itself a new key, and the older build that resets on a
+  // missing required key ignores every key it does not know — so a marker could only ever help
+  // readers built after it exists, which are exactly the readers that need no help.
+  // BACK-COMPAT, one entry, retire per spec §A9.1 (2026-08-22): the 5.x build — deployed until every
+  // config home installs 6.x — lists `openingLegs` in its requiredFields, so a stats file without it
+  // reads as structurally unusable and gets RESET, destroying sessionName, modelSwitch,
+  // modelSwitchedAtLeg and runStartLeg, none of which a later render can re-derive. Nothing in this
+  // build reads or fills the key; it is a placeholder that keeps a lagging reader from throwing the
+  // file away. RETIRE IT once every config home on every machine reports SL_VERSION >= 6.0.0.0 —
+  // one grep per machine, so the condition is checkable rather than remembered.
+  // Ticket: .inbox/2026-08-22-retire-openinglegs-rollup-compat-key.md
+  const ROLLUP_COMPAT_KEYS = { openingLegs: [] };
+  const ROLLUP_OPTIONAL_KEYS = ['modelSwitchedAtLeg', 'modelSwitch', 'sessionName'];
+  const ROLLUP_KEYS = new Set([...Object.keys(freshRollup()), ...ROLLUP_OPTIONAL_KEYS,
+    ...Object.keys(ROLLUP_COMPAT_KEYS)]);
   if (!hadPrior) r = freshRollup();
 
-  // perLegModels (4.4) and openingLegs (5.0) are REQUIRED (not additive): a pre-5.0 stats file
-  // triggers the one-time full rescan so every banked leg gets its model and the opening window is
-  // banked (else old legs would stay flat-priced / the fresh baseline would have no material).
+  // perLegModels (4.4) is REQUIRED (not additive): a pre-4.4 stats file triggers the one-time full
+  // rescan so every banked leg gets its model (else old legs would stay flat-priced).
   const requiredFields = ['lastByteOffset', 'nLegs', 'sumUnits', 'sumOutputTokens',
     'lastMsgId', 'lastInputBilled', 'lastOutputTokens', 'lastSeenCost',
-    'lastLegCost', 'perLegUnits', 'perLegOwnUnits', 'perLegModels', 'openingLegs'];
+    'lastLegCost', 'perLegUnits', 'perLegOwnUnits', 'perLegModels'];
   let needsReset = false;
   for (const f of requiredFields) { if (!(f in r)) { needsReset = true; break; } }
   if (needsReset) {
@@ -372,7 +364,6 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
         r.lastByteOffset = 0; r.nLegs = 0; r.sumUnits = 0; r.sumOutputTokens = 0;
         r.lastInputBilled = 0; r.lastOutputTokens = 0; r.perLegUnits = []; r.perLegOwnUnits = [];
         r.perLegModels = []; r.runStartLeg = 0;
-        r.openingLegs = []; r.firstLegColdStart = null; r.openingLegCw = null;
         if ('recentWriteTtls' in r) r.recentWriteTtls = [];
         if ('recentLegs' in r) r.recentLegs = [];
         if ('lastWarm' in r) r.lastWarm = 0;
@@ -411,7 +402,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               // Placeholder lines are NOT legs (isSyntheticLeg — the SAME predicate getScannedLegs
               // uses, so the two scans can never disagree): a `<synthetic>` line or an all-zero-usage
               // line processed no tokens. Skipped AFTER the message-id dedup and BEFORE any state is
-              // touched, so it consumes no leg index, no sparkline cell and no opening-window slot,
+              // touched, so it consumes no leg index and no sparkline cell,
               // and — critically — does not reset the cold-cache clock: it refreshed no cache.
               // `lastMsgId` is deliberately left alone, so its own duplicate lines are dropped by
               // this same test rather than by the adjacent-dedup slot a real leg needs.
@@ -450,14 +441,6 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               const blTtl = Number(r.lastLegTtlSec) > 0 ? Number(r.lastLegTtlSec) : 300;
               r.recentLegs.push({ idx: Number(r.nLegs), inT: inTok, cw: cwTok, cwUnits, cr: crTok, out: outTok, units, gapToPrev: blGap, coldTtl: blTtl, prevWarm, model: legModel });
               if (r.recentLegs.length > 12) r.recentLegs = r.recentLegs.slice(-12);
-              // Opening window for the froz5 fresh baseline (pickFreshBaseline at read time; the
-              // baseline is tier-free, so a later tier switch does not move it) + the leg-1 era
-              // signature. The placeholder skip above runs BEFORE banking, so this holds the first
-              // FRESH_WINDOW *real* legs by construction.
-              if (!Array.isArray(r.openingLegs)) r.openingLegs = [];
-              const openRec = { idx: Number(r.nLegs), inT: inTok, cw: cwTok, cr: crTok, out: outTok, units, model: legModel };
-              if (r.openingLegs.length < FRESH_WINDOW) r.openingLegs.push(openRec);
-              if (Number(r.nLegs) === 1) { r.firstLegColdStart = isColdStartLeg(openRec); r.openingLegCw = cwTok; }
               if (legTs != null) r.lastLegTs = legTs;
               r.lastWarm = crTok + cwTok;
               if (legTtlSec > 0) {
@@ -481,7 +464,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   r.lastSeenCost = Number(currentCost);
 
   // Model stamping — a mid-session PRICE-TIER change (never a raw-string change: id-form vs
-  // display-form and same-tier upgrades share a tier) marks the froz5 ratio non-comparable across
+  // display-form and same-tier upgrades share a tier) marks per-leg DOLLARS non-comparable across
   // the switch. The stamp persists for the rest of the session; the sidecar carries it verbatim.
   const prevTier = ModelTier(r.mainModel);
   const newTier = ModelTier(mainModel);
@@ -494,7 +477,14 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   // fact sheet's FOREIGN guard can name THIS session in words; a nameless render never clears it.
   if (sessionName) r.sessionName = sessionName;
 
-  try { atomicWriteFile(statsPath, JSON.stringify(r, null, 2)); } catch {}
+  // Write the projection (see ROLLUP_KEYS above), not `r` itself — anything outside the declared
+  // shape is dropped here rather than carried forward forever. Existing key order is preserved.
+  const rOut = {};
+  for (const k of Object.keys(r)) { if (ROLLUP_KEYS.has(k)) rOut[k] = r[k]; }
+  // A back-compat key already in the file rode through the loop above untouched; one that was never
+  // there gets stamped now, so a file this build CREATED is also safe for a lagging reader.
+  for (const [k, v] of Object.entries(ROLLUP_COMPAT_KEYS)) if (!(k in rOut)) rOut[k] = v;
+  try { atomicWriteFile(statsPath, JSON.stringify(rOut, null, 2)); } catch {}
 
   // Housekeeping sweep — runs on a NEW session's first render OR on a session's first render on a
   // new UTC day (the stats file's pre-write mtime vs NOW, calendar-day compare). "New session only"
@@ -785,11 +775,11 @@ const runStartLeg = rollup ? Number(rollup.runStartLeg) || 0 : 0;
 if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier, runIdx); } catch {} }
 // Transcript-vs-display tier PROVENANCE — "the label names a tier that has never served in this
 // run". Pure provenance: it drives the dim cluster-1 chip, a conditional sidecar key and a
-// fact-sheet caveat, and gates NO number (the froz5 baseline is tier-free, so no tier can be got
-// wrong). Reads arrays already in hand — no extra file read, no transcript re-scan on the hot path.
+// fact-sheet caveat, and gates NO number (the display tier cancels out of per-leg dollars — see
+// servingTierReport). Reads arrays already in hand — no extra file read, no re-scan on the hot path.
 const tierMismatch = rollup ? servingTierReport(rollup.perLegModels, runStartLeg, d?.model?.display_name ?? '') : null;
 // Dim, never coloured: provenance, not alarm. It sits inside the model field, so it never displaces
-// the froz5 chip's `?` warm-open marker.
+// anything in the cost cluster.
 if (tierMismatch) line1Parts[0] += Dim(` ⚠ serving:${tierMismatch.serving}`);
 const line1 = line1Parts.join(DIM_SEP);
 // Per-leg EFFECTIVE units = raw units × the leg's tier weight relative to the main tier (a Sonnet
@@ -817,20 +807,7 @@ let nextPart = null;
 if (rollup && totalUnits > 0 && sessionCost > 0) {
   perLegCostArr = perLegEff.map((u) => baseTrue * u);
 }
-// Fresh-leg baseline (shape-based, bsl5.0.0.0): the median of the first FRESH_N warm legs inside the
-// first FRESH_WINDOW legs, over RAW units — TIER-FREE since bsl5.0.7.0, exactly like the forecast it
-// is divided into, so the ratio is a token-work (depth) ratio and the depth-fitted gradient is a
-// legitimate colouring of it. `next $X = R× $Y (fresh)` stays arithmetically exact either way
-// (`base` cancels). Null until the first warm leg is seen — the cost cluster then shows `next $X`
-// alone, never a ratio against the opener. See pickFreshBaseline in leg-driver.mjs for the window /
-// fallback rules.
-const fb = rollup ? pickFreshBaseline(rollup.openingLegs) : null;
-// Low-confidence marker = "the session opened warm": leg 1 read a shared prefix from cache (the
-// pre-CC-2.1.209 opener signature, or a sibling-warmed launch), so its pristine floor is smaller
-// than the post-2.1.209 cold-start sessions the curve was fit on and the ratio can read a little
-// above the curve. Behaviour-gated, never version-gated; an unknown leg-1 shape never marks.
-const froz5CalibStale = rollup?.firstLegColdStart === false && Number(rollup.openingLegs?.[0]?.cr) > 0;
-let forecast = null, ratio = null, freshBaseline = null;
+let forecast = null;
 if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
   && totalUnits > 0 && !isNil(ctxTok) && ctxTok > 0) {
   const base = baseTrue;
@@ -840,24 +817,30 @@ if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
   // Raw — the next leg runs at the CURRENT tier (weight 1 against itself).
   const nextUnits = floorUnits + Median(ownTail);
   forecast = base * nextUnits;
-  const freshUnits = fb?.units ?? 0;
-  freshBaseline = freshUnits > 0 ? base * freshUnits : null;
-  ratio = freshUnits > 0 ? nextUnits / freshUnits : null;
-  const forecastStr = '$' + fmtN(forecast, 2);
-  let part = Dim('next ') + ColorLegCell(forecast, forecastStr);
-  if (!isNil(ratio)) {
-    // `?` suffix = the warm-open low-confidence marker (froz5CalibStale above).
-    const ratioStr = fmtN(ratio, 1) + 'x' + (froz5CalibStale ? '?' : '');
-    const freshStr = '$' + fmtN(freshBaseline, 2);
-    part += Dim(' =') + BgFroz5(ratio, ratioStr) + Dim(`${freshStr} (fresh)`);
-  }
-  nextPart = part;
+  nextPart = Dim('next ') + ColorLegCell(forecast, '$' + fmtN(forecast, 2));
 }
 if (rollup && !isNil(rollup.lastLegCost) && Number(rollup.lastLegCost) > 0) {
   const ltc = Number(rollup.lastLegCost);
   cacheParts.push(Dim('last leg ') + ColorLegCell(ltc, '$' + fmtN(ltc, 2)));
 }
 if (nextPart) cacheParts.push(nextPart);
+// The recent RATE — the MEDIAN of the last min(8, N) per-leg dollars, the same figures `last leg`
+// and the sparkline already show (perLegCostArr, so `base` is untouched and no per-leg dollar is
+// recomputed by another route). Median, NOT mean: this chip is a per-leg dollar figure, on the
+// per-leg gradient, between two other typical-leg figures — one compaction leg pulling a mean into
+// the red band while every ordinary leg sat in yellow is a confidently wrong colour, which is the
+// exact failure this build set out to delete. Spikes are the spikes panel's job; the cold-tax line
+// counts them too. Same exported `median` as the `next` forecast's own-work term (leg-driver.mjs —
+// even count → mean of the middle two), so the chip and the forecast are one statistic from one
+// implementation. The label carries the REAL count (`last 3` … `last 8`), so the chip never claims a
+// window it does not have; suppressed below 2 legs (at 1 it would just duplicate `last leg`). Same
+// ColorLegCell gradient as `last leg` and `next`, so the three dollar figures on the line are one
+// measure read against each other.
+const recentN = Math.min(8, perLegCostArr.length);
+if (recentN >= 2) {
+  const recentUsd = median(perLegCostArr.slice(-recentN));
+  cacheParts.push(Dim('last ' + recentN + ' ') + ColorLegCell(recentUsd, '$' + fmtN(recentUsd, 2)));
+}
 // temporary — removed by Stage B (dollar-gate re-anchor): the $ color bands / verdict floors are
 // calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main the dollars gate too hot.
 if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
@@ -1244,9 +1227,6 @@ try {
     : ctxUsed < 32000 ? 'pristine' : ctxUsed < 128000 ? 'green' : ctxUsed < 256000 ? 'yellow' : ctxUsed < 500000 ? 'orange' : 'red';
   const fillStateV = isNil(ctxPct) ? null
     : ctxPct < 50 ? 'green' : ctxPct < 70 ? 'yellow' : ctxPct < 85 ? 'orange' : 'red';
-  // Thresholds = the Froz5RGB anchors (white 1.0 / yellow / orange / red from froz5-fit.json).
-  const froz5State = isNil(ratio) ? null
-    : ratio < 1.0 ? 'green' : ratio < 2.3 ? 'white' : ratio < 4.2 ? 'yellow' : ratio < 7.4 ? 'orange' : 'red';
   // Auto-compact off → toCompact is null (there is no compaction point) + the always-present
   // autoCompactOff flag, so handover-facts can phrase headroom honestly instead of "N to compact".
   const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
@@ -1263,7 +1243,7 @@ try {
   const prevSnap = readJson(sidecarPath);
   const prevGitRepo = (prevSnap && !isNil(prevSnap.gitRepo)) ? prevSnap.gitRepo : null;
   const snapshot = {
-    schema: 5,
+    schema: 6,
     sessionId: sessionId ?? null,
     renderedAt: NOW,
     transcriptPath: tpath ?? null,
@@ -1276,15 +1256,6 @@ try {
     // gates no number. Additive + conditional, so no schema bump (the fastMode / sessionName
     // precedent).
     ...(tierMismatch ? { tierMismatch } : {}),
-    // Warm-open low-confidence marker: present ONLY when the session opened warm (see the gate
-    // above the cost cluster), like modelSwitch.
-    ...(froz5CalibStale ? { froz5CalibStale: true } : {}),
-    // Era signature + fresh-baseline material (schema 5): leg 1's cold-start verdict and its cache
-    // write (the pristine floor), and how many warm legs the baseline stands on (< FRESH_N →
-    // provisional; 0 → no baseline yet). Null when no rollup exists.
-    firstLegColdStart: rollup ? (rollup.firstLegColdStart ?? null) : null,
-    openingLegCw: rollup ? (rollup.openingLegCw ?? null) : null,
-    freshLegN: rollup ? (fb?.n ?? 0) : null,
     windowSize: ctxSize ?? null,
     effort,
     ctxTokens: ctxUsed ?? null,
@@ -1295,9 +1266,6 @@ try {
     autoCompactOff: AC_OFF,
     costUsd: costUsd ?? null,
     nextLegUsd: forecast,
-    froz5Ratio: ratio,
-    froz5State,
-    freshLegUsd: freshBaseline,
     lastLegUsd: rollup ? (rollup.lastLegCost ?? null) : null,
     nLegs: rollup ? Number(rollup.nLegs) : null,
     // First leg of the CURRENT run (0 = the session's first run); legs before it predate this

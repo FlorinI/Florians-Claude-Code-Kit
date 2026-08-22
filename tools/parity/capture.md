@@ -30,7 +30,10 @@ golden diff before committing — it is the human-readable record of what the ch
 ```
 fixtures/<name>/
   stdin.json          # the CC stdin payload; transcript_path + workspace.current_dir are rewritten
-  meta.json           # { "nowEpoch": <epoch seconds> }   (optionally { "env": {...} })
+  meta.json           # { "note": "<what this fixture captures>", "nowEpoch": <epoch seconds> }
+                      #   (optionally { "env": {...} }). The harness reads nowEpoch and env only;
+                      #   `note` is for the reader. Name the SHAPE — opener behaviour, tier
+                      #   composition, placeholder legs, leg count — never a statistic that can move.
   transcript.jsonl    # (optional) the session transcript — the engine reads this exact file
   seed/               # (optional) copied into <tempCwd>/.claude/ before the run (e.g.
                       #            statusline-stats/<sessionId>.json — exercises the incremental path)
@@ -57,7 +60,7 @@ the main transcript path: `<transcript-minus-.jsonl>/subagents`).
 | `agents`       | sub-agent fleet → agents line + base de-inflation over the combined unit pool |
 | `incremental`  | pre-seeded stats (`seed/`) → `hadPrior` + last-leg-cost delta |
 | `legs-tier-mix` | Sonnet opening leg on a Fable main → per-leg tier weight (leg 1 $0.28, not the blend's $0.83) |
-| `resumed-run`  | 12 legs banked in `seed/` at $6, stdin cost $0.50 → detected resume (`runStartLeg 12`, `COST_RUN_NOTE`) |
+| `resumed-run`  | 12 legs banked in `seed/` at $6, stdin cost $0.50 → detected resume (`runStartLeg 12`, `COST_RESUME_NOTE`) |
 | `resumed-nohistory` | same 13-leg transcript, no seed → `legPricingSuspect` tripwire (chip + facts note) |
 | `agents-progressive` | one agent message id on 3 lines, `output_tokens` 5/5/5000 → max-wins banking (agents $0.25) |
 
@@ -69,7 +72,8 @@ session into a fixture:
 
 1. Render once with the env var set; copy the dumped JSON to `fixtures/<name>/stdin.json`.
 2. Copy the file at its `transcript_path` to `fixtures/<name>/transcript.jsonl`.
-3. Add `meta.json` with a `nowEpoch` near the capture time (so cold/quota states are realistic).
+3. Add `meta.json` with a `nowEpoch` near the capture time (so cold/quota states are realistic) and a
+   one-line `note` saying what the fixture captures.
 4. `node tools/parity/run-parity.mjs --bless <name>` to write the golden, then eyeball `golden.txt`
    to confirm the rendered line looks right before committing.
 

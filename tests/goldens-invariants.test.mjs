@@ -18,6 +18,52 @@ const stdout = (f) => readFileSync(join(FIX, f, 'golden.txt'), 'utf8').replace(/
 const facts = (f) => readFileSync(join(FIX, f, 'golden-facts.txt'), 'utf8');
 const allFixtures = () => readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory());
 
+// ---- froz5-removal (2026-08-21, bsl6.0.0.0) shared helpers -------------------------------------
+// The seven sidecar keys the removal deletes (D3). Deleted, never display-gated off.
+const REMOVED_KEYS = ['froz5Ratio', 'froz5State', 'freshLegUsd', 'freshLegN',
+  'froz5CalibStale', 'firstLegColdStart', 'openingLegCw'];
+
+// The `last N` chip on the cost line, ANSI-stripped. `last leg` cannot collide (letters, not digits).
+const chipOf = (f) => {
+  const m = /\| last (\d+) \$([\d.,]+)/.exec(stdout(f));
+  return m ? { n: Number(m[1]), usd: m[2] } : null;
+};
+// Independent half-to-even 2-dp formatter — the renderer's fmtN(x, 2) rounds half-to-EVEN, so
+// toFixed(2) disagrees on exact ties (0.125 → 0.12, not 0.13). Deliberately not imported from
+// home/_sl-compat.mjs: an independent computation is the point of this guard.
+const fmt2 = (x) => {
+  const [ip, dp = ''] = Math.abs(x).toFixed(30).split('.');
+  let n = BigInt(ip + dp.slice(0, 2).padEnd(2, '0'));
+  const rest = dp.slice(2), first = rest[0] ?? '0';
+  if (first > '5') n += 1n;
+  else if (first === '5') { if (/[1-9]/.test(rest.slice(1))) n += 1n; else if (n % 2n === 1n) n += 1n; }
+  return `${n / 100n}.${String(n % 100n).padStart(2, '0')}`;
+};
+// D1's chip, as amended by spec §A1: the MEDIAN of the last min(8, len) entries of legCosts,
+// suppressed below 2 legs. Even count → the mean of the two middle values, the convention the
+// exported `median` already uses and the one the `next` forecast is computed with.
+const windowOf = (s) => {
+  const lc = Array.isArray(s.legCosts) ? s.legCosts.map(Number) : [];
+  if (lc.length < 2) return null;
+  return lc.slice(-Math.min(8, lc.length));
+};
+const medianOf = (win) => {
+  const v = win.slice().sort((a, b) => a - b);
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 === 1 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+};
+const chipExpect = (s) => {
+  const win = windowOf(s);
+  return win ? { n: win.length, usd: fmt2(medianOf(win)) } : null;
+};
+// D2a's three-rung dollar ladder. The two floors are handover-facts.mjs's COST_FLOOR_* — unchanged
+// in value by this sprint; only the gate that used to sit in front of them is gone.
+const ladderCLevel = (nextUsd) =>
+  (nextUsd == null || Number(nextUsd) < 0.28) ? 0 : (Number(nextUsd) < 0.45 ? 2 : 3);
+const qLevelOf = (s) => Math.max(
+  ({ pristine: 0, green: 0, yellow: 1, orange: 2, red: 3 })[String(s.ctxAbsState)] ?? 0,
+  s.fillPct == null ? 0 : (Number(s.fillPct) < 50 ? 0 : (Number(s.fillPct) < 70 ? 2 : 3)));
+
 // ---- A: tier-weighted cost split -------------------------------------------------------------
 test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent ×0.2)', () => {
   const s = sidecar('a1-tier-weighted');
@@ -109,30 +155,32 @@ test('D1 — no-switch fixtures carry NO modelSwitch key (golden blast radius st
   }
 });
 
-test('D2 — the fifth cause is GATED: it preempts only where the baseline is NOT full strength', () => {
-  // REWRITTEN by the froz5-truth sprint (2026-08-21, decision D11). Before it, a stamped
-  // `modelSwitch` preempted the four depth causes unconditionally, so the fact sheet printed "the
-  // ratio and the depth curve do not apply" — over a number this sprint makes correct. That would
-  // have thrown away the sprint's own win, so the preempt now requires a weak anchor
-  // (freshLegN < FRESH_N, or no baseline at all) and at full strength the switch is appended as a
-  // dollar-comparability caveat instead. Asserted as a SWEEP, so the blast radius is pinned across
-  // every fixture rather than on one.
-  const FRESH_N = 5;
+test('D2 — the model-switch note fires on modelSwitch ALONE, once, with no ratio/curve clause', () => {
+  // REWRITTEN by the froz5-removal sprint (2026-08-21, D2c + D7). The note used to be one of two
+  // mutually-exclusive branches split by fresh-leg anchor strength: `COST_CHAR`'s `model-switched`
+  // cause on a weak anchor, a `COST_RUN_NOTE` caveat on a full-strength one. Both halves of that
+  // gate died with the baseline, so ONE note now fires whenever the sidecar carries `modelSwitch` —
+  // under its own label (`COST_MODELSWITCH_NOTE`, D7), never the shared `COST_RUN_NOTE`.
+  // Asserted as a SWEEP so the blast radius is pinned across all 73, not on one fixture.
+  let withSwitch = 0;
   for (const f of allFixtures()) {
     const s = sidecar(f);
     const txt = facts(f);
-    if (!txt.includes('cause=model-switched')) continue;
-    const weak = s.freshLegN == null || Number(s.freshLegN) < FRESH_N || s.froz5Ratio == null;
-    assert.ok(weak, `${f}: the fifth cause preempted on a FULL-STRENGTH anchor (freshLegN ${s.freshLegN}, ratio ${s.froz5Ratio}) — D11's gate is not holding`);
+    const notes = txt.split('\n').filter((l) => l.startsWith('COST_MODELSWITCH_NOTE: '));
+    if (s.modelSwitch) {
+      withSwitch++;
+      assert.equal(notes.length, 1, `${f}: modelSwitch set → exactly one COST_MODELSWITCH_NOTE (got ${notes.length})`);
+      assert.ok(notes[0].includes('the model switched mid-session'), `${f}: note wording`);
+      assert.ok(!notes[0].includes('the multiple'), `${f}: the ratio clause must be gone`);
+      assert.ok(!notes[0].includes('depth curve'), `${f}: the curve clause must be gone`);
+    } else {
+      assert.equal(notes.length, 0, `${f}: no modelSwitch → no COST_MODELSWITCH_NOTE`);
+    }
+    assert.ok(!txt.includes('cause=model-switched'), `${f}: the COST_CHAR cause is gone`);
   }
-  // model-switch is the fixture at exactly full strength, and it is the boundary case: the depth
-  // cause must resolve and the switch must survive as a caveat, naming both models.
-  const ms = sidecar('model-switch');
-  assert.equal(ms.freshLegN, FRESH_N, 'model-switch sits exactly at full strength');
-  const f = facts('model-switch');
-  assert.match(f, /COST_FROZ5: cause=(heavy-start|light-start|cold-pumped|on-curve)/, 'a depth cause resolves');
-  assert.ok(!f.includes('cause=model-switched'), 'and the fifth cause does NOT preempt');
-  assert.match(f, /Fable 5 \(1M context\) → Sonnet 5 at leg 13/, 'the switch is still reported, as a caveat');
+  assert.ok(withSwitch >= 1, `vacuity guard: no fixture carries modelSwitch (found ${withSwitch})`);
+  // The boundary fixture: the note names both models and the leg, and nothing else about it moved.
+  assert.match(facts('model-switch'), /COST_MODELSWITCH_NOTE: the model switched mid-session \(Fable 5 \(1M context\) → Sonnet 5 at leg 13\)/);
 });
 
 // ---- E: warm-rewrite tax gloss -------------------------------------------------------------------
@@ -184,25 +232,9 @@ test('I1 — turn-TPS dedups per-content-block duplicate lines: tps == 90, not 1
   assert.equal(sidecar('tps-dedup').tps, 90);
 });
 
-// ---- J: froz5 warm-open marker (2026-07-27 Phase 1 M3; re-gated by behaviour in froz5-recal, F4) --
-test('J1 — froz5CalibStale only on the two warm-open fixtures {froz5-stale, bucketed} (golden blast radius)', () => {
-  const WARM_OPEN = new Set(['froz5-stale', 'bucketed']);
-  for (const f of allFixtures()) {
-    if (WARM_OPEN.has(f)) assert.equal(sidecar(f).froz5CalibStale, true, `${f}: marker expected`);
-    else assert.ok(!('froz5CalibStale' in sidecar(f)), `${f}: unexpected froz5CalibStale key`);
-  }
-});
-
-test('J2 — froz5-stale (leg 1 read a 12k prefix): flag present, chip `2.2x?`, facts era=warm-open + corrected caveat', () => {
-  const s = sidecar('froz5-stale');
-  assert.equal(s.froz5CalibStale, true);
-  assert.equal(s.firstLegColdStart, false);
-  assert.match(stdout('froz5-stale'), /2\.2x\?/); // keepwarm legs 2–6 median = 10,000 units = the old first-5 mean → 2.2 still
-  const f = facts('froz5-stale');
-  assert.match(f, /COST_FROZ5: cause=[a-z-]+; .*confidence=low; era=warm-open \(curve fit on post-2\.1\.209 cold-start sessions\)/);
-  assert.match(f, /COST_CHAR: .*low confidence: this session opened on a warm shared prefix \(pre-2\.1\.209 regime, or a sibling-warmed launch\)/);
-  assert.ok(!f.includes('prompt cut') && !f.includes('curve=stale'), 'the pre-fit caveat is gone');
-});
+// ---- J: the froz5 warm-open marker rows (J1/J2/J3) died with the metric (froz5-removal, 2026-08-21).
+// The `froz5CalibStale` / `firstLegColdStart` keys they pinned no longer exist; the schema guard (L5)
+// asserts their absence across all 73 goldens, which is the stronger property.
 
 // ---- K: leg-pricing-truth (2026-08-16 sprint) — tier-true, run-anchored per-leg $ ------------------
 // Hand-computed at list price (S1 weights in 1 · cw1h 2 · cr 0.10 · out 5; TIER_BASE fable 10 · opus 5 ·
@@ -215,16 +247,13 @@ test('K1 — legs-tier-mix: a Sonnet opening leg on a Fable main prices at Sonne
   // leg 1: 2 + 69,900×2 + 10×5 = 139,852 raw × 0.2 = 27,970.4 eff × 1e-5
   assert.deepEqual(s.legCosts, [0.2797, 0.77, 0.4, 0.2]);
   near(s.base, 1e-5, 1e-12, 'base');
-  // froz5-recal (F6): warm legs = 3,4 only (shares 1.00 / 0.30 / 0.05 / 0.02) → median(40,000, 20,000) × 1e-5;
-  // own tail median 50,000 + 0.1 × 107,000 = 60,700 units → ratio 2.0233; provisional (2 of 5).
-  near(s.freshLegUsd, 0.30, 1e-9, 'freshLegUsd');
-  near(s.froz5Ratio, 2.0233, 1e-3, 'froz5Ratio');
-  assert.equal(s.freshLegN, 2);
-  assert.equal(s.firstLegColdStart, true);
-  assert.equal(s.openingLegCw, 69900);
-  assert.match(stdout('legs-tier-mix'), /= 2\.0x \$0\.30 \(fresh\)/);
-  assert.match(facts('legs-tier-mix'), /; baseline=provisional \(2 of 5 warm legs\)/);
-  assert.match(facts('legs-tier-mix'), /confidence=low/);
+  // froz5-removal (2026-08-21): the fresh-leg baseline, the ratio and their provisional/confidence
+  // tags are gone. What replaces them on this line is the last-N chip over the same four dollars —
+  // the MEDIAN of them (spec §A1), so the two middle legs sorted are 0.2797 and 0.40 →
+  // `last 4 $0.34`. NOT the retired mean of 0.412425, which one $0.77 leg pulled up: this fixture is
+  // the smallest case where the two statistics visibly disagree.
+  assert.deepEqual(chipOf('legs-tier-mix'), { n: 4, usd: '0.34' });
+  assert.ok(!stdout('legs-tier-mix').includes('(fresh)'), 'no ratio chip survives');
   assert.equal(s.mainSessionUsd, 1.65);
   assert.equal(s.agentsUsd, 0);
   assert.equal(s.runStartLeg, 0);
@@ -248,7 +277,8 @@ test('K2 — resumed-run: the new leg costs what CC says; earlier legs at this r
   assert.equal(s.mainSessionUsd, 0.5);
   assert.equal(s.lastLegUsd, 0.5);
   assert.ok(!('legPricingSuspect' in s));
-  assert.match(facts('resumed-run'), /COST_RUN_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced\s+at this run's rate/);
+  // D7 (froz5-removal): the shared COST_RUN_NOTE label is retired; the resumed caveat gets its own.
+  assert.match(facts('resumed-run'), /COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced\s+at this run's rate/);
   assert.match(stdout('resumed-run'), /last leg \$0\.50/);
 });
 
@@ -261,7 +291,9 @@ test('K3 — resumed-nohistory: flagged, never faked (legs stay CC-anchored at $
   assert.ok(legsLine, '$/leg line present');
   assert.ok(legsLine.trimEnd().endsWith('⚠ leg $ suspect: base far below list (resumed without history?)'), `chip at line end: ${JSON.stringify(legsLine)}`);
   const f = facts('resumed-nohistory');
-  assert.match(f, /COST_RUN_NOTE: leg \$ suspect — session rate far below list price \(resumed without local history\?\); per-leg \$ are\s+understated, the total is CC's own/);
+  // D7 (froz5-removal): its own label, so it can co-occur with the resume note without the sheet
+  // emitting one key twice.
+  assert.match(f, /COST_LEGPRICE_NOTE: leg \$ suspect — session rate far below list price \(resumed without local history\?\); per-leg \$ are\s+understated, the total is CC's own/);
   assert.ok(!f.includes('resumed session —'), 'no detected-resume note without a stats seed');
 });
 
@@ -301,22 +333,13 @@ test('K5 — the spikes agent panel quotes the same dollars as the agents chip, 
   assert.match(spikes('b4-absent-model'), /top 1 agents\s+·\s+of 1\s+·\s+\$10\.00/);
 });
 
-test('K6 — model-switch on RAW units: the multiple and the fresh-leg $ move, every dollar stays put', () => {
-  // model-switch is the sprint's ONE permitted mover (froz5-truth, 2026-08-21). Its twelve opening
-  // legs are Fable under a Sonnet label, so the retired accessor multiplied each by
-  // TIER_BASE.fable / TIER_BASE.sonnet = 5 — inflating the baseline to 500,000 units ($1.00) and
-  // deflating the multiple to 0.23×. Raw units give 100,000 units ($0.20) and 1.15×.
-  //
-  // Note the DIRECTION: here the label names the CHEAPER tier, so the old baseline was too LARGE and
-  // the corrected multiple RISES. On a session whose label names the dearer tier (froz5-tier-unserved,
-  // froz5-offtier-open) it falls. The fix removes a distortion; it does not push one way.
+test('K6 — model-switch: every dollar stays exactly where the leg-pricing sprint put it', () => {
+  // The froz5-truth sprint (2026-08-21) proved these dollars by moving the baseline OFF tier
+  // weighting; froz5-removal (same day) deleted the baseline and the multiple outright, so what this
+  // row now guards is the surviving half — the per-leg / forecast / total dollars, which the removal
+  // must not touch. The `= 1.1x $0.20 (fresh)` tail is gone; the cost line ends at `next $0.23`
+  // plus the new chip.
   const s = sidecar('model-switch');
-  // ── the two fields §6.2 permits to move, and their exact new values
-  near(s.freshLegUsd, 0.2, 1e-9, 'fresh-leg $ = 100,000 raw units × base 2e-6');
-  assert.equal(s.froz5Ratio, 1.15, 'multiple = nextLegUsd / freshLegUsd = 0.23 / 0.20');
-  assert.equal(s.freshLegN, 5, 'the anchor strength itself did not move');
-  assert.match(stdout('model-switch'), /next \$0\.23 = 1\.1x \$0\.20 \(fresh\)/);
-  // ── and the AE-17 evidence: every dollar is byte-for-byte what it was before the change
   assert.equal(s.costUsd, 12.2, 'session total');
   assert.equal(s.legCosts[0], 1, 'first per-leg cell');
   assert.equal(s.legCosts[12], 0.2, 'last per-leg cell');
@@ -325,14 +348,16 @@ test('K6 — model-switch on RAW units: the multiple and the fresh-leg $ move, e
   near(s.base, 2e-6, 1e-12, 'base');
   assert.deepEqual(s.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' }, 'D1 stays');
   assert.ok(!('legPricingSuspect' in s));
-  // The fall/rise factor is exactly the weight that was removed — nothing else entered.
-  near(1 / (s.froz5Ratio / 0.23), 0.2, 1e-9, 'the multiple moved by exactly 1 / tierWeight(fable, sonnet) = 1/5');
+  const line = stdout('model-switch');
+  assert.match(line, /next \$0\.23/);
+  assert.ok(!line.includes('(fresh)'), 'the ratio tail is gone');
+  assert.deepEqual(chipOf('model-switch'), chipExpect(s), 'the chip is the median of the legCosts tail');
 });
 
-test('K7 — schema 5 + runStartLeg present in every golden sidecar (0 / 12 with a transcript, null without)', () => {
+test('K7 — schema 6 + runStartLeg present in every golden sidecar (0 / 12 with a transcript, null without)', () => {
   for (const f of allFixtures()) {
     const s = sidecar(f);
-    assert.equal(s.schema, 5, `${f}: schema`);
+    assert.equal(s.schema, 6, `${f}: schema`);
     assert.ok('runStartLeg' in s, `${f}: runStartLeg missing`);
     if (s.nLegs === null) assert.equal(s.runStartLeg, null, `${f}: no rollup → null`);
     else assert.ok(s.runStartLeg === 0 || s.runStartLeg === 12, `${f}: runStartLeg ${s.runStartLeg}`);
@@ -352,68 +377,36 @@ test('K10 — no agent panel where no agents exist', () => {
   }
 });
 
-test('J3 — marker never touches the number: ratio/state identical to the clone parent keepwarm-1h', () => {
-  const a = sidecar('froz5-stale');
-  const b = sidecar('keepwarm-1h');
-  assert.equal(a.froz5Ratio, b.froz5Ratio); // 2.2 — raw signal, no cap/smoothing/suppression
-  assert.equal(a.froz5State, b.froz5State); // chip color driver unchanged
-  // parent stays confidence=ok — proves the ok→low flip above is the warm-open gate, nothing else
-  assert.match(facts('keepwarm-1h'), /confidence=ok/);
-  assert.ok(!stdout('keepwarm-1h').includes('x?'), 'parent chip must not carry the ? suffix');
-  assert.ok(!('froz5CalibStale' in b), 'parent (leg 1 cr 0, cw 5000 — unknown shape) carries no marker');
-});
+// J3 (the marker-vs-parent ratio equality) died with froz5Ratio / froz5State — froz5-removal, 2026-08-21.
 
 // ---- L: froz5-recal (2026-08-16 sprint 2) — shape-based fresh baseline, era by behaviour, schema 5 ---
 // Hand-computed from the spec's F1 / F3 tables (S1 weights, 1h writes, opus list 5e-6 $/unit); see
 // .claude/plans/2026-08-16-froz5-recalibration-test-plan.md §4.3.
 const withTranscript = (f) => existsSync(join(FIX, f, 'transcript.jsonl'));
-// Fixtures whose leg 1 is the post-2.1.209 cold-start opener (cr 0 · in ≤ 100 · cw ≥ 8000), read off the
-// transcripts: keepwarm-5m (in 0 · cw exactly 8000 — the boundary), legs-tier-mix (in 2 · cw 69,900), and the
-// two F1/F3 fixtures. Every other transcript opener fails a clause (agents/capped/… carry in 200; small-young /
-// tps-dedup in 150; bucketed / froz5-stale read a prefix; warmtax-first carries 1000 in; the a/b/median/agents-
-// progressive/model-switch/resumed-* openers are output-only or prompt-less).
-// froz5-truth sprint (2026-08-21) adds five fixtures whose leg 1 is a post-2.1.209 cold-start opener
-// (cr 0, inT ≤ 100, cw ≥ 8k): the two real-session reductions, the mismatch-chip fixture, the
-// low-warm fallback fixture, and the placeholder twin of fresh-fallback. session-name-hostile clones
-// session-named's output-only legs, so its opener is NOT a cold start and it stays out of this set.
-const COLD_START = new Set(['keepwarm-5m', 'legs-tier-mix', 'fresh-post209', 'fresh-fallback',
-  'froz5-tier-mislabel', 'froz5-offtier-open', 'froz5-tier-unserved', 'froz5-lowwarm-single', 'froz5-synthetic-mid']);
 const SHORT_OUTPUT_ONLY = ['a1-tier-weighted', 'a3-empty-model', 'b1-chip-main', 'b2-mythos', 'b3-unmapped', 'b4-absent-model', 'median-even', 'median-single', 'agents-progressive'];
 
-test('L1 — fresh-post209 (F1): the baseline is a warm leg ($0.06), the opener reads "opened cold ~57k"', () => {
-  const s = sidecar('fresh-post209');
-  near(s.freshLegUsd, 0.05891, 1e-5, 'freshLegUsd'); // median(8302, 11782, 12082, 19302, 11602) = 11,782 × 5e-6
-  near(s.froz5Ratio, 1.7062, 1e-3, 'froz5Ratio');    // (0.1 × 91,000 + 11,002) / 11,782
+test('L1 — cold-open-then-warm: the opener reads "opened cold ~57k" and its dollars are untouched', () => {
+  // The fresh-leg baseline / ratio / provisional-tag pins died with froz5 (froz5-removal,
+  // 2026-08-21). What this fixture still proves is the leg-1 SHAPE label (backed by isColdStartLeg,
+  // which survives un-exported per D5) and that the removal moved no dollar.
+  const s = sidecar('cold-open-then-warm');
   near(s.nextLegUsd, 0.10051, 1e-5, 'nextLegUsd');
-  assert.equal(s.freshLegN, 5);
-  assert.equal(s.firstLegColdStart, true);
-  assert.equal(s.openingLegCw, 57000);
   near(s.legCosts[0], 0.5775, 1e-9, 'legCosts[0]');  // 115,502 × 5e-6
   near(s.base, 5e-6, 1e-12, 'base');
-  assert.ok(!('froz5CalibStale' in s), 'cold-start opener → no marker');
-  assert.equal(s.schema, 5);
-  assert.match(stdout('fresh-post209'), /next \$0\.10 = 1\.7x \$0\.06 \(fresh\)/);
-  assert.ok(!stdout('fresh-post209').includes('x?'));
-  assert.match(spikes('fresh-post209'), /Leg 1  ·  \$0\.58  ·  opened cold ~57k \(whole context written, no cached prefix\)/);
-  assert.ok(!spikes('fresh-post209').includes('warm rewrite'), 'the opener is never a warm rewrite');
-  const f = facts('fresh-post209');
-  assert.ok(!f.includes('provisional'), 'five warm legs → not provisional');
-  assert.match(f, /WARM_REWRITE_TAX: \(none\)/);
-  assert.match(f, /COST_FROZ5: cause=[a-z-]+; froz5 `1\.71×` vs `1\.50×` typical at this depth/); // curve at 91k = 1.38 + 0.30 × 0.41
-  assert.match(f, /confidence=ok/);
+  assert.equal(s.schema, 6);
+  assert.match(stdout('cold-open-then-warm'), /next \$0\.10/);
+  assert.ok(!stdout('cold-open-then-warm').includes('(fresh)'));
+  assert.match(spikes('cold-open-then-warm'), /Leg 1  ·  \$0\.58  ·  opened cold ~57k \(whole context written, no cached prefix\)/);
+  assert.ok(!spikes('cold-open-then-warm').includes('warm rewrite'), 'the opener is never a warm rewrite');
+  assert.match(facts('cold-open-then-warm'), /WARM_REWRITE_TAX: \(none\)/);
 });
 
-test('L2 — fresh-fallback (F3): window closed with 0 warm legs → fallback on legs 2–6 ($0.27), not provisional', () => {
-  const s = sidecar('fresh-fallback');
-  near(s.freshLegUsd, 0.26751, 1e-5, 'freshLegUsd'); // median(45,502 … 61,502) = 53,502 × 5e-6
-  assert.equal(s.freshLegN, 5);
-  assert.equal(s.firstLegColdStart, true);
-  assert.equal(s.openingLegCw, 57000);
+test('L2 — cold-open-then-writes: 13 legs, opener label and dollars intact', () => {
+  const s = sidecar('cold-open-then-writes');
   assert.equal(s.nLegs, 13);
   near(s.legCosts[0], 0.5775, 1e-9, 'legCosts[0]');
-  assert.match(stdout('fresh-fallback'), /\$0\.27 \(fresh\)/);
-  assert.ok(!facts('fresh-fallback').includes('provisional'));
-  assert.match(spikes('fresh-fallback'), /Leg 1  ·  \$0\.58  ·  opened cold ~57k/);
+  assert.ok(!stdout('cold-open-then-writes').includes('(fresh)'));
+  assert.match(spikes('cold-open-then-writes'), /Leg 1  ·  \$0\.58  ·  opened cold ~57k/);
 });
 
 test('L3 — warm-rewrite gloss by Sonnet generation: 4.6 informational (no 2.1.201), Sonnet 5 expected, Opus worth a look', () => {
@@ -429,7 +422,8 @@ test('L3 — warm-rewrite gloss by Sonnet generation: 4.6 informational (no 2.1.
   // same transcript → same dollars: only the gloss differs between warmtax-sonnet and -sonnet46
   const a = sidecar('warmtax-sonnet'), b = sidecar('warmtax-sonnet46');
   assert.deepEqual(a.legCosts, b.legCosts);
-  assert.equal(a.froz5Ratio, b.froz5Ratio);
+  assert.equal(a.nextLegUsd, b.nextLegUsd);   // was froz5Ratio before the removal — same property
+  assert.deepEqual(chipOf('warmtax-sonnet'), chipOf('warmtax-sonnet46'), 'identical legs → identical chip');
 });
 
 test('L4 — opening-leg spotlight labels: cold-start openers read "opened cold", others "loaded … new context", never "warm rewrite"', () => {
@@ -444,101 +438,201 @@ test('L4 — opening-leg spotlight labels: cold-start openers read "opened cold"
   }
 });
 
-test('L5 — schema-5 sweep (F8): the three new keys typed per fixture; firstLegColdStart true exactly on the cold-start openers', () => {
-  for (const f of allFixtures()) {
-    const s = sidecar(f);
-    assert.equal(s.schema, 5, `${f}: schema`);
-    for (const k of ['firstLegColdStart', 'openingLegCw', 'freshLegN']) assert.ok(k in s, `${f}: ${k} missing`);
-    if (withTranscript(f)) {
-      assert.equal(typeof s.firstLegColdStart, 'boolean', `${f}: firstLegColdStart type`);
-      assert.ok(Number.isInteger(s.openingLegCw), `${f}: openingLegCw int`);
-      assert.ok(Number.isInteger(s.freshLegN), `${f}: freshLegN int`);
-      assert.equal(s.firstLegColdStart, COLD_START.has(f), `${f}: firstLegColdStart`);
-    } else {
-      assert.equal(s.firstLegColdStart, null, `${f}: no transcript → null`);
-      assert.equal(s.openingLegCw, null, `${f}: no transcript → null`);
-      assert.equal(s.freshLegN, null, `${f}: no transcript → null`);
-    }
-  }
-});
-
-test('L6 — froz5 trio consistency: ratio / freshLegUsd / state null together ⇔ freshLegN 0; marker only on the two warm-open fixtures', () => {
-  for (const f of allFixtures()) {
-    const s = sidecar(f);
-    if (!withTranscript(f)) continue;
-    const nulls = [s.froz5Ratio == null, s.freshLegUsd == null, s.froz5State == null];
-    assert.ok(nulls.every((x) => x === nulls[0]), `${f}: froz5 trio must be null together: ${JSON.stringify([s.froz5Ratio, s.freshLegUsd, s.froz5State])}`);
-    assert.equal(nulls[0], s.freshLegN === 0, `${f}: trio null ⇔ freshLegN 0 (freshLegN ${s.freshLegN})`);
-    if (s.froz5CalibStale === true) assert.ok(['bucketed', 'froz5-stale'].includes(f), `${f}: unexpected marker`);
-  }
-});
-
-test('L7 — short output-only fixtures: no ratio chip, trio null, "no cost trend yet"; the agent panel dollars stand', () => {
+test('L7 — short output-only fixtures: no ratio chip, `next $` still shown, chip only where ≥2 legs', () => {
+  // Nine fixtures render `next $X` with no ratio tail. EIGHT of them gain the last-N chip;
+  // agents-progressive has exactly ONE banked leg, so its chip is suppressed (D1's n<2 gate). That
+  // one-fixture split is the whole reason this row is a sweep rather than a blanket assertion.
+  let withChip = 0, without = 0;
   for (const f of SHORT_OUTPUT_ONLY) {
     const s = sidecar(f);
-    assert.equal(s.froz5Ratio, null, `${f}: froz5Ratio`);
-    assert.equal(s.freshLegN, 0, `${f}: freshLegN`);
-    assert.equal(s.firstLegColdStart, false, `${f}: firstLegColdStart`);
     assert.ok(!stdout(f).includes('(fresh)'), `${f}: no ratio chip`);
     assert.match(stdout(f), /next \$/, `${f}: next $ still shown`);
-    assert.match(facts(f), /COST_CHAR: no cost trend yet/, `${f}: facts`);
-    assert.match(facts(f), /COST_FROZ5: cause=unknown \(curve n\/a/, `${f}: no cause`);
+    assert.ok(!facts(f).includes('COST_CHAR'), `${f}: COST_CHAR is gone`);
+    assert.ok(!facts(f).includes('COST_FROZ5'), `${f}: COST_FROZ5 is gone`);
+    assert.deepEqual(chipOf(f), chipExpect(s), `${f}: chip vs legCosts tail`);
+    if (chipOf(f)) withChip++; else without++;
   }
+  assert.equal(without, 1, 'exactly one (agents-progressive, 1 leg) suppresses the chip');
+  assert.equal(withChip, 8, 'the other eight gain it');
+  assert.equal(chipOf('agents-progressive'), null, 'agents-progressive is the suppressed one');
 });
 
-test('L8 — model-switch / resumed-*: 12 output-only legs → fallback = legs 1–5 = median = mean; dollars unchanged', () => {
-  const ms = sidecar('model-switch');
-  // Raw units (froz5-truth, 2026-08-21): 100,000 units × base 2e-6. Was $1.00 under the retired
-  // tier-weighted accessor, which multiplied these Fable legs by 5 against the Sonnet label. The
-  // FALLBACK ARM and the picked legs are unchanged — only the price basis moved.
-  near(ms.freshLegUsd, 0.2, 1e-9, 'model-switch freshLegUsd');
-  assert.equal(ms.freshLegN, 5);
-  assert.equal(ms.firstLegColdStart, false);
-  assert.equal(ms.openingLegCw, 0);
-  const rr = sidecar('resumed-run');
-  assert.equal(rr.freshLegUsd, 0.5);
-  assert.equal(rr.freshLegN, 5);
-  assert.equal(rr.firstLegColdStart, false);
-  assert.equal(rr.openingLegCw, 0);
-  const rn = sidecar('resumed-nohistory');
-  near(rn.freshLegUsd, 100000 * rn.base, 1e-9, 'resumed-nohistory freshLegUsd = 100,000 units × base'); // 0.0385-shaped
-  assert.equal(rn.freshLegN, 5);
-  assert.equal(rn.firstLegColdStart, false);
-  assert.equal(rn.openingLegCw, 0);
-  assert.match(facts('resumed-run'), /COST_RUN_NOTE: resumed session/);
-});
-
-test('L9 — froz5-stale vs keepwarm-1h: the F4 reshape adds exactly 1,200 units (leg 1 +12k read); ratio/state equal', () => {
-  const a = sidecar('froz5-stale'), b = sidecar('keepwarm-1h');
+test('L9 — warm-open vs keepwarm-1h: the reshape adds exactly 1,200 units (leg 1 +12k read)', () => {
+  const a = sidecar('warm-open'), b = sidecar('keepwarm-1h');
   // parent: Σ 100,000 units at $2.00 → base 2e-5, legCosts[0] = 10,000 × base = 0.20
   near(b.base * 100000, 2.0, 1e-9, 'keepwarm-1h Σunits');
   near(b.legCosts[0], 0.2, 1e-9, 'keepwarm-1h legCosts[0]');
   // reshaped: Σ 101,200 → base 2/101,200; legCosts[0] = 11,200 × base
-  near(a.base * 101200, 2.0, 1e-9, 'froz5-stale Σunits = parent + 1,200');
+  near(a.base * 101200, 2.0, 1e-9, 'warm-open Σunits = parent + 1,200');
   // legCosts are stored at 4 dp → tolerance 5e-5
-  near(a.legCosts[0], 11200 * a.base, 5e-5, 'froz5-stale legCosts[0] = 11,200 units × base');
+  near(a.legCosts[0], 11200 * a.base, 5e-5, 'warm-open legCosts[0] = 11,200 units × base');
   assert.equal(a.legCosts.length, b.legCosts.length);
-  for (let i = 1; i < a.legCosts.length; i++) near(a.legCosts[i], 10000 * a.base * (i === 5 ? 5 : 1), 5e-5, `froz5-stale legCosts[${i}]`);
-  assert.equal(a.froz5Ratio, b.froz5Ratio);
-  assert.equal(a.froz5State, b.froz5State);
-  assert.equal(a.freshLegN, b.freshLegN);
-  assert.equal(a.openingLegCw, 5000);
+  for (let i = 1; i < a.legCosts.length; i++) near(a.legCosts[i], 10000 * a.base * (i === 5 ? 5 : 1), 5e-5, `warm-open legCosts[${i}]`);
 });
 
-test('L10 — provisional tag ⇔ fewer than 5 warm legs, on every 1M fixture with a ratio', () => {
-  let provisional = 0, full = 0;
+// ---- M: froz5 REMOVAL (2026-08-21 sprint, bsl6.0.0.0) ------------------------------------------
+// M1–M6 replace the deleted J/L froz5 rows. M2, M2b and M3 are Assertions B, the spike row and
+// D-class-8 from the sprint's one-off delta proof, promoted into standing tests so the property
+// survives whatever happens to that script. They are the piece of the proof that must not be thrown
+// away — and M2b is the one that fails on a silent revert of the chip to the mean.
+
+test('M1 — schema guard: every golden sidecar is schema 6, carries none of the seven removed keys', () => {
+  let withLegs = 0;
   for (const f of allFixtures()) {
     const s = sidecar(f);
-    if (!withTranscript(f) || s.froz5Ratio == null || Number(s.windowSize) < 700000 || 'modelSwitch' in s) continue;
-    const fx = facts(f);
-    if (s.freshLegN < 5) {
-      provisional++;
-      assert.match(fx, new RegExp(`; baseline=provisional \\(${s.freshLegN} of 5 warm legs\\)`), `${f}: provisional tag`);
-      assert.match(fx, /confidence=low/, `${f}: confidence=low`);
-    } else {
-      full++;
-      assert.ok(!fx.includes('provisional'), `${f}: no provisional tag at freshLegN 5`);
+    assert.equal(s.schema, 6, `${f}: schema`);
+    for (const k of REMOVED_KEYS) {
+      assert.ok(!(k in s), `${f}: removed key ${k} is still in the sidecar — removed, not display-gated off`);
+    }
+    // legCosts is what the chip, TRAJECTORY and the sparkline all read; it must not have been lost
+    // in the deletion. Present-and-non-empty on every fixture that has a rollup at all.
+    if (withTranscript(f) && s.nLegs != null && Number(s.nLegs) > 0) {
+      assert.ok(Array.isArray(s.legCosts) && s.legCosts.length > 0, `${f}: legCosts must survive`);
+      withLegs++;
     }
   }
-  assert.ok(provisional >= 10 && full >= 5, `vacuity guard: provisional ${provisional}, full ${full}`);
+  assert.ok(withLegs >= 45, `vacuity guard: only ${withLegs} fixtures checked for legCosts`);
+});
+
+test('M2 — chip guard: the rendered `last N $x` equals MEDIAN(legCosts tail), absent exactly below 2 legs', () => {
+  let present = 0, absent = 0;
+  for (const f of allFixtures()) {
+    const want = chipExpect(sidecar(f));
+    assert.deepEqual(chipOf(f), want, `${f}: chip`);
+    if (want) present++; else absent++;
+  }
+  // Measured on the 73-fixture corpus at design time. A change here means a fixture's leg count
+  // moved, which is a defect unless a fixture was deliberately added or recaptured.
+  assert.equal(present, 51, 'fixtures showing the chip');
+  assert.equal(absent, 22, 'fixtures suppressing it (21 with no legs, 1 with a single leg)');
+});
+
+test('M2b — spike guard: where the window holds a fat leg, the chip is strictly BELOW the window mean', () => {
+  // "One fat leg cannot lift the chip", stated as its own standing assertion rather than as a
+  // restatement of M2's formula. It survives a refactor of that formula and it is what fails on a
+  // silent revert to the mean — which is exactly the defect this amendment exists to fix, measured on
+  // a real 180-leg session where one $6.02 compaction leg put the chip in the red band while `next`
+  // sat in yellow and every ordinary leg cost about a third of a dollar.
+  //
+  // "Fat" = a leg at 2x the window's own median or more. Measured against the pre-sprint corpus:
+  // 24 of the 51 chip-bearing windows qualify, so this row has real coverage, not a hypothetical.
+  let qualifying = 0;
+  for (const f of allFixtures()) {
+    const win = windowOf(sidecar(f));
+    if (!win) continue;
+    const med = medianOf(win);
+    const mean = win.reduce((a, b) => a + b, 0) / win.length;
+    if (!(med > 0 && Math.max(...win) >= med * 2)) continue;
+    qualifying++;
+    assert.ok(med < mean,
+      `${f}: window holds a leg at >=2x its median, so the median (${med}) must sit strictly below the mean (${mean})`);
+    // and the RENDERED chip is that median, not something between it and the mean
+    const chip = chipOf(f);
+    assert.ok(chip, `${f}: no chip in golden.txt though legCosts has ${win.length} entries — a stale (unblessed) golden reads as a missing chip, so say so rather than throwing`);
+    assert.equal(chip.usd, fmt2(med), `${f}: the rendered chip is the median`);
+  }
+  assert.equal(qualifying, 24, 'windows carrying a leg at >=2x their own median');
+});
+
+test('M3 — verdict guard: HEADLINE_BASIS `cost=next N (lvl L)` follows D2a\'s three-rung dollar ladder', () => {
+  const seen = new Set();
+  for (const f of allFixtures()) {
+    const s = sidecar(f);
+    const m = /HEADLINE_BASIS: driver=(\w+); quality=\S+ \(lvl (\d)\); cost=next (\S+) \(lvl (\d)\)/.exec(facts(f));
+    assert.ok(m, `${f}: HEADLINE_BASIS not in the post-removal form (no froz5 term, cost=next only)`);
+    const qL = qLevelOf(s), cL = ladderCLevel(s.nextLegUsd);
+    assert.equal(Number(m[4]), cL, `${f}: cost level vs ladder(nextLegUsd ${s.nextLegUsd})`);
+    assert.equal(Number(m[2]), qL, `${f}: quality level`);
+    const driver = cL > qL ? 'cost' : (qL > cL ? 'quality' : 'both');
+    assert.equal(m[1], driver, `${f}: driver`);
+    // the headline rung is max(quality, cost), and its polarity follows
+    const hL = Math.max(qL, cL);
+    const rung = ['Plenty of room', 'Getting deeper', 'Wind down soon', 'Time to hand over'][hL];
+    assert.ok(facts(f).includes(`HEADLINE_DIFF: ${hL <= 1 ? '+' : '-'} ${rung}`), `${f}: HEADLINE_DIFF should read "${hL <= 1 ? '+' : '-'} ${rung}"`);
+    seen.add(cL);
+  }
+  // All three rungs must be reachable — a ladder that only ever returns 0 would pass every row above.
+  assert.deepEqual([...seen].sort(), [0, 2, 3], `vacuity guard: cost levels actually observed ${[...seen]}`);
+});
+
+test('M4 — sheet/line agreement: COST_RECENT reads `(none)` exactly where the chip is absent', () => {
+  let none = 0, valued = 0;
+  for (const f of allFixtures()) {
+    const chip = chipOf(f);
+    const m = /^COST_RECENT: (.*)$/m.exec(facts(f));
+    assert.ok(m, `${f}: COST_RECENT line missing`);
+    if (!chip) { assert.equal(m[1], '(none)', `${f}: no chip → (none)`); none++; continue; }
+    valued++;
+    assert.notEqual(m[1], '(none)', `${f}: chip present but the sheet says (none)`);
+    // the sheet must quote the SAME number and the SAME window as the line, in the exact emitted
+    // form: the recent word is `median`, the session word stays `mean`. The two are computed in two
+    // different files from two different arrays (perLegCostArr in statusline.mjs, legCosts in
+    // handover-facts.mjs), so a one-sided fix must be impossible to land.
+    assert.match(m[1], new RegExp(`^last \`${chip.n}\` legs median \`\\$${chip.usd.replace('.', '\\.')}\`/leg; session mean \`\\$[\\d.,]+\` over \`\\d+\` legs$`),
+      `${f}: COST_RECENT must state the chip's own window and figure in the median form: ${m[1]}`);
+    assert.ok(!/averag/i.test(m[1]), `${f}: the recent figure is a median and may not be called an average`);
+  }
+  assert.equal(none, 22);
+  assert.equal(valued, 51);
+});
+
+test('M5 — key uniqueness (D7): no `KEY:` label appears twice in any fact sheet', () => {
+  for (const f of allFixtures()) {
+    const seen = new Map();
+    for (const line of facts(f).split('\n')) {
+      const m = /^([A-Z0-9_]+):/.exec(line);
+      if (m) seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+    }
+    const dupes = [...seen.entries()].filter(([, c]) => c > 1);
+    assert.deepEqual(dupes, [], `${f}: repeated label(s) — the sheet is a KEY: value contract and a reader cannot tell a second value from a corrected one`);
+    assert.ok(!seen.has('COST_RUN_NOTE'), `${f}: COST_RUN_NOTE is retired (D7 split it three ways)`);
+  }
+});
+
+test('M7 — label registration (D7): every emittable label is in handover-check.md, or on the known-gap list', () => {
+  // Paired with M5. An UNREGISTERED label is silently dropped by the composer — that is row S13 from
+  // the previous sprint, and it is exactly the trap D7 walks into. This row generalises past the
+  // three new labels: it fails on ANY future label added to the fact sheet without registering it.
+  //
+  // FOUR labels are on a documented allow-list because they were already unregistered BEFORE this
+  // sprint (verified against the pre-sprint goldens at ref 6b6f116 — the same four, no more). They
+  // are NOT this sprint's debt and are NOT fixed here; two of them look like real gaps worth a
+  // ticket and are reported as such. Listing them in code rather than weakening the assertion is
+  // what keeps them visible.
+  const KNOWN_GAPS = new Set([
+    'HEADLINE_BASIS',     // internal evidence line; the composer is told to relay HEADLINE_DIFF instead
+    'COST_AGENTS_TIER',   // a routing tier for the composer's own branching, not a fact to relay
+    'COST_GATES_NOTE',    // GAP: on a sonnet/haiku main the reader is never told the $ gates grade leniently
+    'WARM_REWRITE_TAX',   // GAP: the warm-rewrite tax has no bullet at all, so it never reaches the reader
+  ]);
+  const md = readFileSync(join(here, '..', 'home', 'commands', 'handover-check.md'), 'utf8');
+  const emitted = new Set();
+  for (const f of allFixtures()) {
+    for (const line of facts(f).split('\n')) {
+      const m = /^([A-Z0-9_]+):/.exec(line);
+      if (m) emitted.add(m[1]);
+    }
+  }
+  assert.ok(emitted.size >= 20, `vacuity guard: only ${emitted.size} labels seen`);
+  const unregistered = [...emitted].filter((l) => !md.includes(l) && !KNOWN_GAPS.has(l)).sort();
+  assert.deepEqual(unregistered, [], 'a label the composer cannot see is a fact the reader never gets');
+  // The allow-list may not grow silently either: an entry that got registered should leave it.
+  const stale = [...KNOWN_GAPS].filter((l) => md.includes(l)).sort();
+  assert.deepEqual(stale, [], 'these are now registered — drop them from KNOWN_GAPS');
+});
+
+test('M6 — the three D7 labels fire on their own gates, across all 73', () => {
+  let resume = 0, legprice = 0;
+  for (const f of allFixtures()) {
+    const s = sidecar(f);
+    const txt = facts(f);
+    const has = (k) => txt.split('\n').filter((l) => l.startsWith(k + ': ')).length;
+    const wantResume = s.runStartLeg != null && Number(s.runStartLeg) > 0;
+    const wantLegPrice = s.legPricingSuspect === true;
+    assert.equal(has('COST_RESUME_NOTE'), wantResume ? 1 : 0, `${f}: COST_RESUME_NOTE vs runStartLeg ${s.runStartLeg}`);
+    assert.equal(has('COST_LEGPRICE_NOTE'), wantLegPrice ? 1 : 0, `${f}: COST_LEGPRICE_NOTE vs legPricingSuspect`);
+    if (wantResume) resume++;
+    if (wantLegPrice) legprice++;
+  }
+  assert.ok(resume >= 1 && legprice >= 1, `vacuity guard: resume ${resume}, legprice ${legprice}`);
 });

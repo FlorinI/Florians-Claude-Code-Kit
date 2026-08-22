@@ -7,8 +7,8 @@ It is the same engine that runs as the author's daily driver; this kit ships it 
 
 The line is grouped into clusters, each surfacing one question at a glance:
 
-- **Cost** — last-leg cost, a composition-weighted forecast for the next leg, and a baseline-ratio
-  chip showing whether you're spending above or below this session's cheap baseline.
+- **Cost** — last-leg cost, a composition-weighted forecast for the next leg, and a recent-leg median
+  chip showing what a typical recent leg cost, so the forecast reads against the real recent rate.
 - **Sparkline** — a per-leg cost history so spikes are visible at a glance.
 - **Context** — dual-axis usage (tokens in context vs the model window) and headroom to the next
   auto-compact.
@@ -22,4 +22,11 @@ The line is grouped into clusters, each surfacing one question at a glance:
 The renderer writes a small per-project sidecar (`statusline-last.json`) and per-session stats under
 `~/.claude`. The parity goldens (`tools/parity/`) feed frozen stdin + a frozen clock into the engine
 in a throwaway HOME and assert the rendered bytes and the sidecar match committed references — so any
-change to the output is a deliberate, reviewed re-bless (`npm run parity -- --bless`).
+change to the output is a deliberate, reviewed re-bless. Bless with the two explicit commands:
+
+    node tools/parity/run-parity.mjs --bless
+    node tools/parity/run-trio-parity.mjs --bless
+
+Do NOT use `npm run parity -- --bless`: `parity` is an `&&` chain, so npm appends the flag to the
+LAST command only — the trio goldens get blessed and `golden.txt` / `golden-sidecar.json` stay stale
+while the suite reports success.

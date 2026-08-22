@@ -1,5 +1,5 @@
 {
-  "schema": 5,
+  "schema": 6,
   "sessionId": "model-switch-1",
   "renderedAt": 1781750000,
   "transcriptPath": "transcript.jsonl",
@@ -9,9 +9,6 @@
     "from": "Fable 5 (1M context)",
     "to": "Sonnet 5"
   },
-  "firstLegColdStart": false,
-  "openingLegCw": 0,
-  "freshLegN": 5,
   "windowSize": 1000000,
   "effort": "high",
   "ctxTokens": 150000,
@@ -22,9 +19,6 @@
   "autoCompactOff": false,
   "costUsd": 12.2,
   "nextLegUsd": 0.22999999999999998,
-  "froz5Ratio": 1.15,
-  "froz5State": "white",
-  "freshLegUsd": 0.19999999999999998,
   "lastLegUsd": 0.1999999999999993,
   "nLegs": 13,
   "runStartLeg": 0,

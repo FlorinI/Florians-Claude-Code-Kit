@@ -4,7 +4,7 @@ HEADLINE_DIFF: - Wind down soon
 HEADLINE_BASIS: driver=both; quality=yellow (lvl 2); cost=next 0.36195085539543226 (lvl 2)
 COST_LEAD: each leg `~$0.36`
 COST_TOTAL: `$8.00` total
-COST_RECENT: last `8` legs median `$0.36`/leg; session mean `$0.40` over `20` legs
+COST_RECENT: `med8` (median of the last 8 legs) `$0.36`/leg; session mean `$0.40` over `20` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

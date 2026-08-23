@@ -1,0 +1,4 @@
+from session quota-ov · (no repo) · rendered 0s ago
+top 2 cost spikes  ·  of 2 legs  ·  session-$ basis  ·  leg 1 = oldest
+   Leg 1  ·  $0.06  ·  loaded ~12k new context
+   Leg 2  ·  $0.02  ·  generated ~1k output

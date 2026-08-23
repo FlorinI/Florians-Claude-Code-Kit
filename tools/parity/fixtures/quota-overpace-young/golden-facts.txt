@@ -1,0 +1,21 @@
+IDENTITY: **Reading** `(no repo)` · `quota-ov` · Sonnet 4.6 · `13k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: + Plenty of room
+HEADLINE_BASIS: driver=both; quality=pristine (lvl 0); cost=next 0.04247349823321555 (lvl 0)
+COST_LEAD: each leg `~$0.04`
+COST_TOTAL: `$0.08` total
+COST_RECENT: `med2` (median of the last 2 legs) `$0.04`/leg; session mean `$0.04` over `2` legs
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
+COLD: (omit)
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `6%` fill — well under the ~60% cliff
+QUALITY_SECONDARY: `13k`, pristine band — sharp
+QUALITY_HEADROOM: `177k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: flat, range `$0.02`–`$0.06`
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: both axes fine — room to continue on recent context

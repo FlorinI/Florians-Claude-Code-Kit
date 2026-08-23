@@ -40,6 +40,35 @@ const nodeScript = join(repo, 'home', 'statusline.mjs');
 
 const FLOAT_TOL = 1e-9;
 
+// Two levels of normalization, because the golden sidecar has two jobs: it is what this runner
+// COMPARES against, and it is also the frozen snapshot run-trio-parity.mjs FEEDS to the trio. So a
+// field the comparison can ignore is not automatically a field the file may omit.
+//
+// normPaths — applied on both sides of the comparison AND to what `--bless` writes. Both paths
+// point into this run's throwaway temp directories, so writing them verbatim put a fresh random
+// path in the committed golden on every bless: files changing with no change in behaviour, and a
+// diff a reviewer has to sift for the real edits. The trio overwrites both fields before use.
+// Idempotent — the basename of a basename is itself, so re-normalizing a golden is a no-op.
+const normPaths = (s) => {
+  if (!s || typeof s !== 'object') return s;
+  const out = { ...s };
+  if (typeof out.transcriptPath === 'string') out.transcriptPath = out.transcriptPath.replace(/\\/g, '/').split('/').pop();
+  if (typeof out.agentsCachePath === 'string') out.agentsCachePath = out.agentsCachePath.replace(/\\/g, '/').split('/').pop();
+  return out;
+};
+// normSidecar — comparison only. aliveSec / activityPct derive from the transcript FILE's birthtime
+// (statSync), which git checkout / copy resets to "now", so the raw value differs on every clone.
+// The render clamps it, so stdout stays stable; only the raw sidecar value is unstable. They must
+// still be WRITTEN, because handover-facts reads activityPct out of the frozen snapshot and states
+// it — drop them from the file and the trio's ACTIVITY line changes.
+const normSidecar = (s) => {
+  const out = normPaths(s);
+  if (!out || typeof out !== 'object') return out;
+  delete out.aliveSec;
+  delete out.activityPct;
+  return out;
+};
+
 function copyDirInto(srcDir, dstDir) {
   if (!existsSync(srcDir)) return;
   for (const name of readdirSync(srcDir)) {
@@ -206,7 +235,7 @@ function main() {
 
     if (bless) {
       writeFileSync(goldenStdoutPath, out.stdout);
-      writeFileSync(goldenSidecarPath, JSON.stringify(out.sidecar, null, 2) + '\n', 'utf8');
+      writeFileSync(goldenSidecarPath, JSON.stringify(normPaths(out.sidecar), null, 2) + '\n', 'utf8');
       results.push({ name, ok: true, detail: 'blessed' });
       continue;
     }
@@ -221,21 +250,6 @@ function main() {
     // rendering — normalize it on both sides so a build bump never fails the golden test.
     const normVer = (buf) => buf.toString('utf8').replace(/bsl\d+(?:\.\d+)+/g, 'bsl<ver>');
     const stdoutOk = normVer(goldenStdout) === normVer(out.stdout);
-    // Normalize fields that carry no rendering signal and aren't reproducible across checkouts:
-    //   • transcriptPath — the absolute fixture path; varies by checkout location / CI runner.
-    //   • aliveSec / activityPct — derived from the transcript FILE's birthtime (statSync), which
-    //     git checkout / copy resets to "now", so the raw value differs on every clone. The render
-    //     clamps it, so stdout stays stable; only the raw sidecar value is unstable.
-    const normSidecar = (s) => {
-      if (!s || typeof s !== 'object') return s;
-      const out = { ...s };
-      if (typeof out.transcriptPath === 'string') out.transcriptPath = out.transcriptPath.replace(/\\/g, '/').split('/').pop();
-      // agentsCachePath lives under the per-run temp cwd — same class as transcriptPath.
-      if (typeof out.agentsCachePath === 'string') out.agentsCachePath = out.agentsCachePath.replace(/\\/g, '/').split('/').pop();
-      delete out.aliveSec;
-      delete out.activityPct;
-      return out;
-    };
     const sidecarDiffs = diffStruct(normSidecar(goldenSidecar), normSidecar(out.sidecar), 'sidecar');
     const ok = stdoutOk && sidecarDiffs.length === 0;
     let detail = '';

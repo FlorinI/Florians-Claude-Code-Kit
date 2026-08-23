@@ -4,7 +4,7 @@ HEADLINE_DIFF: + Plenty of room
 HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=next 0.27169037549660385 (lvl 0)
 COST_LEAD: each leg `~$0.27`
 COST_TOTAL: `$2.50` total
-COST_RECENT: last `6` legs median `$0.27`/leg; session mean `$0.42` over `6` legs
+COST_RECENT: `med6` (median of the last 6 legs) `$0.27`/leg; session mean `$0.42` over `6` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

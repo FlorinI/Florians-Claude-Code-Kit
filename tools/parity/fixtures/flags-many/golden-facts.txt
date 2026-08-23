@@ -1,0 +1,25 @@
+IDENTITY: **Reading** `(no repo)` · `flags-ma` · Sonnet 5 · `150k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: + Getting deeper
+HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=next 0.22999999999999998 (lvl 0)
+COST_LEAD: each leg `~$0.23`
+COST_TOTAL: `$0.50` total
+COST_RECENT: `med8` (median of the last 8 legs) `$0.50`/leg; session mean `$0.50` over `13` legs
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced at this run's rate
+COST_MODELSWITCH_NOTE: the model switched mid-session (Opus 5 → Sonnet 5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
+COST_FAST_NOTE: fast mode on — every $ in this sheet excludes the fast premium; per-leg $, the forecast and the total are understated (CC's own figure, not recomputed)
+COST_TIER_NOTE: the model label reads `Sonnet 5`, but every leg in this run was served by `opus` — a label fact only: the $ in this sheet does not depend on which label is shown
+COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
+COLD: your recent resume re-cached the context for `$0.34` — already paid; you are warm again now
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `150k`, yellow band — mild weakening on hard multi-fact recall
+QUALITY_SECONDARY: `15%` fill — well under the ~60% cliff
+QUALITY_HEADROOM: `325k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: flat, range `$0.50`–`$0.50`
+YOURCALL_POLARITY: +
+YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next

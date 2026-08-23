@@ -218,11 +218,13 @@ if (agentTier === 'headline' || agentTier === 'lead') hText += ` ${MID} sub-agen
 const costLead = 'each leg ~' + FmtUsd(nextUsd);
 const costTotal = FmtUsd(s.costUsd) + ' total';
 // Per-leg dollars, straight from the sidecar (the same array TRAJECTORY reads and the status line's
-// sparkline / `last leg` / `last N` chip show). MEASUREMENT, never a verdict.
+// trend strip / `last` / `med<N>` chip show). MEASUREMENT, never a verdict.
 const lc = (s.legCosts || []).map(Number);
 // The recent RATE — the MEDIAN of the last min(8, N) legs, computed with the SAME exported `median`
-// the status line's `last N $x.xx` chip and the next-leg forecast use, so the line and the sheet
-// state one number from one implementation. The window of 8 is NOT a tunable here: it must stay in
+// the status line's `med<N> $x.xx` chip and the next-leg forecast use, so the line and the sheet
+// state one number from one implementation. The prose QUOTES the chip's own label, so a reader can
+// match the sheet against the line at a glance; the label carries the real window count, never a
+// literal 8. The window of 8 is NOT a tunable here: it must stay in
 // lockstep with the chip's own `Math.min(8, …)` in statusline.mjs, or the line and the sheet
 // disagree about what "recent" means. `(none)` below 2 legs (nothing typical to report; at 1 leg it
 // would just repeat what a leg costs), matching the file's convention for COST_DETAIL /
@@ -244,7 +246,8 @@ let costRecent = '(none)';
 const recentN = Math.min(8, lc.length);
 if (recentN >= 2) {
   const mean = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  costRecent = 'last ' + BT + recentN + BT + ' legs median ' + FmtUsd(median(lc.slice(-recentN)))
+  costRecent = BT + 'med' + recentN + BT + ' (median of the last ' + recentN + ' legs) '
+    + FmtUsd(median(lc.slice(-recentN)))
     + '/leg; session mean ' + FmtUsd(mean(lc)) + ' over ' + BT + lc.length + BT + ' legs';
 }
 let costDetail = '(none)';

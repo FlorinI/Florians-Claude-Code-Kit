@@ -25,6 +25,23 @@ golden diff before committing — it is the human-readable record of what the ch
 - **Stable transcript.** The engine reads the fixture's read-only `transcript.jsonl`, so file
   mtime/ctime (which drive `aliveSec` and turn-TPS) are stable across runs.
 
+### Every timestamp in a fixture is relative to its own `nowEpoch`
+
+**A quota window's `resets_at` must be written as an offset from the fixture's `meta.json`
+`nowEpoch`, never as the absolute time it was captured at.** The engine derives elapsed time through
+the window as `elapsed% = (window − (resets_at − now)) / window`, with `now` being the frozen
+`nowEpoch` — so pairing a real capture's `resets_at` with a frozen clock produces an arbitrary
+elapsed fraction, and elapsed% is what selects which of the three quota regimes renders (verdict
+machinery at/above `QUOTA_VERDICT_MIN_PCT` consumed; the ratio projection only at/above
+`QUOTA_PROJECTION_MIN_ELAPSED_PCT` elapsed; `resets` alone below it).
+
+**This trap is silent.** A fixture that lands in the wrong regime still renders, still blesses, and
+still passes forever after — it simply asserts against a regime nobody intended, so the edge the
+fixture was written to pin goes unguarded while the row reports green. Compute the value: for a
+window of `W` seconds meant to sit `E` fraction elapsed, `resets_at = nowEpoch + W × (1 − E)`. The
+same rule governs every other absolute time a fixture carries — leg timestamps (which drive the cold
+clock and its TTL window) and seed-file times included.
+
 ## Fixture layout
 
 ```
@@ -46,13 +63,16 @@ For a sub-agent fixture, put the agent transcripts under
 `fixtures/<name>/transcript/subagents/agent-*.jsonl` (the status line derives the subagents dir from
 the main transcript path: `<transcript-minus-.jsonl>/subagents`).
 
-## Current fixtures (the spread)
+## A sample of the spread
+
+The suite carries far more fixtures than this table lists; these are the ones worth reading first to
+see what a fixture is for. `ls fixtures/` is the authority on what exists.
 
 | fixture        | exercises |
 |----------------|-----------|
-| `small-young`  | 2 legs, low cost, sub-50% quota (suppressed), no flags, sparkline ≤8 |
-| `mixed`        | dual quota (pace gauges), cold tax + cooling stake, big-leg spotlight, sparkline ≤8 |
-| `bucketed`     | 20 legs → >8 sparkline bucketing (`$/leg avg`), yellow abs+fill bands, advert flag |
+| `small-young`  | 2 legs, low cost, a calm sub-50% quota window (rows render, β machinery suppressed), no flags, `trend` ≤8 legs |
+| `mixed`        | dual quota (pace gauges), cold tax + cooling stake, big-leg spotlight, `trend` ≤8 legs |
+| `bucketed`     | 20 legs → the `trend` strip buckets into its 8 right-anchored chips, yellow absolute-rot band |
 | `capped`       | quota at/over a band edge → cap-reached / cap-band rendering |
 | `overcap`      | 5h >100% ("over cap"/on credits), 7d =100% ("cap reached" hedge) |
 | `expired-cold` | last leg >TTL ago → `cold? >1h` expired branch |
@@ -74,7 +94,10 @@ session into a fixture:
 2. Copy the file at its `transcript_path` to `fixtures/<name>/transcript.jsonl`.
 3. Add `meta.json` with a `nowEpoch` near the capture time (so cold/quota states are realistic) and a
    one-line `note` saying what the fixture captures.
-4. `node tools/parity/run-parity.mjs --bless <name>` to write the golden, then eyeball `golden.txt`
+4. Rewrite every absolute timestamp in the copied `stdin.json` as an offset from that `nowEpoch` —
+   each window's `resets_at` above all (see **Every timestamp in a fixture is relative to its own
+   `nowEpoch`**). A real capture's reset times mean nothing against a frozen clock.
+5. `node tools/parity/run-parity.mjs --bless <name>` to write the golden, then eyeball `golden.txt`
    to confirm the rendered line looks right before committing.
 
 Note: the harness rewrites `transcript_path` and `workspace.current_dir` in the copied stdin, so leave

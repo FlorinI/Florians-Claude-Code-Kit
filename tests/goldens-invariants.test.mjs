@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { rowByLabel } from './_grid.mjs';
 
 // goldens-invariants — hand-computed pins on the COMMITTED parity goldens, independent of the
 // bless mechanism. `--bless` regenerates goldens from current output, so a blind re-bless can
@@ -16,16 +17,28 @@ const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
 const sidecar = (f) => JSON.parse(readFileSync(join(FIX, f, 'golden-sidecar.json'), 'utf8'));
 const stdout = (f) => readFileSync(join(FIX, f, 'golden.txt'), 'utf8').replace(/\x1b\[[0-9;]*m/g, '');
 const facts = (f) => readFileSync(join(FIX, f, 'golden-facts.txt'), 'utf8');
-const allFixtures = () => readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory());
+// BLESSED fixtures only. A fixture directory exists as soon as its inputs are written, but its
+// goldens appear only when it is blessed — and the bless is deliberately a separate, reviewed act at
+// the quality gate, not something a test run performs. Every sweep below reads goldens, so an
+// unblessed directory would make them throw ENOENT instead of asserting. `tests/dossier-layout.test.mjs`
+// owns the complementary check: that no fixture directory stays unblessed.
+const allFixtures = () => readdirSync(FIX)
+  .filter((n) => statSync(join(FIX, n)).isDirectory())
+  .filter((n) => existsSync(join(FIX, n, 'golden.txt')));
 
 // ---- froz5-removal (2026-08-21, bsl6.0.0.0) shared helpers -------------------------------------
 // The seven sidecar keys the removal deletes (D3). Deleted, never display-gated off.
 const REMOVED_KEYS = ['froz5Ratio', 'froz5State', 'freshLegUsd', 'freshLegN',
   'froz5CalibStale', 'firstLegColdStart', 'openingLegCw'];
 
-// The `last N` chip on the cost line, ANSI-stripped. `last leg` cannot collide (letters, not digits).
+// The recent-median chip on the cost row, ANSI-stripped. Dossier IV (2026-08-22) renamed the label
+// from `last <N>` to `med<N>` (spec §6.3) — the realized last-leg figure is now labelled `last`, so a
+// median two fields away called `last 8` would read as another member of the same series. The `| `
+// field separator went with the same re-layout. The window count in the label is still the REAL
+// count, `med2` … `med8`; that invariant is the whole reason this helper reads the number back out
+// rather than assuming 8.
 const chipOf = (f) => {
-  const m = /\| last (\d+) \$([\d.,]+)/.exec(stdout(f));
+  const m = /med(\d+) \$([\d.,]+)/.exec(stdout(f));
   return m ? { n: Number(m[1]), usd: m[2] } : null;
 };
 // Independent half-to-even 2-dp formatter — the renderer's fmtN(x, 2) rounds half-to-EVEN, so
@@ -71,7 +84,7 @@ test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent �
   assert.equal(s.mainSessionUsd, 37.5); // 3.0M / 3.2M effective units × $40
   assert.equal(s.agentsUsd, 2.5);       // 0.2M / 3.2M × $40 — NOT the unweighted $10
   const line = stdout('a1-tier-weighted');
-  assert.match(line, /\$2\.50 \(6%\)/);
+  assert.match(line, /\$2\.50 6%/); // fleet line: no parens (spec §7.5)
   assert.match(line, /⚠ tier-mix main·fable \+ ag sonnet×1/);
 });
 
@@ -104,7 +117,7 @@ test('A3/B4 — empty-string and absent model: invisible, weight 1.0 ($10.00, no
 // ---- B: chip + families -----------------------------------------------------------------------
 test('B1 — chip names main separately; agents head-count stays 12', () => {
   const line = stdout('b1-chip-main');
-  assert.match(line, /agents: 12 \|/);
+  assert.match(line, /\b12 ag\b/);
   assert.match(line, /⚠ tier-mix main·fable \+ ag fable×11·sonnet×1/);
 });
 
@@ -131,17 +144,25 @@ test('B5 — uniform tiers / model-less agents: no chip (regression guard)', () 
   }
 });
 
-// ---- C: median regression ----------------------------------------------------------------------
-test('C1 — even count [79.4k, 174.9k]: med 127.2k, never the max (2026-06-24 screenshot bug)', () => {
-  const line = stdout('median-even');
-  assert.match(line, /med 127\.2k/);
-  assert.ok(!line.includes('med 174.9k'), 'upper-median bug: med must not equal max');
-  assert.match(line, /max 174\.9k/);
-});
-
-test('C2 — single agent: med == max == 43.2k is legitimate', () => {
-  assert.match(stdout('median-single'), /med 43\.2k·max 43\.2k/);
-});
+// ---- C: median regression — SUPERSEDED, moved off the display (Dossier IV, 2026-08-22) ----------
+//
+// C1 and C2 asserted `med 127.2k` and `med 43.2k·max 43.2k` on the rendered agents line. The Dossier
+// IV re-layout DELETES that display string — spec §7.5, a Florian deletion: "Medium and max, we could
+// remove altogether. The whole parentheses can go." Left here, both rows would have gone green by
+// losing their subject instead of by keeping their property true.
+//
+// REPLACED BY, and not merely deleted:
+//   • tests/agent-ctx-median.test.mjs 0a — the median function on those exact two value sets
+//     ([79,400 · 174,900] → 127,150, asserted NOT to be the 174,900 max), plus the general
+//     even-count property so a literal cannot be special-cased to pass;
+//   • tests/agent-ctx-median.test.mjs 0c — `agentCtxMax` still carries the peak these rows read off
+//     the screen, swept across every agent fixture (the max half survives in the sidecar per spec §3);
+//   • tests/source-invariants.test.mjs 0b — the engine's own unexported `Median` copy, by source shape.
+//
+// The bug they were built for stays covered: 2026-06-24, the median of two agent peak contexts
+// rendering as the max. What changed is that the guard no longer reaches it through a string.
+// The replacements were landed GREEN against the pre-change render before this deletion, so there was
+// no window in which the tree was green because an assertion had been removed.
 
 // ---- D: model switch ----------------------------------------------------------------------------
 test('D1 — sidecar carries modelSwitch {atLeg: 13, from, to} on a tier change', () => {
@@ -279,7 +300,7 @@ test('K2 — resumed-run: the new leg costs what CC says; earlier legs at this r
   assert.ok(!('legPricingSuspect' in s));
   // D7 (froz5-removal): the shared COST_RUN_NOTE label is retired; the resumed caveat gets its own.
   assert.match(facts('resumed-run'), /COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced\s+at this run's rate/);
-  assert.match(stdout('resumed-run'), /last leg \$0\.50/);
+  assert.match(stdout('resumed-run'), /last \$0\.50/);
 });
 
 test('K3 — resumed-nohistory: flagged, never faked (legs stay CC-anchored at $0.04, suspect chip + note)', () => {
@@ -287,9 +308,12 @@ test('K3 — resumed-nohistory: flagged, never faked (legs stay CC-anchored at $
   assert.equal(s.legPricingSuspect, true);
   assert.equal(s.runStartLeg, 0);
   assert.equal(s.legCosts[0], 0.0385);
-  const legsLine = stdout('resumed-nohistory').split('\n').find((l) => l.includes('$/leg'));
-  assert.ok(legsLine, '$/leg line present');
-  assert.ok(legsLine.trimEnd().endsWith('⚠ leg $ suspect: base far below list (resumed without history?)'), `chip at line end: ${JSON.stringify(legsLine)}`);
+  // Dossier IV moved this caveat off the sparkline onto the flags row (spec §7.8 chip 4) — row 6
+  // right is the one field allowed to run long, so the caveat keeps its full text.
+  const flagsRow = rowByLabel(stdout('resumed-nohistory'), 'flags');
+  assert.ok(flagsRow && flagsRow.includes('flags'), `flags row present: ${JSON.stringify(flagsRow)}`);
+  assert.ok(flagsRow.trimEnd().endsWith('⚠ leg $ suspect: base far below list (resumed without history?)'),
+    `chip on the flags row: ${JSON.stringify(flagsRow)}`);
   const f = facts('resumed-nohistory');
   // D7 (froz5-removal): its own label, so it can co-occur with the resume note without the sheet
   // emitting one key twice.
@@ -306,7 +330,7 @@ test('K4 — agents-progressive: streamed agent output counted in full (agents $
   const sp = spikes('agents-progressive');
   assert.match(sp, /top 1 agents\s+·\s+of 1\s+·\s+\$0\.25 \(33%\)/);
   assert.match(sp, /mostly generating output \(~5k out\)/);
-  assert.match(stdout('agents-progressive'), /\$0\.25 \(33%\)/);
+  assert.match(stdout('agents-progressive'), /\$0\.25 33%/); // fleet line: no parens (spec §7.5)
 });
 
 // every fixture that renders agents: transcript/subagents/ on disk, or an agents cache in seed/
@@ -501,10 +525,13 @@ test('M2 — chip guard: the rendered `last N $x` equals MEDIAN(legCosts tail), 
     assert.deepEqual(chipOf(f), want, `${f}: chip`);
     if (want) present++; else absent++;
   }
-  // Measured on the 73-fixture corpus at design time. A change here means a fixture's leg count
-  // moved, which is a defect unless a fixture was deliberately added or recaptured.
-  assert.equal(present, 51, 'fixtures showing the chip');
-  assert.equal(absent, 22, 'fixtures suppressing it (21 with no legs, 1 with a single leg)');
+  // ABSENT is the exact pin, and it is pinned rather than PRESENT because it is the number that
+  // survives the corpus growing: 21 fixtures have no legs at all and one (agents-progressive) has a
+  // single leg. Any fixture gaining or losing its chip moves this number, which is the defect this
+  // row exists to catch. PRESENT is derived, so adding a fixture never forces a recount — the
+  // Dossier IV sprint added seven, every one of them a copy of a parent with ≥2 banked legs.
+  assert.equal(absent, 22, 'fixtures suppressing the chip (21 with no legs, 1 with a single leg)');
+  assert.equal(present, allFixtures().length - 22, 'every other fixture shows it');
 });
 
 test('M2b — spike guard: where the window holds a fat leg, the chip is strictly BELOW the window mean', () => {
@@ -564,16 +591,31 @@ test('M4 — sheet/line agreement: COST_RECENT reads `(none)` exactly where the 
     if (!chip) { assert.equal(m[1], '(none)', `${f}: no chip → (none)`); none++; continue; }
     valued++;
     assert.notEqual(m[1], '(none)', `${f}: chip present but the sheet says (none)`);
-    // the sheet must quote the SAME number and the SAME window as the line, in the exact emitted
-    // form: the recent word is `median`, the session word stays `mean`. The two are computed in two
+    // The sheet must quote the SAME number and the SAME window as the line, and must still name the
+    // recent figure a `median` while the session figure stays a `mean`. The two are computed in two
     // different files from two different arrays (perLegCostArr in statusline.mjs, legCosts in
     // handover-facts.mjs), so a one-sided fix must be impossible to land.
-    assert.match(m[1], new RegExp(`^last \`${chip.n}\` legs median \`\\$${chip.usd.replace('.', '\\.')}\`/leg; session mean \`\\$[\\d.,]+\` over \`\\d+\` legs$`),
-      `${f}: COST_RECENT must state the chip's own window and figure in the median form: ${m[1]}`);
+    //
+    // Dossier IV (2026-08-22) loosened this row in EXACTLY ONE dimension. The chip's label was
+    // renamed to `med<N>` (spec §6.3) and §6.4 puts the sheet's prose in the same sprint so the two
+    // cannot drift — which makes the sentence's exact phrasing the developer's call, not this test's.
+    // Everything load-bearing stays pinned, and pinned separately so a failure names which half
+    // broke: the figure, the window count, the statistic's name, and the session-mean half. A sheet
+    // quoting a different window or a different dollar than the line still fails, which is the row's
+    // whole purpose.
+    const usdRe = chip.usd.replace('.', '\\.');
+    assert.match(m[1], new RegExp(`\\$${usdRe}\\b`),
+      `${f}: COST_RECENT must quote the chip's own figure ($${chip.usd}): ${m[1]}`);
+    assert.match(m[1], new RegExp(`\\b${chip.n}\\b`),
+      `${f}: COST_RECENT must quote the chip's own window count (${chip.n}): ${m[1]}`);
+    assert.match(m[1], /\bmedian\b/, `${f}: the recent figure must be named a median: ${m[1]}`);
+    assert.match(m[1], /session mean `\$[\d.,]+` over `\d+` legs/,
+      `${f}: the session-mean half must survive verbatim: ${m[1]}`);
     assert.ok(!/averag/i.test(m[1]), `${f}: the recent figure is a median and may not be called an average`);
   }
+  // Same pinning choice as M2: the exact number is the ABSENT one, the other is derived.
   assert.equal(none, 22);
-  assert.equal(valued, 51);
+  assert.equal(valued, allFixtures().length - 22);
 });
 
 test('M5 — key uniqueness (D7): no `KEY:` label appears twice in any fact sheet', () => {

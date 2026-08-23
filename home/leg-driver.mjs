@@ -115,6 +115,20 @@ export function getDriver(l) {
   }
 }
 
+// The leading verb phrase of every form getDriver can return. The status line colours the verb apart
+// from the rest of the driver text, and this list is what lets it do that without re-spelling a
+// single driver string: the verbs live in the file that owns the strings, so the two cannot drift.
+// Ordered LONGEST FIRST, so a longest-prefix match is unambiguous.
+export const DRIVER_VERBS = [
+  'large fresh input',
+  'opened cold',
+  're-cached',
+  'compacted',
+  'generated',
+  're-read',
+  'loaded',
+];
+
 // Test-ColdLeg — the ONE cold-tax predicate, shared everywhere. Mirrors leg-driver.ps1.
 export function testColdLeg(l) {
   const bigRewrite = (l.cw >= 50000 && l.cr < l.cw * 0.5);

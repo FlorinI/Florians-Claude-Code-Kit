@@ -4,7 +4,7 @@ HEADLINE_DIFF: - Time to hand over
 HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 0.7972247676397434 (lvl 3)
 COST_LEAD: each leg `~$0.80`
 COST_TOTAL: `$2.50` total
-COST_RECENT: last `3` legs median `$0.60`/leg; session mean `$0.83` over `3` legs
+COST_RECENT: `med3` (median of the last 3 legs) `$0.60`/leg; session mean `$0.83` over `3` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

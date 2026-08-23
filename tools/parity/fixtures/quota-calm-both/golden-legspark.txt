@@ -1,0 +1,5 @@
+from session quota-ca · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=2  ·  range $0.04–$0.06  ·  raw peak $0.06  ·  height ∝ cost (peak = full)
+█ 
+██
+██

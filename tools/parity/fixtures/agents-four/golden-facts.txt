@@ -4,7 +4,7 @@ HEADLINE_DIFF: - Wind down soon · sub-agents are 70% of spend
 HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 0.2908584399504746 (lvl 2)
 COST_LEAD: each leg `~$0.29`
 COST_TOTAL: `$4.75` total
-COST_RECENT: last `3` legs median `$0.28`/leg; session mean `$0.48` over `3` legs
+COST_RECENT: `med3` (median of the last 3 legs) `$0.28`/leg; session mean `$0.48` over `3` legs
 COST_DETAIL: main `$1.43` · agents `$3.32` over `4` legs
 COST_AGENTS_TIER: lead
 COST_AGENTS_LEAD: most of the spend is sub-agents — `$3.32` of `$4.75` (`70%`) across `4` legs from `4` agents

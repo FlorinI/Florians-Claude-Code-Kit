@@ -4,7 +4,7 @@ HEADLINE_DIFF: - Time to hand over · sub-agents are 37% of spend
 HEADLINE_BASIS: driver=cost; quality=green (lvl 0); cost=next 0.6098119136533382 (lvl 3)
 COST_LEAD: each leg `~$0.61`
 COST_TOTAL: `$4.75` total
-COST_RECENT: last `3` legs median `$0.60`/leg; session mean `$1.00` over `3` legs
+COST_RECENT: `med3` (median of the last 3 legs) `$0.60`/leg; session mean `$1.00` over `3` legs
 COST_DETAIL: main `$2.99` · agents `$1.76` over `2` legs
 COST_AGENTS_TIER: headline
 COST_AGENTS_LEAD: (none)

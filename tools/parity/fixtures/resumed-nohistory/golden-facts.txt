@@ -4,7 +4,7 @@ HEADLINE_DIFF: + Getting deeper
 HEADLINE_BASIS: driver=quality; quality=yellow (lvl 1); cost=next 0.04423076923076923 (lvl 0)
 COST_LEAD: each leg `~$0.04`
 COST_TOTAL: `$0.50` total
-COST_RECENT: last `8` legs median `$0.04`/leg; session mean `$0.04` over `13` legs
+COST_RECENT: `med8` (median of the last 8 legs) `$0.04`/leg; session mean `$0.04` over `13` legs
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)

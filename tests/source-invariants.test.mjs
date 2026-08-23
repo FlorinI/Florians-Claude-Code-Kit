@@ -219,8 +219,12 @@ test('S15 — the relay never invents WHERE the expensive legs are (spec §A9.2)
     // top of the file, which is not the sentence under guard.
     const chipLine = is.split('\n').find((l) => l.startsWith('- **Cost**'));
     assert.ok(chipLine && chipLine.includes('recent-leg median'), 'the Cost read must exist and name the chip');
-    assert.ok(/trajectory shape/.test(chipLine) && /sparkline/.test(chipLine),
-      'the chip sentence must send the reader to the trajectory shape and the sparkline for direction');
+    // TWO independent sources of truth for direction, which is the whole point of this row — the chip
+    // alone cannot say which way the rate is moving. The second source is the per-leg strip, which the
+    // Dossier IV re-layout renamed from "sparkline" to `trend` (spec §7.2); the assertion follows the
+    // label, and the requirement that there be TWO of them is unchanged.
+    assert.ok(/trajectory shape/.test(chipLine) && /\btrend\b/.test(chipLine),
+      'the chip sentence must send the reader to the trajectory shape AND the trend strip for direction');
   }
 
   // ANTI-CONTRADICTION — the Cost bullet and the your-call bullet must carry the SAME rule. The
@@ -289,7 +293,12 @@ test('AV-1 — no emitted string in handover-facts.mjs calls the recent figure a
   // Spec §A1b's explicit ask, and the cheapest possible pin of the LABEL to the STATISTIC.
   const s = src('home/handover-facts.mjs');
   assert.ok(!s.includes('legs ' + 'average'), 'the emitted COST_RECENT string must say `median`');
-  assert.match(s, /' legs median '/, 'and it must actually say it');
+  // The positive half used to pin the literal fragment `' legs median '`. Dossier IV renamed the
+  // status line's chip to `med<N>` and §6.4 puts this file's prose in the same sprint so the two
+  // cannot disagree — so the surrounding wording moved, legitimately. What must not move is the
+  // STATISTIC'S NAME appearing in the emitted string, which is the whole point of the AV family.
+  assert.match(s, /'[^']*\bmedian\b[^']*'|median of the last/,
+    'the emitted COST_RECENT string must still name the statistic `median`');
 });
 
 test('AV-2 — handover-facts.mjs contains no form of "averag" at all, comments included', () => {
@@ -369,6 +378,216 @@ test('AV-4 — the PUBLIC-DOC GENERATOR, and the documents it generates, name th
     }
     assert.match(text, /recent-leg median/, `${name} must name the statistic in the term of art`);
   }
+});
+
+// ---- Dossier IV (2026-08-22, bsl6.1.0.0): the source-only half of the re-layout -----------------
+// Each row here guards something with no runtime observable: a helper whose last caller went away, a
+// string that must be unreachable rather than merely unreached, a version, a doc that would otherwise
+// lie. The rendered half lives in tests/dossier-layout.test.mjs.
+
+// Negative source scans below run on CODE ONLY. A comment that names a retired string is not a
+// regression — it is usually the developer documenting the invariant, which is exactly what
+// statusline.mjs now does for SGR-2, for `fast off`/`think on`, and for the deleted cold segments.
+// Scanning raw text made all three of those read as failures. Strips block comments and line
+// comments; a `//` inside a string literal would be over-stripped, which can only LOSE coverage on
+// that line, never invent a pass — and none of the needles here can hide behind one.
+const codeOnly = (s) => s
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+test('D4-1 — SGR-2 is fully retired: there is no second gray anywhere in the engine', () => {
+  // Spec §5, and §10.2 asks QA to pin it. "There is no second gray" is literal: chrome collapses to
+  // 256-colour 240, so the dim SGR-2 sequence must not survive ANYWHERE — including inside
+  // ColorCost's under-$1 rung, which is the one place it would plausibly be left behind.
+  const s = codeOnly(src('home/statusline.mjs'));
+  const dim = [...s.matchAll(/\\x1b\[2m|\$\{ESC\}\[2m|\x1b\[2m/g)];
+  assert.deepEqual(dim.map((m) => m[0]), [],
+    `home/statusline.mjs still emits SGR-2 (${dim.length} occurrence(s)) — every gray is 240 now (spec §5)`);
+  // The helper itself, and the second gray it produced, are gone by name.
+  assert.ok(!/^const Dim = /m.test(s), 'the Dim helper must be deleted, not just unused');
+  assert.ok(!/^const DimWhite = /m.test(s), 'DimWhite was the second gray — deleted');
+  assert.ok(!/^const DIM_SEP = /m.test(s), 'DIM_SEP went with the ` | ` separators');
+  // And no 250 colour code sneaks in as a near-miss gray (spec §10.2).
+  assert.ok(!/38;5;250\b/.test(s) && !/\[250m/.test(s),
+    'a 250 colour code is a second gray by another route (spec §10.2)');
+});
+
+test('D4-2 — the deleted display elements are removed from the source, not display-gated off', () => {
+  // Paired with dossier-layout.test.mjs's absence sweep over the goldens. That sweep proves the
+  // strings do not RENDER on this corpus; this one proves they cannot render at all.
+  const s = codeOnly(src('home/statusline.mjs'));
+  const GONE = [
+    ["' /handover-check'", 'the advert text'],
+    ['⚑', 'the advert glyph'],
+    ['BgFill', 'the % fill chip renderer'],
+    ['BAND_GREEN', 'the fill-chip band constants'],
+    ['BAND_YELLOW', 'the fill-chip band constants'],
+    ['BAND_ORANGE', 'the fill-chip band constants'],
+    ['BAND_RED', 'the fill-chip band constants'],
+    ["'[old] '", 'the sparkline old anchor'],
+    ["' [new]'", 'the sparkline new anchor'],
+    ['$/leg', 'the sparkline caption'],
+    ["'x med'", 'the spotlight median multiple'],
+    ['legs ago', 'the recency tag'],
+    ["'just paid'", 'the recency tag'],
+    ['Σctx', 'the old fleet label — `sum` now'],
+    ["'·max '", 'the fleet median/max parenthetical'],
+    ["'to-compact '", 'the old wall label'],
+  ];
+  for (const [needle, what] of GONE) {
+    assert.ok(!s.includes(needle), `home/statusline.mjs still contains ${needle} — ${what} (spec §9)`);
+  }
+  // The retrospective cold tax percentage and the cold leg count/share.
+  assert.ok(!/taxPct/.test(s), 'the cold tax PERCENTAGE is a Florian deletion (spec §7.7)');
+  assert.ok(!/legPct/.test(s), 'the cold legs count/share is a Florian deletion (spec §7.7)');
+});
+
+test('D4-3 — `fast off` and `think on` are unreachable by construction', () => {
+  // Not "absent from the goldens" — absent from the code. The old renderer emitted both whenever the
+  // payload carried the key at all, so a surviving else-branch would put them back on screen for the
+  // 12 fixtures that set fast_mode: false.
+  const s = codeOnly(src('home/statusline.mjs'));
+  // Each flag is ASSEMBLED from a gray unit plus a coloured value, so neither `fast on` nor `fast off`
+  // ever appears as a contiguous literal — which makes a substring ban on the phrase worthless. What
+  // is worth pinning is that each unit has exactly ONE call site, of exactly one shape. One call site
+  // of a known shape is what makes the opposite value unreachable.
+  const fastSites = [...s.matchAll(/'fast '/g)];
+  const thinkSites = [...s.matchAll(/'think '/g)];
+  assert.equal(fastSites.length, 1, `the fast flag must have exactly one call site (found ${fastSites.length})`);
+  assert.equal(thinkSites.length, 1, `the think flag must have exactly one call site (found ${thinkSites.length})`);
+  assert.match(s, /\('fast '\) \+ Magenta\('on'\)/,
+    'the single fast call site emits `on` in magenta and nothing else — spec §7.8 chip 1');
+  assert.match(s, /\('think '\) \+ BrightCyan\('off'\)/,
+    'the single think call site emits `off` in bright cyan and nothing else — spec §7.8 chip 2');
+  // And the old colon forms, which rendered BOTH values, are gone outright.
+  assert.ok(!/fast:off|fast:on/.test(s), 'the `fast:<v>` form rendered both values — gone');
+  assert.ok(!/think:on|think:off/.test(s), 'the `think:<v>` form rendered both values — gone');
+  // The rendered half — that `fast on` / `think off` appear exactly on their own conditions across
+  // every fixture, and their opposites nowhere — is dossier-layout.test.mjs items 17 and 18.
+});
+
+test('D4-4 — the driver verb list has ONE home, and it is the file that owns the strings', () => {
+  // Spec §7.9. Colouring the leading verb needs to know the verb phrases; re-spelling them in
+  // statusline.mjs is what would let the two drift silently the next time getDriver gains a form.
+  const ld = src('home/leg-driver.mjs');
+  assert.match(ld, /export const DRIVER_VERBS = \[/, 'leg-driver.mjs exports DRIVER_VERBS');
+  const sl = src('home/statusline.mjs');
+  assert.match(sl, /DRIVER_VERBS/, 'statusline.mjs consumes it');
+  // getDriver's contract is unchanged — render-spikes.mjs reads the same string.
+  assert.match(ld, /export function getDriver|export const getDriver/, 'getDriver stays exported');
+  // The verb phrases themselves must not be re-spelled in the engine.
+  for (const verb of ['re-cached', 'compacted', 'opened cold', 'large fresh input']) {
+    assert.ok(!sl.includes(`'${verb}`) && !sl.includes(`"${verb}`),
+      `home/statusline.mjs re-spells the driver verb "${verb}" — it must come from DRIVER_VERBS`);
+  }
+});
+
+test('D4-5 — SL_VERSION is 6.1.1 (PATCH: rows collapse when silent, and the leading-pad fix)', () => {
+  const s = src('home/statusline.mjs');
+  // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
+  const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
+  assert.ok(m, 'SL_VERSION must be a four-part version');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.1', 'X.Y.Z is 6.1.1 for this change');
+});
+
+test('D4-6 — the docs describe the grid instead of the retired stack', () => {
+  // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would
+  // otherwise describe a layout that no longer exists.
+  const doc = src('docs/status-line.md');
+  assert.ok(!/Seven clusters, top to bottom/.test(doc),
+    'docs/status-line.md still opens with the retired seven-cluster stack');
+  for (const stale of ['⚑ /handover-check', '[old] ', ' [new]', 'tax 7%', 'legs 2/60']) {
+    assert.ok(!doc.includes(stale), `docs/status-line.md still documents a deleted element: ${stale}`);
+  }
+  assert.match(doc, /two-column|dossier/i, 'and it must actually describe the new layout');
+
+  // interpret-statusline.md has its own row below (D4-7) — it needs more than a three-string check.
+});
+
+test('D4-7 — interpret-statusline.md reads the labels that actually ship', () => {
+  // WHY THIS ROW IS BIGGER THAN A SPOT CHECK. This file tells a reader (often a cheap model) which
+  // fields to pull off a screenshot, and it then writes ONE ROW PER SCREENSHOT into
+  // docs/statusline-calibration-samples.md. A misread here does not just confuse someone — it puts a
+  // wrong number into the dataset that drives the $/leg dollar-gate and quality-band recalibration,
+  // where nothing downstream can tell a mis-parsed row from a real one.
+  //
+  // Its previous guard tested exactly three strings, which is why it stayed green through the Dossier
+  // IV re-layout while the file still sent readers hunting for `last 8`, for the window on row 1, and
+  // for cold strings the line can no longer emit.
+  const isPath = join(repo, '.claude', 'commands', 'interpret-statusline.md');
+  if (!existsSync(isPath)) return;      // private-repo only, like the D4 row below
+  const is = readFileSync(isPath, 'utf8');
+
+  // POSITIVE — the vocabulary that actually ships. A rewrite can dodge any blacklist; it cannot dodge
+  // having to name the fields a reader must find on screen.
+  const MUST = [
+    [/two-column|dossier/i, 'describe the two-column grid'],
+    [/`med<N>`|`med\d`/, 'name the recent-median chip as `med<N>`, its shipped label'],
+    [/`trend`|trend strip/, 'name the `trend` strip — the per-leg cost cells are not a "sparkline" any more'],
+    [/read here on row 2|window[^.]{0,80}\brow 2\b/, 'say the context WINDOW is read on row 2, not off the model row'],
+    [/`wall`/, 'name the `wall` field — the headroom label'],
+  ];
+  for (const [re, what] of MUST) {
+    assert.match(is, re, `interpret-statusline.md must ${what}`);
+  }
+
+  // POSITIVE — it must WARN about the two cold elements the line no longer emits, because a reader
+  // who goes looking for them either invents them or reports the screenshot as broken.
+  assert.match(is, /No `❆` marker|no `❆` marker/i,
+    'interpret-statusline.md must warn that no ❆ marker appears on the fixed rows any more');
+  assert.match(is, /no "N legs ago" recency tag|there is no "N legs ago"/i,
+    'interpret-statusline.md must warn that the "N legs ago" recency tag is gone');
+
+  // POSITIVE — and it must keep explaining that the CALIBRATION TABLE's column names are historical.
+  // `to-compact` and `last8$` stay as column headers on purpose so old rows remain comparable, and the
+  // instruction to record the `wall` / `med<N>` figures under them is the only thing standing between
+  // that decision and a silently mixed dataset. This is why the two names are NOT banned below.
+  assert.match(is, /predate the Dossier IV re-layout|keep their names/,
+    'interpret-statusline.md must keep the caveat that the calibration columns retain their historical names');
+
+  // NEGATIVE — retired reading instructions. Every pattern here was verified clean against the live
+  // file, and `to-compact` / `last8$` are deliberately absent from this list per the caveat above.
+  const RETIRED = [
+    [/at the end of line 1/, 'the model row no longer ends with the version badge'],
+    [/\bgit cluster\b/, 'the git facts are the `repo` cluster on row 5 right'],
+    [/`legs:`|\blegs:\s/, 'the sparkline label `legs:` is deleted'],
+    [/\blast 8\b/, 'the chip is `med<N>`; `last 8` was its retired label'],
+    [/`last N`/, 'same — the chip label is `med<N>`'],
+    [/\bsparkline/i, 'the per-leg strip is the `trend` cluster'],
+    [/⚑/, 'the /handover-check advert flag is deleted'],
+    [/Tax \d+%|`Tax `/, 'the cold tax PERCENTAGE is deleted; only `cold $<x>` survives'],
+    [/legs \d+\/\d+/, 'the cold `legs C/T (P%)` count is deleted'],
+    [/❆ Tax/, 'the ❆ marker left the fixed rows'],
+    [/x med\b/, 'the spotlight `N.Nx med` multiple is deleted'],
+  ];
+  for (const [re, why] of RETIRED) {
+    assert.ok(!re.test(is), `interpret-statusline.md still sends the reader after a retired element ${re} — ${why}`);
+  }
+});
+
+// ---- Dossier IV (2026-08-22, bsl6.1.0.0): 0b — the engine's own copy of the median -------------
+//
+// The BUILD PRECONDITION's third part. `home/statusline.mjs` has its OWN `Median` (not the exported
+// `median` in leg-driver.mjs) with three call sites; the re-layout deletes only the agents-line one,
+// so the function survives with two callers and keeps mattering. It is not exported, so no unit test
+// can import it — the behavioural guard lives in tests/agent-ctx-median.test.mjs against the exported
+// twin, and THIS row pins the engine copy's even-count branch by source shape.
+//
+// This is the weakest assertion in the sprint's test plan and it is written down as such: it would
+// catch the two implementations diverging, and it would not catch a subtler rewrite that keeps the
+// shape. Exporting `Median` to make it testable was rejected — the spec allows exactly one new export
+// in this sprint (DRIVER_VERBS in leg-driver.mjs) and widening a module surface for a test is a worse
+// trade than naming the limit.
+test('0b — statusline.mjs\'s own Median averages the middle two on an even count', () => {
+  const s = src('home/statusline.mjs');
+  const at = s.indexOf('function Median(arr) {');
+  assert.ok(at > 0, 'the engine keeps its own Median (two surviving call sites after the re-layout)');
+  // The function body, bounded by the next top-level close-brace line.
+  const body = s.slice(at, s.indexOf('\n}', at) + 2);
+  assert.match(body, /\(vals\[mid - 1\] \+ vals\[mid\]\) \/ 2\.0/,
+    'the even-count branch must average the two middle values — returning vals[mid] alone is the 2026-06-24 bug');
+  assert.match(body, /n % 2 === 1 \? vals\[mid\]|if \(n % 2 === 1\) return vals\[mid\]/,
+    'and the odd-count branch must still return the middle member');
 });
 
 // ---- D4: calibration sample rows carry the session model ---------------------------------------

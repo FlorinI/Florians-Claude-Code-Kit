@@ -1,0 +1,5 @@
+from session model-na · (no repo) · rendered 0s ago
+per-leg $/leg [trailing-10-leg avg]  ·  oldest→newest  ·  n=20  ·  range $0.36–$0.43  ·  raw peak $0.95  ·  height ∝ cost (peak = full)
+▄▄▅▄▄▅▅▄▅▅██████████
+████████████████████
+████████████████████

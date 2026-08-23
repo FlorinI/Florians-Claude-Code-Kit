@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { servingTierReport } from '../home/leg-driver.mjs';
+import { rowByLabel } from './_grid.mjs';
 
 // model-switch (rows D1/D3) — stateful two-render tests of the per-session rollup's model
 // stamping. A "switch" is a price-TIER change (ModelTier(old) !== ModelTier(new)); id-form vs
@@ -159,20 +160,26 @@ test('S10 — the sidecar key is present only when the report fires', () => {
   });
 });
 
-test('S11 — the chip is DIM and sits in the model field', () => {
-  // REDUCED by the froz5 removal (2026-08-21). The row's second half paired this chip with the froz5
-  // `?` warm-open marker, asserting the two never displaced each other. The marker is gone, so what
-  // remains is the chip's own contract: dim, uncoloured, inside cluster 1's model field.
+test('S11 — the chip is QUIET and sits on the flags row', () => {
+  // REDUCED by the froz5 removal (2026-08-21), then RELOCATED by Dossier IV (2026-08-22): the chip
+  // leaves cluster 1's model field for the flags row (spec §7.8 chip 7, §9 row 10), and its wrapper
+  // moves from SGR-2 to the single chrome gray 240 (spec §5). Its contract is otherwise unchanged and
+  // is what this row still guards: quiet, uncoloured, provenance rather than alarm.
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table(), 'Fable 5 (1M context)', 10);
-    // Dim is ESC[2m … ESC[0m — provenance, not alarm. Assert the exact wrapper, so a future change
-    // to a coloured chip fails here rather than being noticed on screen.
-    assert.ok(r.stdout.includes('\x1b[2m ⚠ serving:opus\x1b[0m'), `dim-wrapped chip absent:\n${JSON.stringify(r.stdout.split('\n')[0])}`);
-    // …and it carries no foreground/background colour of its own.
-    assert.ok(!/\x1b\[38;[0-9;]*m[^\x1b]*serving:/.test(r.stdout), 'the chip must not be coloured');
-    // It lives in cluster 1's model field — before the first ` | ` separator.
-    const line1 = r.plain.split('\n')[0];
-    assert.match(line1, /^Fable 5 \(1M context\) v2\.1\.142 ⚠ serving:opus \| /, `cluster 1: ${line1}`);
+    // Assert the exact wrapper, so a future change to a coloured chip fails here rather than being
+    // noticed on screen. 240 is the ONE gray — SGR-2 is retired file-wide.
+    assert.ok(r.stdout.includes('\x1b[38;5;240m⚠ serving:opus\x1b[0m'),
+      `gray-240-wrapped chip absent:\n${JSON.stringify(rowByLabel(r.stdout, 'flags'))}`);
+    assert.ok(!r.stdout.includes('\x1b[2m'), 'SGR-2 is retired — there is no second gray (spec §5)');
+    // …and it carries no attention colour of its own. 240 is chrome, so exclude it by name rather
+    // than banning every 38;5 sequence.
+    assert.ok(!/\x1b\[38;5;(?!240m)[0-9;]*m[^\x1b]*serving:/.test(r.stdout), 'the chip must not be coloured');
+    assert.ok(!/\x1b\[(?:1;)?3[1-7]m[^\x1b]*serving:/.test(r.stdout), 'nor carry a basic-ANSI colour');
+    // It lives on the flags row — row 6 of the fixed block — and has LEFT the model row.
+    const lines = r.plain.split('\n');
+    assert.match(rowByLabel(r.plain, 'flags'), /⚠ serving:opus/, `the flags row carries it: ${rowByLabel(r.plain, 'flags')}`);
+    assert.ok(!lines[0].includes('serving:'), `and the model row does not: ${lines[0]}`);
   });
   // A warm-open leg 1 (what used to raise the `?` marker) still renders the chip, and no ratio tail
   // comes back with it — the negative half of AE-1, driven live rather than read off a golden.
@@ -180,7 +187,7 @@ test('S11 — the chip is DIM and sits in the model field', () => {
     const r = renderTable(dirs, table({ warmOpen: true }), 'Fable 5 (1M context)', 10);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'fable', serving: 'opus' });
     const lines = r.plain.split('\n');
-    assert.match(lines[0], /⚠ serving:opus/, 'chip still in cluster 1');
+    assert.match(rowByLabel(r.plain, 'flags'), /⚠ serving:opus/, 'chip still on the flags row');
     assert.ok(!r.plain.includes('(fresh)'), 'no ratio tail');
     assert.ok(!/=\s*[\d.]+x/.test(r.plain), 'and no `= N.Nx` multiple anywhere on any line');
   });
@@ -279,7 +286,7 @@ test('S16 — BOTH transpositions render the chip: label dearer than served, and
   withModel(OPUS, (dirs) => {
     const r = renderTable(dirs, table(), 'Fable 5 (1M context)', 10);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'fable', serving: 'opus' });
-    assert.match(r.plain.split('\n')[0], /⚠ serving:opus/);
+    assert.match(rowByLabel(r.plain, 'flags'), /⚠ serving:opus/);
   });
   // The TRANSPOSE — label sonnet (2) over fable legs (10). Same predicate, opposite price direction.
   // Worth its own row because the report must be indifferent to which side is dearer: it answers
@@ -287,7 +294,7 @@ test('S16 — BOTH transpositions render the chip: label dearer than served, and
   withModel(FABLE, (dirs) => {
     const r = renderTable(dirs, table(), 'Sonnet 5', 2);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'sonnet', serving: 'fable' });
-    assert.match(r.plain.split('\n')[0], /⚠ serving:fable/);
+    assert.match(rowByLabel(r.plain, 'flags'), /⚠ serving:fable/);
     assert.equal(r.sidecar.schema, 6);
   });
   // …and a third tier pair, so nothing is hard-coded to fable/opus/sonnet.

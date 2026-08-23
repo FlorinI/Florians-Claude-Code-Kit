@@ -14,7 +14,7 @@ import {
 import {
   getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
-  isSyntheticLeg, servingTierReport, median,
+  isSyntheticLeg, servingTierReport, median, DRIVER_VERBS,
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
@@ -22,7 +22,7 @@ import { sanitizeSessionName } from './sanitize-name.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.0.0.0';
+export const SL_VERSION = '6.1.1.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json, stats-cache.json) and write (the global sidecar, the rollup caches)
@@ -176,22 +176,21 @@ function autoCompactDisabled() {
 const AC_OFF = autoCompactDisabled();
 
 // --- ANSI color helpers ----------------------------------------------------
+// TWO non-signal tones and nothing else: chrome is 256-colour 240 (`DarkGray` — every label, unit,
+// separator, connective and deliberately-quiet value), and a neutral value carries NO SGR at all.
+// There is no second gray: SGR-2 is retired from this file entirely, and so is colour 250. Every
+// other colour below is a CALIBRATED LADDER, where the colour is the meaning.
 const ESC = '\x1b';
-const Dim = (t) => `${ESC}[2m${t}${ESC}[0m`;
-const Bold = (t) => `${ESC}[1m${t}${ESC}[0m`;
 const Red = (t) => `${ESC}[31m${t}${ESC}[0m`;
 const Green = (t) => `${ESC}[32m${t}${ESC}[0m`;
 const Yellow = (t) => `${ESC}[33m${t}${ESC}[0m`;
-const Cyan = (t) => `${ESC}[36m${t}${ESC}[0m`;
 const RedBold = (t) => `${ESC}[1;31m${t}${ESC}[0m`;
 const White = (t) => `${ESC}[97m${t}${ESC}[0m`;
 const Orange = (t) => `${ESC}[38;5;208m${t}${ESC}[0m`;
 const Magenta = (t) => `${ESC}[95m${t}${ESC}[0m`;
 const BrightCyan = (t) => `${ESC}[96m${t}${ESC}[0m`;
 const DarkGray = (t) => `${ESC}[38;5;240m${t}${ESC}[0m`;
-const DimWhite = (t) => `${ESC}[38;5;250m${t}${ESC}[0m`;
 const ColdBlue = (t) => `${ESC}[38;5;33m${t}${ESC}[0m`;
-const BoldBright = (t) => `${ESC}[1;97m${t}${ESC}[0m`;
 
 function ColorEffort(lvl) {
   switch (lvl) {
@@ -205,7 +204,7 @@ function ColorEffort(lvl) {
 }
 function ColorCost(v, text) {
   if (isNil(v)) return text;
-  if (v < 1) return Dim(text);
+  if (v < 1) return DarkGray(text);
   if (v <= 5) return text;
   if (v <= 10) return White(text);
   if (v <= 20) return Yellow(text);
@@ -218,12 +217,6 @@ function ColorByTokenCount(tokens, text) {
   if (tokens < 128000) return `${ESC}[38;5;40m${text}${ESC}[0m`;
   if (tokens < 256000) return Yellow(text);
   if (tokens < 500000) return Orange(text);
-  return RedBold(text);
-}
-function ColorHigh(v, text, okMax, warnMax) {
-  if (isNil(v)) return text;
-  if (v < okMax) return Green(text);
-  if (v < warnMax) return Yellow(text);
   return RedBold(text);
 }
 function ColorLow(v, text, okMin, warnMin) {
@@ -251,23 +244,68 @@ function ColorLegCell(cost, text) {
   return `${ESC}[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${text}${ESC}[0m`;
 }
 
-const BAND_GREEN = [0, 200, 0];
-const BAND_YELLOW = [220, 200, 0];
-const BAND_ORANGE = [255, 140, 0];
-const BAND_RED = [210, 0, 0];
+// The trend row's chips: foreground at the cell's own gradient colour, background at 30% of that
+// same colour. The caller passes the WHOLE slot (value plus its pad), so the tint covers every cell
+// of the slot and adjacent chips form one continuous band with no untinted gap between them.
 function BgTint(rgb, text) {
   const m0 = psRound(rgb[0] * 0.30), m1 = psRound(rgb[1] * 0.30), m2 = psRound(rgb[2] * 0.30);
-  return `${ESC}[38;2;${rgb[0]};${rgb[1]};${rgb[2]};48;2;${m0};${m1};${m2}m ${text} ${ESC}[0m`;
-}
-function BgFill(pct, text) {
-  if (isNil(pct)) return Dim(text);
-  if (pct < 50) return BgTint(BAND_GREEN, text);
-  if (pct < 70) return BgTint(BAND_YELLOW, text);
-  if (pct < 85) return BgTint(BAND_ORANGE, text);
-  return BgTint(BAND_RED, text);
+  return `${ESC}[38;2;${rgb[0]};${rgb[1]};${rgb[2]};48;2;${m0};${m1};${m2}m${text}${ESC}[0m`;
 }
 
-const DIM_SEP = Dim(' | ');
+// --- Grid geometry ---------------------------------------------------------
+// A fixed two-column grid: a 53-cell left column, the 2-cell divider `│ `, then a 62-cell right
+// column — 117 cells in all. The left column's width positions the divider, so it NEVER overruns:
+// its two unbounded strings (the model name, a spotlight driver) truncate with `…`. The right column
+// may overrun and never truncates, because nothing renders to the right of it.
+//
+// Width is counted on the ANSI-stripped string, ONE CELL PER CODE POINT. Classified against the
+// Unicode EastAsianWidth data, the glyphs this layout emits are either AMBIGUOUS — `▁▂▃▄▅▆▇█`
+// (U+2581–2588), `→` U+2192, `←` U+2190, `│` U+2502, `◆` U+25C6, `·` U+00B7, `…` U+2026, `×` U+00D7,
+// `—` U+2014 — or NEUTRAL: `⁂` U+2042, `⚠` U+26A0, `❆` U+2746. NOTHING here is Wide or Fullwidth, so
+// no glyph is unconditionally double-width; only the Ambiguous ones can draw double, and only on a
+// CJK-configured font or locale. Each glyph sits in a padded field of fixed width and each HALF is
+// padded independently, so a double-drawn glyph pushes that one row's tail right — carrying that
+// row's own divider when it is in the left half — and every other row keeps its alignment. A per-row
+// effect, never a column-wide one. `…` is the one that matters most: it is the left column's
+// truncation marker, and the left column is what positions the divider. See docs/status-line.md.
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+function visLen(s) { return [...String(s).replace(ANSI_RE, '')].length; }
+function padTo(s, n) { const d = n - visLen(s); return d > 0 ? s + ' '.repeat(d) : s; }
+function padStartTo(s, n) { const d = n - visLen(s); return d > 0 ? ' '.repeat(d) + s : s; }
+function rtrim(s) { return String(s).replace(/ +$/, ''); }
+// Right-truncate an UNSTYLED string to n cells, marking the cut with a trailing `…`.
+function truncTo(s, n) {
+  const cp = [...String(s)];
+  if (cp.length <= n) return String(s);
+  return cp.slice(0, Math.max(0, n - 1)).join('') + '…';
+}
+const LEFT_LABEL_W = 6, LEFT_VALUE_W = 45, LEFT_HALF_W = 53;
+const RIGHT_LABEL_W = 7, RIGHT_VALUE_W = 53;
+// One grid row. Labels are right-aligned in their own field, so within a column every label ends at
+// the same screen column and the value text starts immediately after. The left half is padded to
+// exactly 53 cells, so the divider lands in column 54 on EVERY row — including a row whose right
+// half is empty, where the trailing space is trimmed and the divider is the line's last glyph.
+// A ROW MAY NOT BEGIN WITH WHITESPACE. Leading spaces are stripped before the row reaches the
+// screen, and every row's label leaves a different number of them (`model` 1 … the label-less
+// runway row 8), so each row slid left by a different amount and the grid visibly bent — the right
+// half dragged along with it, which is why the right column's labels staggered too. One near-black
+// `.` takes the place of the FIRST pad space: position 0 is never whitespace, so nothing is
+// stripped. ASCII, so it cannot misdraw; it REPLACES a space rather than being prepended, so the
+// row stays 53 cells and no layout math moves. Interior padding was never affected.
+const LEAD_DOT = `${ESC}[38;5;234m.${ESC}[0m`;
+function guardLead(s) { return s.startsWith(' ') ? LEAD_DOT + s.slice(1) : s; }
+// A label belongs to its value: a half with nothing to say renders as blank space, not as a label
+// standing alone, and a row with nothing to say on either side does not render at all (returns
+// null — the assembler filters it). This replaced the Dossier IV "six always-present rows, empty
+// cluster shows its label alone" rule: a bare `cold` or `flags` is noise, and the agents label was
+// worse, printing a glyph on every session that has never spawned an agent.
+function gridRow(lLabel, lValue, rLabel, rValue) {
+  const lHas = visLen(lValue) > 0, rHas = visLen(rValue) > 0;
+  if (!lHas && !rHas) return null;
+  const left = padTo(rtrim(padStartTo(lHas ? lLabel : '', LEFT_LABEL_W) + '  ' + lValue), LEFT_HALF_W);
+  const right = rtrim(padStartTo(rHas ? rLabel : '', RIGHT_LABEL_W) + (rHas ? '  ' + rValue : ''));
+  return guardLead(right ? left + DarkGray('│ ') + right : left + DarkGray('│'));
+}
 
 // === Per-session cumulative-token rollups (incremental transcript scan) =====
 function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel, sessionName) {
@@ -671,7 +709,6 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
   const live = cache.agents.filter((a) => a && Number(a.legs) > 0 && (a.run ?? runIdx) === runIdx);
   if (live.length === 0) return null;
   let sumUnits = 0, sumEffUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
-  const ctxList = [];
   const tierCounts = {};
   for (const a of live) {
     const tier = ModelTier(a.model);
@@ -682,17 +719,19 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
     const w = tierWeight(a.model, mainTier);
     sumUnits += Number(a.units); sumEffUnits += Number(a.units) * w;
     sumLegs += Number(a.legs); sumOut += Number(a.out);
-    sumMaxCtx += Number(a.maxCtx); ctxList.push(Number(a.maxCtx));
+    sumMaxCtx += Number(a.maxCtx);
     if (Number(a.maxCtx) > maxCtx) maxCtx = Number(a.maxCtx);
     if (Number(a.units) > maxUnits) maxUnits = Number(a.units);
     if (tier) tierCounts[tier] = (tierCounts[tier] || 0) + 1;
   }
-  const medCtx = Median(ctxList);
-  return { nAgents: live.length, sumUnits, sumEffUnits, sumLegs, sumOut, sumMaxCtx, medCtx, maxCtx, maxUnits, tierCounts, cachePath };
+  // No median of the per-agent peak contexts: the fleet cluster no longer displays one, and the
+  // sidecar never carried it (`agentCtxMax` is the surviving snapshot key). The median over agent
+  // peak contexts is guarded directly by tests/agent-ctx-median.test.mjs.
+  return { nAgents: live.length, sumUnits, sumEffUnits, sumLegs, sumOut, sumMaxCtx, maxCtx, maxUnits, tierCounts, cachePath };
 }
 function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
-// === Cluster 1: model + flags ==============================================
+// === Row 1 left: model + effort ============================================
 const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
 // Tier from the RAW payload model (never the 'unknown' render fallback, which would read as a
 // real 'other' tier): absent display_name → null → no tier-mix contribution, weight 1.0.
@@ -704,54 +743,42 @@ const fast = d?.fast_mode;
 const fastMode = fast === true;
 const thinking = d?.thinking?.enabled;
 
-const line1Parts = [];
-const modelLabel = version ? Bold(model) + Dim(` v${version}`) : Bold(model);
-line1Parts.push(modelLabel);
-line1Parts.push(Dim('effort:') + ColorEffort(effort));
-if (!isNil(fast)) line1Parts.push(Dim('fast:') + (fast ? Magenta('on') : 'off'));
-if (!isNil(thinking)) line1Parts.push(Dim('think:') + (thinking ? 'on' : BrightCyan('off')));
-if (style && style !== 'default') line1Parts.push(Dim('style:') + style);
-line1Parts.push(DarkGray(`bsl${SL_VERSION}`));
-// line1 is joined AFTER the rollup (below), so the serving-tier provenance chip can land inside the
-// model field. Nothing between here and there reads it.
+// The name is neutral (no SGR, no bold) and is one of the two unbounded strings in the left column,
+// so it truncates at its 30-cell budget. `v<version>` moved to the repo cluster and the serving-tier
+// chip to the flags cluster, so nothing else lands in this field.
+const MODEL_NAME_W = 30;
+const modelValue = truncTo(model, MODEL_NAME_W) + '  ' + DarkGray('effort ') + ColorEffort(effort);
 
-// === Cluster 2: context window =============================================
+// === Row 2 left: context window ============================================
+// `fillPct` / `fillState` still feed the sidecar; the `%` fill chip that displayed them is gone, as
+// is the `/handover-check` advert.
 const ctxPct = d?.context_window?.used_percentage;
 const ctxUsed = d?.context_window?.total_input_tokens;
 const ctxSize = d?.context_window?.context_window_size;
-const ctxParts = [];
+let ctxValue = '';
 if (!isNil(ctxUsed) && !isNil(ctxSize)) {
-  ctxParts.push(Dim('ctx ') + ColorByTokenCount(ctxUsed, FmtNum(ctxUsed)) + Dim('/' + FmtNum(ctxSize)));
-}
-if (!isNil(ctxPct)) ctxParts.push(BgFill(ctxPct, FmtPct(ctxPct)));
-if (!isNil(ctxUsed) && !isNil(ctxSize)) {
+  let wall;
   if (AC_OFF) {
     // Auto-compact is off — no countdown, no red NOW: compaction will not fire.
-    ctxParts.push(Dim('to-compact off'));
+    wall = DarkGray('off');
   } else {
     const cw = CompactWindow(ctxSize);
     const compactAt = psRound(cw.win * 0.95);
     const remaining = compactAt - ctxUsed;
     // `~` = the window is an ESTIMATE (on `auto`, using the model-tuned default) — shown ONLY when it's also
-    // near the bar (yellow/red, remaining < 200k), so a calm line never carries it and an authoritative
+    // near the bar (remaining < 200k), so a calm line never carries it and an authoritative
     // override (a real number read from settings) never marks. One glyph, event-gated.
     const est = (cw.estimate && remaining < 200000) ? '~' : '';
-    if (remaining > 0) ctxParts.push(Dim('to-compact ') + ColorLow(remaining, est + FmtNum(remaining), 200000, 50000));
-    else ctxParts.push(RedBold('to-compact ' + est + 'NOW'));
+    // The distance is a quiet fact and is never band-coloured. NOW is the exception: past the
+    // compaction point the field stops being a distance and becomes a hard event, marker included.
+    wall = remaining > 0 ? DarkGray(est + FmtNum(remaining)) : RedBold(est + 'NOW');
   }
+  ctxValue = ColorByTokenCount(ctxUsed, FmtNum(ctxUsed)) + DarkGray('/' + FmtNum(ctxSize))
+    + '  ' + DarkGray('wall ') + wall;
 }
-const absLvl = isNil(ctxUsed) ? 0 : (ctxUsed < 128000 ? 0 : ctxUsed < 256000 ? 1 : ctxUsed < 500000 ? 2 : 3);
-const fillLvl = isNil(ctxPct) ? 0 : (ctxPct < 50 ? 0 : ctxPct < 70 ? 1 : ctxPct < 85 ? 2 : 3);
-const advWorst = Math.max(absLvl, fillLvl);
-if (advWorst >= 1 && ctxParts.length > 0) {
-  const advLvl = (absLvl === fillLvl) ? advWorst : advWorst - 1;
-  const advFlag = advLvl === 3 ? RedBold('⚑') : advLvl === 2 ? Orange('⚑') : advLvl === 1 ? Yellow('⚑') : DimWhite('⚑');
-  ctxParts.push(advFlag + Dim(' /handover-check'));
-}
-const line2 = ctxParts.length > 0 ? ctxParts.join(DIM_SEP) : null;
 
-// === Cluster 3: cost density ===============================================
-const cacheParts = [];
+// === Row 1 right: cost =====================================================
+let costTotalPart = null, costLastPart = null, costNextPart = null, costMedPart = null;
 const tpath = d?.transcript_path;
 const sessionId = d?.session_id;
 // session_name = the /rename · --name custom name, else the AI-generated title; absent when neither.
@@ -764,7 +791,7 @@ const costUsd = d?.cost?.total_cost_usd;
 const ctxTok = d?.context_window?.total_input_tokens;
 const cwd = (d?.workspace?.current_dir) ? d.workspace.current_dir : d?.cwd;
 
-if (!isNil(costUsd)) cacheParts.push(ColorCost(costUsd, '$' + fmtN(costUsd, 2)));
+if (!isNil(costUsd)) costTotalPart = ColorCost(costUsd, '$' + fmtN(costUsd, 2));
 let rollup = null;
 if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '', sessionName);
 
@@ -774,14 +801,11 @@ const runIdx = rollup ? Number(rollup.runIdx) || 0 : 0;
 const runStartLeg = rollup ? Number(rollup.runStartLeg) || 0 : 0;
 if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier, runIdx); } catch {} }
 // Transcript-vs-display tier PROVENANCE — "the label names a tier that has never served in this
-// run". Pure provenance: it drives the dim cluster-1 chip, a conditional sidecar key and a
+// run". Pure provenance: it drives one flags-cluster chip, a conditional sidecar key and a
 // fact-sheet caveat, and gates NO number (the display tier cancels out of per-leg dollars — see
 // servingTierReport). Reads arrays already in hand — no extra file read, no re-scan on the hot path.
+// It renders as a caveat chip on the flags row (chrome-coloured: provenance, not alarm).
 const tierMismatch = rollup ? servingTierReport(rollup.perLegModels, runStartLeg, d?.model?.display_name ?? '') : null;
-// Dim, never coloured: provenance, not alarm. It sits inside the model field, so it never displaces
-// anything in the cost cluster.
-if (tierMismatch) line1Parts[0] += Dim(` ⚠ serving:${tierMismatch.serving}`);
-const line1 = line1Parts.join(DIM_SEP);
 // Per-leg EFFECTIVE units = raw units × the leg's tier weight relative to the main tier (a Sonnet
 // opening leg on a Fable session weighs 0.2). `base` = this run's total_cost_usd over this run's
 // effective units (main legs from runStartLeg on + this run's tier-weighted agents), so every $
@@ -803,7 +827,6 @@ if (totalUnits > 0 && sessionCost > 0) {
 const listUnitUsd = (mainTier != null && mainTier in TIER_BASE) ? TIER_BASE[mainTier] / 1e6 : null; // list $/unit at the main tier
 const legPricingSuspect = (listUnitUsd != null && baseTrue != null && baseTrue < 0.5 * listUnitUsd);
 let perLegCostArr = [];
-let nextPart = null;
 if (rollup && totalUnits > 0 && sessionCost > 0) {
   perLegCostArr = perLegEff.map((u) => baseTrue * u);
 }
@@ -817,13 +840,12 @@ if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
   // Raw — the next leg runs at the CURRENT tier (weight 1 against itself).
   const nextUnits = floorUnits + Median(ownTail);
   forecast = base * nextUnits;
-  nextPart = Dim('next ') + ColorLegCell(forecast, '$' + fmtN(forecast, 2));
+  costNextPart = DarkGray('next ') + ColorLegCell(forecast, '$' + fmtN(forecast, 2));
 }
 if (rollup && !isNil(rollup.lastLegCost) && Number(rollup.lastLegCost) > 0) {
   const ltc = Number(rollup.lastLegCost);
-  cacheParts.push(Dim('last leg ') + ColorLegCell(ltc, '$' + fmtN(ltc, 2)));
+  costLastPart = DarkGray('last ') + ColorLegCell(ltc, '$' + fmtN(ltc, 2));
 }
-if (nextPart) cacheParts.push(nextPart);
 // The recent RATE — the MEDIAN of the last min(8, N) per-leg dollars, the same figures `last leg`
 // and the sparkline already show (perLegCostArr, so `base` is untouched and no per-leg dollar is
 // recomputed by another route). Median, NOT mean: this chip is a per-leg dollar figure, on the
@@ -836,51 +858,34 @@ if (nextPart) cacheParts.push(nextPart);
 // window it does not have; suppressed below 2 legs (at 1 it would just duplicate `last leg`). Same
 // ColorLegCell gradient as `last leg` and `next`, so the three dollar figures on the line are one
 // measure read against each other.
+// It is labelled `med<N>`, not `last <N>`: with the realized last-leg figure two fields away and
+// labelled `last`, a median labelled `last 8` would read as another member of the same series when
+// the two are different statistics — one realized leg versus the median of N.
 const recentN = Math.min(8, perLegCostArr.length);
 if (recentN >= 2) {
   const recentUsd = median(perLegCostArr.slice(-recentN));
-  cacheParts.push(Dim('last ' + recentN + ' ') + ColorLegCell(recentUsd, '$' + fmtN(recentUsd, 2)));
+  costMedPart = DarkGray('med' + recentN + ' ') + ColorLegCell(recentUsd, '$' + fmtN(recentUsd, 2));
 }
-// temporary — removed by Stage B (dollar-gate re-anchor): the $ color bands / verdict floors are
-// calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main the dollars gate too hot.
-if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
-  cacheParts.push(Dim('⚠ $-gates Fable/Opus-calibrated'));
-}
-// Fast mode: CC's total_cost_usd omits the fast premium, so every $ shown is low. Warn, don't
-// recompute — no factor is quoted here by design (it lives in watch/dependency-surface.md).
-if (fastMode && !isNil(costUsd)) {
-  cacheParts.push(Dim('⚠ $ excludes fast premium (understated)'));
-}
+// The two $-reading caveats this cluster used to carry — the Fable/Opus gate calibration and the
+// fast-premium understatement — are chips on the flags row now; the money row carries figures only.
 
-// === Cold-cache stats line =================================================
-const snow = '❆ ';
-let coldMarkerCol = '2';
+// === Row 6 left: cold cache ================================================
+// Retrospective: only the tax FIGURE survives, and it renders on the COST row as `cold $x.xx`. The
+// tax percentage, the `legs C/T (P%)` count and share, and the recent-cold segment that dated the
+// last paid re-cache are gone; every counter that fed them is still computed and still reaches the
+// sidecar.
 let coldStakes = null, coldRemain = null, coldBand = null;
-let coldRecent = false;
-const RECENT_COLD_WINDOW = 8;
-const coldParts = [];
+let costColdPart = null;
+let coldValue = '';
 if (rollup && Number(rollup.nColdLegs) >= 1 && totalUnits > 0 && sessionCost > 0) {
-  const coldBaseRate = baseTrue;
-  const coldTax = coldBaseRate * Number(rollup.coldWastedUnits);
-  const nCold = Number(rollup.nColdLegs);
-  const taxPct = (!isNil(costUsd) && Number(costUsd) > 0) ? psRound(100.0 * coldTax / Number(costUsd)) : 0;
-  const nL = Number(rollup.nLegs);
-  coldParts.push(Dim('Tax ') + Dim(taxPct.toString() + '% (') + ColorCost(coldTax, '$' + fmtN(coldTax, 2)) + Dim(')'));
-  const lastColdIdx = ('lastColdLegIdx' in rollup) ? Number(rollup.lastColdLegIdx) : 0;
-  const legsAgo = lastColdIdx > 0 ? nL - lastColdIdx : 9999;
-  coldRecent = (lastColdIdx > 0 && legsAgo < RECENT_COLD_WINDOW);
-  if (coldRecent) {
-    let lastColdUnits = ('lastColdWastedUnits' in rollup) ? Number(rollup.lastColdWastedUnits) : 0;
-    if (lastColdUnits <= 0 && nCold === 1) lastColdUnits = Number(rollup.coldWastedUnits);
-    const lastColdTax = coldBaseRate * lastColdUnits;
-    if (lastColdTax >= 0.005) {
-      const recencyTag = legsAgo <= 0 ? 'just paid' : legsAgo === 1 ? '1 leg ago' : `${legsAgo} legs ago`;
-      coldParts.push(`${ESC}[38;5;33m$${fmtN(lastColdTax, 2)} ${recencyTag}${ESC}[0m`);
-    }
-  }
-  const legPct = nL > 0 ? psRound(100.0 * nCold / nL) : 0;
-  coldParts.push(Dim(`legs ${nCold}/${nL} (${legPct}%)`));
+  const coldTax = baseTrue * Number(rollup.coldWastedUnits);
+  costColdPart = DarkGray('cold ') + ColorCost(coldTax, '$' + fmtN(coldTax, 2));
 }
+// Prospective: what a cold resume would cost from here — the only thing this row displays. Gates are
+// unchanged: the $0.25 stake floor, and the calm-band suppression (`wCol === '2'`), which leaves the
+// row EMPTY through the runway where every leg resets the clock and there is nothing to act on. The
+// snowflake marker is gone from the fixed rows — the label names the cluster and the countdown
+// carries the calm-to-cooling ramp — and survives as the spotlight cold-leg glyph.
 if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0) {
   const coldBase = baseTrue;
   const ttlSec = ('lastLegTtlSec' in rollup && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : 300;
@@ -888,49 +893,47 @@ if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0)
   if (coldStakes >= 0.25) {
     const stakesStr = '+$' + fmtN(coldStakes, 2);
     if (!isNil(rollup.lastLegTs)) {
-      const nEpoch = NOW;
-      coldRemain = ttlSec - (nEpoch - Number(rollup.lastLegTs));
+      coldRemain = ttlSec - (NOW - Number(rollup.lastLegTs));
       if (coldRemain > 0) {
+        // wCol is now purely the calm-band GATE; the ramp the row renders is tCol. tCol's own calm
+        // rung is the chrome tone rather than SGR-2 — it is unreachable (the two calm conditions are
+        // the same threshold) and this file emits no second gray.
         let wCol, tCol, amtBright;
         if (ttlSec >= 3600) {
           wCol = coldRemain > 2400 ? '2' : '38;5;33';
-          tCol = coldRemain > 2400 ? '2' : coldRemain > 1200 ? '38;5;33'
+          tCol = coldRemain > 2400 ? '38;5;240' : coldRemain > 1200 ? '38;5;33'
             : coldRemain > 600 ? '97' : coldRemain > 300 ? '38;5;220'
               : coldRemain > 120 ? '38;5;208' : '1;31';
           amtBright = (coldRemain <= 600);
         } else {
           wCol = coldRemain > 240 ? '2' : '38;5;33';
-          tCol = coldRemain > 240 ? '2' : coldRemain > 180 ? '97'
+          tCol = coldRemain > 240 ? '38;5;240' : coldRemain > 180 ? '97'
             : coldRemain > 120 ? '38;5;220' : coldRemain > 60 ? '38;5;208' : '1;31';
           amtBright = (coldRemain <= 180);
         }
         coldBand = ttlSec >= 3600
           ? (coldRemain > 2400 ? 'calm' : coldRemain > 600 ? 'heads-up' : coldRemain > 300 ? 'act-soon' : 'urgent')
           : (coldRemain > 240 ? 'calm' : coldRemain > 120 ? 'heads-up' : coldRemain > 60 ? 'act-soon' : 'urgent');
-        coldMarkerCol = wCol;
-        const amt = amtBright ? ColorLegCell(coldStakes, stakesStr) : Dim(stakesStr);
+        const amt = amtBright ? ColorLegCell(coldStakes, stakesStr) : DarkGray(stakesStr);
         if (wCol !== '2') {
           // Keep-warm alternative (display-only): a `max_tokens: 0` API ping refreshes the still-warm
           // cache at cache-READ price — base × ctx × 0.10, TTL-independent — vs the full rebuild
           // stake shown next to it. Only meaningful while cooling (nothing left to refresh once expired).
           const keepWarmUsd = coldBase * Number(ctxTok) * M_CACHE_READ;
-          coldParts.push(`${ESC}[${wCol}mcold${ESC}[0m${ESC}[${tCol}m in ${FmtDuration(psRound(coldRemain))} ${ESC}[0m` + amt
-            + Dim(` (keep-warm $${fmtN(keepWarmUsd, 2)})`));
+          coldValue = DarkGray('in ') + `${ESC}[${tCol}m${FmtDuration(psRound(coldRemain))}${ESC}[0m`
+            + ' ' + amt + DarkGray(' · keep-warm $' + fmtN(keepWarmUsd, 2));
         }
       } else {
         const ttlLabel = ttlSec >= 3600 ? '>1h' : '>5m';
         coldBand = 'expired';
-        coldMarkerCol = '38;5;33';
-        coldParts.push(ColdBlue('cold?') + `${ESC}[1;31m ${ttlLabel} ${ESC}[0m` + ColorLegCell(coldStakes, stakesStr));
+        coldValue = ColdBlue('?') + ' ' + RedBold(ttlLabel) + ' ' + ColorLegCell(coldStakes, stakesStr);
       }
     } else {
       coldBand = 'expired';
-      coldMarkerCol = '38;5;33';
-      coldParts.push(ColdBlue('cold') + Dim(' risk ') + ColorLegCell(coldStakes, stakesStr));
+      coldValue = DarkGray('risk ') + ColorLegCell(coldStakes, stakesStr);
     }
   }
 }
-if (coldRecent && coldMarkerCol === '2') coldMarkerCol = '38;5;33';
 
 // === Full-turn TPS =========================================================
 const tailBytes = 2097152;
@@ -997,18 +1000,21 @@ if (tpath && existsSync(tpath)) {
         tps = outputSum / duration;
         const tpsStr = fmtN(tps, 0) + 't/s';
         const coloredTps = ColorLow(tps, tpsStr, 30, 15);
-        tpsRendered = Dim('turn ') + FmtDuration(psRound(duration)) + Dim(' @ ') + coloredTps;
+        tpsRendered = DarkGray('turn ') + FmtDuration(psRound(duration)) + DarkGray(' @ ') + coloredTps;
       }
     }
   } catch {}
 }
 
-const line3 = cacheParts.length > 0 ? cacheParts.join(DIM_SEP) : null;
-const coldLine = coldParts.length > 0 ? `${ESC}[${coldMarkerCol}m${snow}${ESC}[0m` + coldParts.join(DIM_SEP) : null;
 
-// === Cluster 5: per-leg cost sparkline (8 buckets) =========================
-let legsLine = null;
-if (perLegCostArr.length > 0) {
+// === Row 2 right: per-leg cost trend =======================================
+// Bucketing is today's algorithm verbatim: N <= 8 is one leg per cell with LEFT padding, so
+// position 8 stays the newest-leg anchor; above 8 the rightmost N mod 8 buckets take ceil(N/8) legs
+// and the rest floor(N/8). Zero legs is not a special case — it is the N <= 8 path with an empty
+// array, so the widget shows its shape instead of an unexplained gap.
+const TREND_SLOT_W = 6;
+let trendValue = '';
+{
   const maxBuckets = 8;
   const costs = perLegCostArr.slice();
   const n = costs.length;
@@ -1029,30 +1035,41 @@ if (perLegCostArr.length > 0) {
   }
   const missing = maxBuckets - bucketAvgs.length;
   if (missing > 0) { const pad = new Array(missing).fill(null); bucketAvgs = pad.concat(bucketAvgs); }
-  const cells = bucketAvgs.map((c) => isNil(c) ? Dim(' ····· ') : BgTint(LegRGB(c), '$' + fmtN(c, 2)));
-  const legLabel = n <= maxBuckets ? '$/leg: ' : '$/leg avg: ';
-  legsLine = Dim(legLabel) + Dim('[old] ') + cells.join('') + Dim(' [new]') + Dim(` (${n})`);
-  if (legPricingSuspect) legsLine += Dim(' ⚠ leg $ suspect: base far below list (resumed without history?)');
+  // The value is left-aligned so the $ signs line up across the strip, and the tint covers the
+  // WHOLE slot — pad included — so adjacent chips form one continuous band. A value needing 6 or
+  // more cells (a leg >= $10) keeps its one tinted pad space and pushes the row's tail right by one.
+  // An absent cell is untinted placeholder dots in the same 6 cells.
+  const cells = bucketAvgs.map((c) => {
+    if (isNil(c)) return DarkGray('··') + ' '.repeat(TREND_SLOT_W - 2);
+    const v = '$' + fmtN(c, 2);
+    return BgTint(LegRGB(c), v + ' '.repeat(Math.max(1, TREND_SLOT_W - visLen(v))));
+  });
+  trendValue = cells.join('') + ' ' + DarkGray(String(n));
 }
 
-// === Cluster 5b: sub-agent fleet ===========================================
-let agentsLine = null;
+// === Row 5 left: sub-agent fleet ===========================================
+// The median-and-max parenthetical is gone (agentCtxMax survives in the sidecar; per-agent detail
+// lives in /handover-check's agent panel). The tier-mix caveat moves to the flags row.
+let agentsValue = '';
+let tierMixChip = null;
 if (agentAgg && Number(agentAgg.nAgents) > 0) {
   const aParts = [];
-  aParts.push(String(Number(agentAgg.nAgents)));
-  aParts.push(Dim('Σctx ') + FmtNum(Number(agentAgg.sumMaxCtx)) + Dim(' (med ') + FmtNum(Number(agentAgg.medCtx)) + Dim('·max ') + FmtNum(Number(agentAgg.maxCtx)) + Dim(')'));
+  aParts.push(String(Number(agentAgg.nAgents)) + DarkGray(' ag'));
+  aParts.push(DarkGray('sum ') + FmtNum(Number(agentAgg.sumMaxCtx)));
   if (!isNil(agentsUsd)) {
     let costChip = ColorCost(agentsUsd, '$' + fmtN(agentsUsd, 2));
-    if (sessionCost > 0) costChip += Dim(' (') + psRound(100.0 * Number(agentsUsd) / Number(sessionCost)).toString() + Dim('%)');
+    if (sessionCost > 0) costChip += ' ' + DarkGray(psRound(100.0 * Number(agentsUsd) / Number(sessionCost)).toString() + '%');
     aParts.push(costChip);
   }
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
-  aParts.push(fmtN(avgLegs, 1) + Dim(' legs/ag'));
+  aParts.push(fmtN(avgLegs, 1) + DarkGray(' l/ag'));
+  agentsValue = aParts.join(DarkGray(' · '));
   // Tier-mix chip: main named separately from the per-tier agent head-count, so the main+agents
   // totals can never misread (12 agents vs a 13-entry tier sum). Fires when main + agents span
   // more than one tier — 'other' (present-but-unmapped model) counts, absent/empty models never
   // do (pre-change caches with no `model` field can't fire this). The $ split itself is
-  // tier-weighted above; the chip stays as the visibility layer.
+  // tier-weighted above; the chip stays as the visibility layer. It renders on the flags row, in
+  // full, breakdown included — that row is the one allowed to run long.
   const agTiers = agentAgg.tierCounts || {};
   const agTierNames = Object.keys(agTiers).sort();
   const distinct = new Set(agTierNames);
@@ -1061,19 +1078,32 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
     const agList = agTierNames.map((t) => `${t}×${agTiers[t]}`).join('·');
     const mainPart = mainTier ? `main·${mainTier}` : null;
     const agPart = agList ? `ag ${agList}` : null;
-    aParts.push(Dim('⚠ tier-mix ' + [mainPart, agPart].filter(Boolean).join(' + ')));
+    tierMixChip = DarkGray('⚠ tier-mix ' + [mainPart, agPart].filter(Boolean).join(' + '));
   }
-  agentsLine = Dim('agents: ') + aParts.join(DIM_SEP);
 }
 
-// === Cluster 4: quota ======================================================
+// === Rows 3 and 4: quota gauge + runway ====================================
 const qBlocks = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 const nowQ = NOW;
+// BOTH rows now render at every quota level, so what changes with the level is which machinery runs.
+// Two regimes, two named boundaries:
+//   • Below QUOTA_VERDICT_MIN_PCT the beta rung machinery does not run AT ALL — no beta, no rung, no
+//     bump, no imperative. beta = 1 - t/q is unstable when little of the window has elapsed (2%
+//     consumed in 1% elapsed projects "slow down hard"), which is exactly what the old >=50% row
+//     suppression kept off the screen. What renders instead is the ratio projection: where this
+//     window is heading, with no instruction attached.
+//   • The projection has its own floor, QUOTA_PROJECTION_MIN_ELAPSED_PCT, because rho = q/t blows up
+//     as t approaches zero. Below it the row is the gauge and `resets`, nothing else.
+// At and above the verdict floor the beta maths, the >=8h bump, the rung mapping and the at-cap
+// override run exactly as before — with rung 0 rendering chrome instead of green, because these rows
+// are always on now and a green row on every calm session would make calm the loudest thing here.
+const QUOTA_VERDICT_MIN_PCT = 50;
+const QUOTA_PROJECTION_MIN_ELAPSED_PCT = 10;
+const QUOTA_CALM_COL = '38;5;240';
 function QLvl(p) { let l = psRound(p / 100.0 * 8); if (p > 0 && l < 1) l = 1; if (l > 8) l = 8; return l; }
-function QuotaLine(label, rl, winSec) {
+function QuotaCells(rl, winSec) {
   if (!rl || isNil(rl.used_percentage)) return null;
   const consumed = Number(rl.used_percentage);
-  if (consumed < 50) return null;
   let elapsed = null;
   if (rl.resets_at) {
     const remain = Number(rl.resets_at) - nowQ;
@@ -1082,6 +1112,30 @@ function QuotaLine(label, rl, winSec) {
   }
   const q = consumed / 100.0;
   const t = !isNil(elapsed) ? elapsed / 100.0 : null;
+  const cbar = qBlocks[QLvl(consumed)];
+  const ebar = !isNil(elapsed) ? qBlocks[QLvl(elapsed)] : ' ';
+  const qn = psRound(consumed);
+  const tn = !isNil(elapsed) ? psRound(elapsed) : null;
+  const mid = '→' + `${qn}%${cbar}${ebar}` + (!isNil(tn) ? `${tn}%` : '') + '←';
+  const resets = rl.resets_at ? 'resets ' + FmtDurShort(psRound(Number(rl.resets_at) - nowQ)) : null;
+  if (consumed < QUOTA_VERDICT_MIN_PCT) {
+    // TWO named gates, and the projection is silent unless BOTH open.
+    //   enoughElapsed — rho = q/t blows up as t approaches zero, so a projection off a sliver of
+    //     elapsed time would be shown and disbelieved.
+    //   underPace — `ends ~N% · M% spare` is the CALM phrasing, and rho is NOT bounded by 1: a
+    //     window running ahead of the clock projects past 100% and a NEGATIVE spare (20% consumed
+    //     in 12% elapsed reads `ends ~163% · -63% spare`). Below the verdict floor this cluster
+    //     deliberately refuses to project a blackout at all, because beta is unstable this early —
+    //     so for over-pace-but-young the honest output is SILENCE, not a nonsense number. Nothing
+    //     is hidden: the gauge beside it already shows consumed against elapsed, and the reader can
+    //     draw their own conclusion. This is the same condition rung 0 encodes above the floor
+    //     (`beta <= 0` is exactly `t >= q`), so the two regimes agree on what "calm" means.
+    const enoughElapsed = !isNil(elapsed) && elapsed >= QUOTA_PROJECTION_MIN_ELAPSED_PCT;
+    const underPace = !isNil(elapsed) && consumed <= elapsed;
+    const projection = (enoughElapsed && underPace)
+      ? `ends ~${psRound((q / t) * 100)}% ` + '·' + ` ${psRound((1 - q / t) * 100)}% spare` : null;
+    return { col: QUOTA_CALM_COL, mid, verdict: null, detail: projection, resets };
+  }
   const exhausted = (consumed >= 100);
   let beta = null, B = null, S = null;
   if (!isNil(t) && t > 0 && !exhausted) {
@@ -1097,12 +1151,14 @@ function QuotaLine(label, rl, winSec) {
   else if (beta <= 0.25) rung = 2;
   else rung = 3;
   if (!isNil(B) && B >= 28800 && rung < 3) rung++;
-  let col = rung === 0 ? '38;5;40' : rung === 1 ? '38;5;220' : rung === 2 ? '38;5;208' : '1;31';
+  let col = rung === 0 ? QUOTA_CALM_COL : rung === 1 ? '38;5;220' : rung === 2 ? '38;5;208' : '1;31';
   let verdict, detail;
   if (exhausted) {
     col = '38;5;208';
-    if (consumed > 100) { verdict = `${label} over cap`; detail = 'on usage credits ' + '·' + ' paying overage'; }
-    else { verdict = `${label} cap reached`; detail = 'on credits, or blocked til reset'; }
+    // The verdict drops the window label: the label field already carries 5h / 7d, and dropping the
+    // repeat is what makes the exhausted state fit a half-width column.
+    if (consumed > 100) { verdict = 'over cap'; detail = 'on usage credits ' + '·' + ' paying overage'; }
+    else { verdict = 'cap reached'; detail = 'on credits, or blocked til reset'; }
   } else {
     verdict = rung === 0 ? 'you can keep this pace' : rung === 1 ? 'slow down just a bit' : rung === 2 ? 'slow down' : 'slow down hard';
     if (rung === 0 && !isNil(t) && t > 0) {
@@ -1114,33 +1170,69 @@ function QuotaLine(label, rl, winSec) {
       detail = null;
     }
   }
-  const cbar = qBlocks[QLvl(consumed)];
-  const ebar = !isNil(elapsed) ? qBlocks[QLvl(elapsed)] : ' ';
-  const qn = psRound(consumed);
-  const tn = !isNil(elapsed) ? psRound(elapsed) : null;
-  const mid = '→' + `${qn}%${cbar}${ebar}` + (!isNil(tn) ? `${tn}%` : '') + '←';
-  const gauge = Dim(`${label} quota `) + `${ESC}[${col}m${mid}${ESC}[0m` + Dim(' time');
-  let s = gauge;
-  if (verdict) s += DIM_SEP + `${ESC}[${col}m${verdict}${ESC}[0m`;
-  if (detail) s += DIM_SEP + `${ESC}[${col}m${detail}${ESC}[0m`;
-  if (rl.resets_at) s += DIM_SEP + Dim('resets ' + FmtDurShort(psRound(Number(rl.resets_at) - nowQ)));
+  return { col, mid, verdict, detail, resets };
+}
+// An absent window states the fact in ONE token, rather than leaving a half-empty row that reads as
+// a rendering bug.
+function QuotaGaugeValue(c) {
+  if (!c) return DarkGray('n/a');
+  let s = `${ESC}[${c.col}m${c.mid}${ESC}[0m` + DarkGray(' time');
+  if (c.verdict) s += '  ' + `${ESC}[${c.col}m${c.verdict}${ESC}[0m`;
   return s;
 }
-const qLines = [];
-const q5 = QuotaLine('5h', d?.rate_limits?.five_hour, 18000);
-const q7 = QuotaLine('7d', d?.rate_limits?.seven_day, 604800);
-if (q5) qLines.push(q5);
-if (q7) qLines.push(q7);
+// The detail renders as ONE string in the row's rung colour, its connectives included: it is a
+// sentence, not chrome, and splitting it into coloured and grey fragments would fight the alarm.
+// When the assembled half would overflow its value field, `resets` is the field that drops — the
+// least load-bearing figure on the row (the gauge's elapsed bar already says where in the window you
+// are), and the last one, so dropping it leaves no hole.
+function QuotaDetailValue(c, valueW) {
+  if (!c) return '';
+  const parts = [];
+  if (c.detail) parts.push(`${ESC}[${c.col}m${c.detail}${ESC}[0m`);
+  if (c.resets) parts.push(DarkGray(c.resets));
+  if (parts.length === 0) return '';
+  const full = parts.join(DarkGray(' · '));
+  if (visLen(full) > valueW && c.detail && c.resets) return `${ESC}[${c.col}m${c.detail}${ESC}[0m`;
+  return full;
+}
+const q5 = QuotaCells(d?.rate_limits?.five_hour, 18000);
+const q7 = QuotaCells(d?.rate_limits?.seven_day, 604800);
 
-// === Cluster 4b: big-leg spotlight =========================================
+// === Rows 7+: big-leg spotlight ============================================
+// Selection is today's code, untouched. A cell shows the glyph, the leg index, the dollars and what
+// the leg DID — the multiple-of-median and the age in legs are gone, as is the word `Leg` before the
+// index (the glyph plus a number in the label field is unambiguous, and the label field is where it
+// aligns with the fixed rows above).
 const BIG_LEG_FLOOR_USD = 3.00;
 const BIG_LEG_MULT = 3.0;
 const BIG_LEG_MIN_USD = 0.50;
 const BIG_LEG_WINDOW = 8;
-let bigLegLines = [];
+// Colour is spent only on what happened: the leading verb of the driver, and — on a leg that went
+// cold — the words saying the cache had expired. The verb list is exported by leg-driver.mjs, the
+// file that owns the driver strings, so the two cannot drift.
+function ColorDriver(drv) {
+  const verb = DRIVER_VERBS.find((v) => drv.startsWith(v));
+  const rest = verb ? drv.slice(verb.length) : drv;
+  const head = verb ? `${ESC}[38;5;180m${verb}${ESC}[0m` : '';
+  const COLD = 'cache expired';
+  const i = rest.indexOf(COLD);
+  if (i < 0) return head + (rest ? DarkGray(rest) : '');
+  const before = rest.slice(0, i), after = rest.slice(i + COLD.length);
+  return head + (before ? DarkGray(before) : '') + ColdBlue(COLD) + (after ? DarkGray(after) : '');
+}
+// A LEFT cell's driver truncates to fit: the left column's 53 cells position the divider, so a left
+// cell that overran would bend the grid. A RIGHT cell's driver is never truncated — nothing renders
+// to its right, so running long costs nothing. The same leg can therefore read in full on the right
+// and clipped on the left; that is the decision, not an accident.
+function SpotlightValue(cell, valueW, truncate) {
+  const usd = ColorLegCell(cell.usd, '$' + fmtN(cell.usd, 2));
+  const drv = truncate ? truncTo(cell.drv, valueW - visLen(usd) - 2) : cell.drv;
+  return usd + '  ' + ColorDriver(drv);
+}
+let bigLegCells = [];
 if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   && !isNil(rollup.perLegUnits) && rollup.perLegUnits.length >= 1) {
-  // Effective (tier-weighted) units throughout, like the sparkline.
+  // Effective (tier-weighted) units throughout, like the trend strip.
   const medTail = perLegEff.length > 20 ? perLegEff.slice(perLegEff.length - 20) : perLegEff;
   const medUsd = Number(baseTrue) * Median(medTail);
   const nL = Number(rollup.nLegs);
@@ -1151,17 +1243,14 @@ if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
     const usd = Number(baseTrue) * Number(rec.units) * tierWeight(rec.model, mainTier);
     const isBig = (usd >= BIG_LEG_FLOOR_USD) || (medUsd > 0 && usd >= (BIG_LEG_MULT * medUsd) && usd >= BIG_LEG_MIN_USD);
     if (!isBig) continue;
-    const drv = getDriver(rec);
-    const isCold = testColdLeg(rec);
-    const mk = isCold ? ColdBlue('❆') : `${ESC}[38;5;179m◆${ESC}[0m`;
-    const scale = medUsd > 0 ? (' ' + fmtN(usd / medUsd, 1) + 'x med') : '';
-    const ago = legsAgo <= 0 ? 'this leg' : legsAgo === 1 ? '1 leg ago' : `${legsAgo} legs ago`;
-    const dot = '·';
-    const line = mk + ' ' + Dim(`Leg ${Number(rec.idx)}`) + Dim(` ${dot} `) + ColorLegCell(usd, '$' + fmtN(usd, 2)) + Dim(` ${dot} `) + `${ESC}[38;5;180m${drv}${ESC}[0m` + Dim(`${scale} ${dot} ${ago}`);
-    blRows.push({ legsAgo, line });
+    const glyph = testColdLeg(rec) ? ColdBlue('❆') : `${ESC}[38;5;179m◆${ESC}[0m`;
+    const idx = String(Number(rec.idx));
+    // An index of 5 or more digits drops the separating space rather than pushing the value column.
+    const label = glyph + (idx.length >= 5 ? '' : ' ') + DarkGray(idx);
+    blRows.push({ legsAgo, label, usd, drv: getDriver(rec) });
   }
   blRows.sort((a, b) => a.legsAgo - b.legsAgo);
-  bigLegLines = blRows.map((x) => x.line);
+  bigLegCells = blRows;
 }
 
 // === Cluster 5: session (built; display gated) =============================
@@ -1171,11 +1260,11 @@ if (tpath && existsSync(tpath)) {
   try { aliveSec = psRound(NOW - statSync(tpath).birthtimeMs / 1000); } catch {}
 }
 const apiSec = d?.cost?.total_api_duration_ms ? psRound(Number(d.cost.total_api_duration_ms) / 1000) : null;
-if (!isNil(aliveSec) && !isNil(apiSec)) costParts.push(Dim(FmtDuration(aliveSec) + ' alive / ' + FmtDuration(apiSec) + ' api'));
-else if (!isNil(aliveSec)) costParts.push(Dim(FmtDuration(aliveSec) + ' alive'));
-else if (!isNil(apiSec)) costParts.push(Dim(FmtDuration(apiSec) + ' api'));
+if (!isNil(aliveSec) && !isNil(apiSec)) costParts.push(DarkGray(FmtDuration(aliveSec) + ' alive / ' + FmtDuration(apiSec) + ' api'));
+else if (!isNil(aliveSec)) costParts.push(DarkGray(FmtDuration(aliveSec) + ' alive'));
+else if (!isNil(apiSec)) costParts.push(DarkGray(FmtDuration(apiSec) + ' api'));
 if (!isNil(d?.cost?.total_lines_added) || !isNil(d?.cost?.total_lines_removed)) {
-  costParts.push(Dim(`+${d.cost.total_lines_added}/-${d.cost.total_lines_removed} lines`));
+  costParts.push(DarkGray(`+${d.cost.total_lines_added}/-${d.cost.total_lines_removed} lines`));
 }
 if (tpsRendered) costParts.push(tpsRendered);
 if (tailWarning) costParts.push(RedBold('tail!'));
@@ -1197,13 +1286,13 @@ if (existsSync(dailyStatsPath)) {
         const dmv = Number(stats.dailyModelTokensVersion) || 0;
         const includesCache = dmv >= 5;
         const n = sumToday >= 1e9 ? fmtN(sumToday / 1e9, 2) + 'B' : FmtNum(sumToday);
-        costParts.push(Dim(`today: ${n} tokens ${includesCache ? 'incl. cache' : 'in+out only'} · all sessions`));
+        costParts.push(DarkGray(`today: ${n} tokens ${includesCache ? 'incl. cache' : 'in+out only'} · all sessions`));
         todayTokens = { date: today, tokens: sumToday, includesCache, dailyModelTokensVersion: dmv };
       }
     }
   } catch {}
 }
-const line5 = costParts.length > 0 ? Dim('session: ') + costParts.join(DIM_SEP) : null;
+const line5 = costParts.length > 0 ? DarkGray('session: ') + costParts.join(DarkGray(' | ')) : null;
 
 // === Sidecar snapshot ======================================================
 // Two-phase write. Phase 1 (here) runs BEFORE the git subprocess cluster below, so a slow or
@@ -1312,7 +1401,9 @@ try {
 } catch {}
 
 // === Cluster 6: git ========================================================
-let gitLine = null;
+// The sync glyph is hoisted out of the porcelain parse so the repo cluster can render it during
+// row assembly at the end of the file — the two-phase sidecar write must not wait on git.
+let gitSync = null;
 let repo = null;
 if (cwd) {
   let porcelain = null;
@@ -1346,7 +1437,7 @@ if (cwd) {
       if (m) remote = `${m[1]}/${m[2]}`;
     }
     repo = remote ? `${remote}@${branch}` : branch;
-    gitLine = Dim('git: ') + repo + ' ' + sync;
+    gitSync = sync;
   }
 }
 
@@ -1360,19 +1451,64 @@ try {
   }
 } catch {}
 
-// Session line display-gated off by Florian's choice (2026-08-17); it still builds and feeds the sidecar.
-const ShowSessionLine = false;
+// The session line (Florian's choice, 2026-08-17) has NO row in the grid. It is still BUILT above and
+// its facts still feed the sidecar — aliveSec, apiSec, tps, activityPct, linesAdded, linesRemoved and
+// the conditional todayTokens — it simply is not rendered. The old `ShowSessionLine` gate is gone
+// rather than kept: the assembler below has no branch that could read it, and a constant documenting
+// an intent it no longer enforces is worse than no constant.
 
-const out = [];
-out.push(line1);
-if (line2) out.push(line2);
-for (const q of qLines) if (q) out.push(q);
-if (line3) out.push(line3);
-if (coldLine) out.push(coldLine);
-for (const bl of bigLegLines) if (bl) out.push(bl);
-if (legsLine) out.push(legsLine);
-if (agentsLine) out.push(agentsLine);
-if (line5 && ShowSessionLine) out.push(line5);
-if (gitLine) out.push(gitLine);
+// === Row assembly — the dossier grid =======================================
+// Up to six fixed rows in a frozen order, then a variable block of spotlight rows, two legs to a
+// row. A cluster with nothing to say contributes NOTHING — no label, no glyph — and a fixed row
+// whose two halves are both silent drops out (gridRow returns null, filtered below). So the grid
+// keeps its column geometry on every session but not its height.
+const costValue = [costTotalPart, costLastPart, costNextPart, costMedPart, costColdPart]
+  .filter(Boolean).join('  ');
 
-process.stdout.write(out.join('\n'));
+// The flags cluster, in the frozen order: the two mode chips, the style chip, then the five
+// conditional caveats ordered by how much each changes the way a number must be read. Every chip
+// keeps its text verbatim — this row is allowed to run long, so width is never a reason to
+// abbreviate a caveat into ambiguity. Each mode chip fires on ONE state only — fast mode is named
+// when it is on, thinking when it is off — so the reassuring half of either pair never renders.
+const flagChips = [];
+if (fastMode) flagChips.push(DarkGray('fast ') + Magenta('on'));
+if (thinking === false) flagChips.push(DarkGray('think ') + BrightCyan('off'));
+// The style name is the chip's VALUE and carries the colour, exactly as `fast on` and `think off`
+// do — the whole chip in chrome gray made the one flag most likely to be on the hardest to see.
+if (style && style !== 'default') flagChips.push(DarkGray('style ') + White(style));
+if (legPricingSuspect && perLegCostArr.length > 0) {
+  flagChips.push(DarkGray('⚠ leg $ suspect: base far below list (resumed without history?)'));
+}
+// Fast mode: CC's total_cost_usd omits the fast premium, so every $ shown is low. Warn, don't
+// recompute — no factor is quoted here by design (it lives in watch/dependency-surface.md).
+if (fastMode && !isNil(costUsd)) flagChips.push(DarkGray('⚠ $ excludes fast premium (understated)'));
+// temporary — removed by Stage B (dollar-gate re-anchor): the $ color bands / verdict floors are
+// calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main the dollars gate too hot.
+if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
+  flagChips.push(DarkGray('⚠ $-gates Fable/Opus-calibrated'));
+}
+if (tierMismatch) flagChips.push(DarkGray('⚠ serving:' + tierMismatch.serving));
+if (tierMixChip) flagChips.push(tierMixChip);
+const flagsValue = flagChips.join('  ');
+
+// `no repo` is two words, not the label alone: the label alone would leave the version badges
+// sitting directly after `repo` and reading as the repo's own name.
+const versionBadges = (version ? DarkGray('v' + version) + '  ' : '') + DarkGray('bsl' + SL_VERSION);
+const repoValue = (repo ? repo + ' ' + gitSync : DarkGray('no repo')) + '  ' + versionBadges;
+
+const rows = [];
+rows.push(gridRow(DarkGray('model'), modelValue, DarkGray('cost'), costValue));
+rows.push(gridRow(DarkGray('ctx'), ctxValue, DarkGray('trend'), trendValue));
+rows.push(gridRow(DarkGray('5h'), QuotaGaugeValue(q5), DarkGray('7d'), QuotaGaugeValue(q7)));
+rows.push(gridRow('', QuotaDetailValue(q5, LEFT_VALUE_W), '', QuotaDetailValue(q7, RIGHT_VALUE_W)));
+rows.push(gridRow(DarkGray('⁂'), agentsValue, DarkGray('repo'), repoValue));
+rows.push(gridRow(DarkGray('cold'), coldValue, DarkGray('flags'), flagsValue));
+// Newest leg first, left before right. On an odd count the last row's right half stays empty — the
+// block never borrows the free half beside a fixed row and never promotes a leg into it.
+for (let i = 0; i < bigLegCells.length; i += 2) {
+  const a = bigLegCells[i], b = bigLegCells[i + 1];
+  rows.push(gridRow(a.label, SpotlightValue(a, LEFT_VALUE_W, true),
+    b ? b.label : '', b ? SpotlightValue(b, RIGHT_VALUE_W, false) : ''));
+}
+
+process.stdout.write(rows.filter(Boolean).join('\n'));

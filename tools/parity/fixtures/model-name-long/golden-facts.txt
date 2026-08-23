@@ -1,0 +1,20 @@
+IDENTITY: **Reading** `(no repo)` · `model-na` · Claude Opus 4.8 Extended Thinking (1M context) · `250k` ctx · rendered `0s` ago
+STALE: no
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=both; quality=yellow (lvl 2); cost=next 0.36195085539543226 (lvl 2)
+COST_LEAD: each leg `~$0.36`
+COST_TOTAL: `$8.00` total
+COST_RECENT: `med8` (median of the last 8 legs) `$0.36`/leg; session mean `$0.40` over `20` legs
+COST_DETAIL: (none)
+COST_AGENTS_TIER: none
+COST_AGENTS_LEAD: (none)
+COLD: the ~1-hour cache is starting to cool (`~12 min` of warmth left) — a send keeps it warm
+WARM_REWRITE_TAX: (none)
+QUALITY_LEAD: `250k`, yellow band — mild weakening on hard multi-fact recall
+QUALITY_SECONDARY: `55%` fill — approaching the ~60% cliff
+QUALITY_HEADROOM: `225k` to compact
+QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
+ACTIVITY: (omit)
+TRAJECTORY: mostly flat with spikes, range `$0.36`–`$0.95`
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: quality is in the degradation band and each leg is already pricey — cost is high but flat, not climbing — lean toward handing over

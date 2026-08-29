@@ -1,0 +1,5 @@
+from session resume-p · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 12 legs  ·  no $ basis yet (no leg priced in this run)  ·  leg 1 = oldest  ·  ❆ = counted in the cold tax
+❆  Leg 5  ·  re-cached ~232k (cold — cache expired after idle)
+   Leg 1  ·  loaded ~30k new context
+   Leg 11  ·  re-read deep context (~244k)

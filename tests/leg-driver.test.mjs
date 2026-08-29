@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   getScannedLegs, getDriver, testColdLeg, testWarmRewriteLeg, tierWeight, TIER_BASE,
-  servingTierReport, isSyntheticLeg,
+  servingTierReport, isSyntheticLeg, modelSwitchReport,
 } from '../home/leg-driver.mjs';
 // `pickFreshBaseline` left this import list with the froz5 removal (2026-08-21, D5). Keeping it here
 // would take the WHOLE file down at module load, not just the one row that used it.
@@ -341,6 +341,59 @@ test('Y7 — ONE shared predicate: both scans call the same exported isSynthetic
   // getScannedLegs (the trio's scan) calls it too — same module, so the same function by construction.
   const scan = drv.slice(drv.indexOf('export function getScannedLegs('));
   assert.match(scan, /isSyntheticLeg\(/, 'getScannedLegs applies the predicate');
+});
+
+// ---- sprint 3 (2026-08-29, spec §A1): modelSwitchReport (QA rows MSR-1…MSR-6) ---------------------
+// The switch is a TRANSCRIPT fact: the caveat fires exactly when the banked legs' mapped price tiers
+// change between two consecutive mapped legs, never on a label change. Derived per render from
+// perLegModels — the sibling of servingTierReport, which answers the adjacent LABEL question.
+// atLeg = 1-based index of the first banked leg served at the new tier; on several boundaries the
+// LATEST wins (F4); from/to are the raw transcript strings either side of the boundary (F2);
+// unmapped models ('', 'claude-x') never open or close a boundary.
+
+test('MSR-1 — a single mapped tier never stamps: same id, or different versions of one tier', () => {
+  assert.equal(modelSwitchReport([OPUS, OPUS, OPUS]), null);
+  assert.equal(modelSwitchReport([OPUS]), null, 'one leg has no boundary');
+  // different raw strings, same price tier — a version upgrade is not a switch
+  assert.equal(modelSwitchReport(['claude-opus-4-7', 'claude-opus-4-8-20260115']), null);
+  assert.equal(modelSwitchReport(['claude-sonnet-4-5', SONNET]), null);
+});
+
+test('MSR-2 — one boundary mid-array: atLeg is the 1-based index of the FIRST leg at the new tier', () => {
+  assert.deepEqual(modelSwitchReport([OPUS, OPUS, FABLE, FABLE]), { atLeg: 3, from: OPUS, to: FABLE });
+  assert.deepEqual(modelSwitchReport([SONNET, FABLE]), { atLeg: 2, from: SONNET, to: FABLE });
+  // the boundary leg, not the last leg of the old tier, and not the array end
+  assert.deepEqual(modelSwitchReport([FABLE, SONNET, SONNET, SONNET, SONNET]), { atLeg: 2, from: FABLE, to: SONNET });
+});
+
+test('MSR-3 — unmapped / empty legs never open or close a boundary', () => {
+  // mapped → unmapped → SAME mapped tier: no stamp (the unmapped line bridges, it does not boundary)
+  assert.equal(modelSwitchReport([OPUS, '', OPUS]), null);
+  assert.equal(modelSwitchReport([OPUS, 'claude-x', OPUS]), null);
+  // an unmapped opener cannot BE the from side
+  assert.equal(modelSwitchReport(['claude-x', OPUS, OPUS]), null);
+  // all unmapped → nothing to compare
+  assert.equal(modelSwitchReport(['', 'claude-x', '']), null);
+  // mapped → unmapped → DIFFERENT mapped tier: the boundary is against the previous MAPPED leg
+  assert.deepEqual(modelSwitchReport([OPUS, '', FABLE]), { atLeg: 3, from: OPUS, to: FABLE });
+});
+
+test('MSR-4 — two boundaries: the LATEST wins (F4, today\'s last-wins semantics)', () => {
+  assert.deepEqual(modelSwitchReport([OPUS, FABLE, OPUS]), { atLeg: 3, from: FABLE, to: OPUS });
+  assert.deepEqual(modelSwitchReport([OPUS, OPUS, FABLE, FABLE, SONNET]), { atLeg: 5, from: FABLE, to: SONNET });
+});
+
+test('MSR-5 — an empty banked history reports nothing', () => {
+  assert.equal(modelSwitchReport([]), null);
+});
+
+test('MSR-6 — from/to are the RAW transcript strings either side of the boundary (F2)', () => {
+  // never normalised to a tier name or a display label
+  assert.deepEqual(modelSwitchReport(['claude-opus-4-8-20260115', 'claude-fable-5']),
+    { atLeg: 2, from: 'claude-opus-4-8-20260115', to: 'claude-fable-5' });
+  // with an unmapped line in between, `from` is the previous MAPPED leg's own raw string
+  assert.deepEqual(modelSwitchReport([SONNET, 'claude-x', 'claude-fable-5']),
+    { atLeg: 3, from: SONNET, to: 'claude-fable-5' });
 });
 
 test('getDriver — labels match the dominant weighted term', () => {

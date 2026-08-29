@@ -99,7 +99,7 @@ if (!(snapSchemaIsNum && snapSchema === SIDECAR_SCHEMA)) {
     : (snapSchema === undefined ? '(none)' : JSON.stringify(snapSchema) ?? '(none)');
   const fix = (snapSchemaIsNum && snapSchema > SIDECAR_SCHEMA)
     ? 'update this config home (`git pull && node install.mjs`), then re-run'
-    : 'let the status line render once from a config home on this build (press Enter on an empty prompt), then re-run';
+    : `an older status-line build wrote this snapshot — if another session in this project runs from a different config home, sync that home (${BT}node install.mjs --claude-home <path>${BT}) first; then press Enter on an empty prompt here and re-run`;
   process.stdout.write(`SCHEMA_MISMATCH\nthis reader expects schema ${BT}${SIDECAR_SCHEMA}${BT}\nsnapshot was written with schema ${BT}${found}${BT}\n${fix}`);
   process.exit(0);
 }
@@ -120,8 +120,11 @@ const nColdScan = coldLegs.length;
 // per-leg weight), so a cold leg paid under another tier carries that tier's price, not the main's.
 const mainTierScan = ModelTier(s.model);
 const avoidableEff = (l) => (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTierScan);
-const coldWastedUsdScan = (nColdScan > 0 && s.base != null)
-  ? mathRoundD(coldLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2)
+// null (never 0) when legs were counted but the run has no cost basis yet (s.base null — the state
+// between a detected resume and the first new leg): the emit site then states the count and says
+// "not priced yet" instead of formatting a fabricated $0.00.
+const coldWastedUsdScan = nColdScan > 0
+  ? (s.base != null ? mathRoundD(coldLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2) : null)
   : 0;
 
 // Warm-rewrite tax — the same avoidable-premium formula the cold tax uses ((cwUnits − cw×0.10) × base,
@@ -135,8 +138,9 @@ const coldWastedUsdScan = (nColdScan > 0 && s.base != null)
 // (the per-model gloss at the emit site resolves which, keyed on the display string's generation).
 const warmRewriteLegs = scanLegs.filter(testWarmRewriteLeg);
 const nWarmScan = warmRewriteLegs.length;
-const warmTaxUsdScan = (nWarmScan > 0 && s.base != null)
-  ? mathRoundD(warmRewriteLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2)
+// Same null-basis rule as coldWastedUsdScan above: legs counted, no basis → null, never $0.00.
+const warmTaxUsdScan = nWarmScan > 0
+  ? (s.base != null ? mathRoundD(warmRewriteLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2) : null)
   : 0;
 
 // ---- TUNABLES (recalibrate here) ----
@@ -232,7 +236,7 @@ const lc = (s.legCosts || []).map(Number);
 // TWO different statistics in one line, deliberately: the recent figure is the TYPICAL leg, how
 // firmly depending on the window it names; the session figure is total spend spread over every leg,
 // which a fat leg does lift. How firmly the recent figure holds depends on the N it names. At N=8
-// one fat leg shifts it by the gap between two ordinary legs, not by its own size. Shorter windows
+// one fat leg shifts it by the gap between two ordinary legs, not by its own size. Shorter windows tend to
 // resist less: fewer ordinary legs, further apart, so the same one-rank shift moves it further, and
 // two fat legs in one short window can put a fat leg's own size into the figure. At N=2 the median
 // IS the mean of the two legs, so a single fat leg sets it outright.
@@ -285,7 +289,10 @@ switch (String(s.coldBand)) {
     break;
 }
 if (nColdScan >= 1) {
-  const tax = 'cold tax so far: ' + FmtUsd(coldWastedUsdScan) + ' over ' + BT + nColdScan + BT + ' leg(s)';
+  // Priced → the "so far" dollars; no basis yet (null) → the count stands, no invented figure.
+  const tax = coldWastedUsdScan != null
+    ? 'cold tax so far: ' + FmtUsd(coldWastedUsdScan) + ' over ' + BT + nColdScan + BT + ' leg(s)'
+    : BT + nColdScan + BT + ' cold leg(s) so far — not priced yet (no leg of this run has a cost basis)';
   coldOut = coldOut === '(omit)' ? tax : coldOut + '; ' + tax;
 }
 
@@ -311,9 +318,15 @@ const fillSig = FmtPct(s.fillPct) + fillBand;
 const qLead = is1M ? tokSig : fillSig;
 const qSecondary = is1M ? fillSig : tokSig;
 // Auto-compact off → never say "N to compact": compaction will not fire. (toCompact is null then.)
+// Past the wall (toCompact <= 0, the render's `wall NOW`) → say so; the sidecar keeps the true signed
+// measurement and only the prose branches, so a negative distance never reaches the reader.
 const qHeadroom = s.autoCompactOff === true
   ? 'auto-compact is off — no compaction will fire; the session runs to the raw window (manage context by hand)'
-  : FmtK(s.toCompact) + ' to compact';
+  : (typeof s.toCompact === 'number' && s.toCompact <= 0)
+    ? (s.toCompact === 0
+      ? 'at the auto-compact wall — compaction is due on the next turn'
+      : 'past the auto-compact wall by ' + FmtK(-s.toCompact) + ' — compaction is due on the next turn')
+    : FmtK(s.toCompact) + ' to compact';
 
 // ---- ACTIVITY (omit when sub-agents ran — activity% is agent-polluted) ----
 let act;
@@ -408,7 +421,9 @@ emit(`COLD: ${coldOut}`);
 const isSonnet5 = sessionTier === 'sonnet' && /sonnet[\s-]?5\b/i.test(String(s.model));
 const isOtherSonnet = sessionTier === 'sonnet' && !isSonnet5;
 emit('WARM_REWRITE_TAX: ' + (nWarmScan >= 1
-  ? FmtUsd(warmTaxUsdScan) + ' over ' + BT + nWarmScan + BT + ' leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax'
+  ? (warmTaxUsdScan != null
+    ? FmtUsd(warmTaxUsdScan) + ' over ' + BT + nWarmScan + BT + ' leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax'
+    : BT + nWarmScan + BT + ' leg(s) — not priced yet (no cost basis in this run)')
     + (isSonnet5
       ? '; expected — CC 2.1.201 dropped cache-preserving injection on Sonnet 5'
       : (isOtherSonnet

@@ -14,7 +14,7 @@ import {
 import {
   getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
-  isSyntheticLeg, servingTierReport, median, DRIVER_VERBS,
+  isSyntheticLeg, servingTierReport, modelSwitchReport, median, DRIVER_VERBS,
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
@@ -22,10 +22,10 @@ import { sanitizeSessionName } from './sanitize-name.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.1.0';
+export const SL_VERSION = '6.1.3.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
-// user-level read (settings.json, stats-cache.json) and write (the global sidecar, the rollup caches)
+// user-level read (settings.json) and write (the global sidecar, the rollup caches)
 // goes through it, so a second-subscription session sees its own state. PROJECT-level paths
 // (<cwd>/.claude/…) are per-project, not per-subscription, and are deliberately untouched.
 const ConfigHome = resolveConfigHome();
@@ -219,13 +219,6 @@ function ColorByTokenCount(tokens, text) {
   if (tokens < 500000) return Orange(text);
   return RedBold(text);
 }
-function ColorLow(v, text, okMin, warnMin) {
-  if (isNil(v)) return text;
-  if (v > okMin) return Green(text);
-  if (v > warnMin) return Yellow(text);
-  return RedBold(text);
-}
-
 function LegRGB(cost) {
   const greenAnchor = 0.05, yellowAnchor = 0.28, redAnchor = 0.50;
   const g = [0, 215, 0], y = [215, 215, 0], r = [215, 0, 0];
@@ -323,7 +316,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     lastByteOffset: 0, nLegs: 0, sumUnits: 0, sumOutputTokens: 0, lastMsgId: '',
     lastInputBilled: 0, lastOutputTokens: 0, lastSeenCost: 0, lastLegCost: null,
     perLegUnits: [], perLegOwnUnits: [], perLegModels: [], lastLegTs: null, lastWarm: 0,
-    nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0,
+    nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0, coldLegs: [],
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
     runIdx: 0, runStartLeg: 0,
   });
@@ -332,21 +325,23 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   // a key nothing writes any more rides along for the life of the session file (a retired key
   // survives even a forced full re-bank). The key list is DERIVED from freshRollup(), not
   // hand-maintained — a field added to the fresh shape is preserved automatically and only genuinely
-  // unknown keys drop. The three optional keys are the ones assigned outside the fresh shape, all
-  // conditional and all live; losing sessionName would silently break the fact sheet's FOREIGN
-  // naming. No version marker: a marker is itself a new key, and the older build that resets on a
+  // unknown keys drop. The one optional key is assigned outside the fresh shape, conditional and
+  // live; losing sessionName would silently break the fact sheet's FOREIGN naming. (The retired
+  // modelSwitch / modelSwitchedAtLeg stamps are DERIVED per render from perLegModels now —
+  // modelSwitchReport — so old files' stale stamps are dropped by this projection, by design.)
+  // No version marker: a marker is itself a new key, and the older build that resets on a
   // missing required key ignores every key it does not know — so a marker could only ever help
   // readers built after it exists, which are exactly the readers that need no help.
   // BACK-COMPAT, one entry, retire per spec §A9.1 (2026-08-22): the 5.x build — deployed until every
   // config home installs 6.x — lists `openingLegs` in its requiredFields, so a stats file without it
-  // reads as structurally unusable and gets RESET, destroying sessionName, modelSwitch,
-  // modelSwitchedAtLeg and runStartLeg, none of which a later render can re-derive. Nothing in this
+  // reads as structurally unusable and gets RESET, destroying sessionName and runStartLeg, neither
+  // of which a later render can re-derive. Nothing in this
   // build reads or fills the key; it is a placeholder that keeps a lagging reader from throwing the
   // file away. RETIRE IT once every config home on every machine reports SL_VERSION >= 6.0.0.0 —
   // one grep per machine, so the condition is checkable rather than remembered.
   // Ticket: .inbox/2026-08-22-retire-openinglegs-rollup-compat-key.md
   const ROLLUP_COMPAT_KEYS = { openingLegs: [] };
-  const ROLLUP_OPTIONAL_KEYS = ['modelSwitchedAtLeg', 'modelSwitch', 'sessionName'];
+  const ROLLUP_OPTIONAL_KEYS = ['sessionName'];
   const ROLLUP_KEYS = new Set([...Object.keys(freshRollup()), ...ROLLUP_OPTIONAL_KEYS,
     ...Object.keys(ROLLUP_COMPAT_KEYS)]);
   if (!hadPrior) r = freshRollup();
@@ -372,6 +367,12 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   if (!('lastColdWastedUnits' in r)) {
     r.lastColdWastedUnits = (Number(r.nColdLegs) === 1) ? Number(r.coldWastedUnits) : 0;
   }
+  // Additive, NEVER required (a required key is the reset ping-pong of the rollup-projection ticket
+  // all over again): per-cold-leg { idx, avoidableUnits, model } records, so the cold tax can be
+  // priced at the model that paid each leg. A lagging 6.1.x home's projection drops the key on its
+  // next write; this build re-patches [] and, finding it incomplete (length !== nColdLegs), the read
+  // side falls back to the raw accumulators — today's figure, never a wrong new one, and no reset.
+  if (!('coldLegs' in r)) r.coldLegs = [];
   if (!('lastLegTtlSec' in r)) r.lastLegTtlSec = 0;
   if (!('recentWriteTtls' in r)) r.recentWriteTtls = [];
   if (!('recentLegs' in r)) r.recentLegs = [];
@@ -402,6 +403,10 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
         r.lastByteOffset = 0; r.nLegs = 0; r.sumUnits = 0; r.sumOutputTokens = 0;
         r.lastInputBilled = 0; r.lastOutputTokens = 0; r.perLegUnits = []; r.perLegOwnUnits = [];
         r.perLegModels = []; r.runStartLeg = 0;
+        // The cold counters and clock reset with the arrays — the rescan below re-derives all of
+        // them; leaving them standing would double-count every cold leg the rescan re-walks.
+        r.nColdLegs = 0; r.coldWastedUnits = 0; r.lastColdWastedUnits = 0; r.lastColdLegIdx = 0;
+        r.coldLegs = []; r.lastLegTs = null; r.lastLegTtlSec = 0;
         if ('recentWriteTtls' in r) r.recentWriteTtls = [];
         if ('recentLegs' in r) r.recentLegs = [];
         if ('lastWarm' in r) r.lastWarm = 0;
@@ -472,6 +477,10 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
                   r.coldWastedUnits = Number(r.coldWastedUnits) + thisColdWaste;
                   r.lastColdWastedUnits = thisColdWaste;
                   r.lastColdLegIdx = Number(r.nLegs);
+                  // Per-cold-leg record: raw avoidable units + the model that paid them, so the
+                  // read side can weight each leg against the CURRENT main tier (never frozen to
+                  // the scan-time label). Bounded — one small record per cold leg.
+                  r.coldLegs.push({ idx: Number(r.nLegs), avoidableUnits: thisColdWaste, model: legModel });
                 }
               }
               if (!('recentLegs' in r)) r.recentLegs = [];
@@ -501,15 +510,9 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   }
   r.lastSeenCost = Number(currentCost);
 
-  // Model stamping — a mid-session PRICE-TIER change (never a raw-string change: id-form vs
-  // display-form and same-tier upgrades share a tier) marks per-leg DOLLARS non-comparable across
-  // the switch. The stamp persists for the rest of the session; the sidecar carries it verbatim.
-  const prevTier = ModelTier(r.mainModel);
-  const newTier = ModelTier(mainModel);
-  if (prevTier !== null && newTier !== null && prevTier !== newTier) {
-    r.modelSwitchedAtLeg = Number(r.nLegs);
-    r.modelSwitch = { atLeg: Number(r.nLegs), from: String(r.mainModel), to: String(mainModel) };
-  }
+  // The model-switch stamp is gone: the switch is a TRANSCRIPT fact, derived per render from the
+  // banked perLegModels (modelSwitchReport, at the sidecar build) — a display-label change alone
+  // neither adds nor removes it. mainModel is still recorded (cheap truth for rigs and readers).
   if (mainModel) r.mainModel = String(mainModel);
   // Session name (payload session_name: /rename · --name, else the AI title) — persisted so the
   // fact sheet's FOREIGN guard can name THIS session in words; a nameless render never clears it.
@@ -806,6 +809,10 @@ if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, 
 // servingTierReport). Reads arrays already in hand — no extra file read, no re-scan on the hot path.
 // It renders as a caveat chip on the flags row (chrome-coloured: provenance, not alarm).
 const tierMismatch = rollup ? servingTierReport(rollup.perLegModels, runStartLeg, d?.model?.display_name ?? '') : null;
+// Transcript-tier model switch — derived per render from the banked per-leg models
+// (modelSwitchReport, the sibling fact: tierMismatch is about the LABEL, this is about the priced
+// legs). Never persisted; a label change alone neither adds nor removes it.
+const modelSwitch = rollup ? modelSwitchReport(rollup.perLegModels) : null;
 // Per-leg EFFECTIVE units = raw units × the leg's tier weight relative to the main tier (a Sonnet
 // opening leg on a Fable session weighs 0.2). `base` = this run's total_cost_usd over this run's
 // effective units (main legs from runStartLeg on + this run's tier-weighted agents), so every $
@@ -877,8 +884,22 @@ if (recentN >= 2) {
 let coldStakes = null, coldRemain = null, coldBand = null;
 let costColdPart = null;
 let coldValue = '';
+// Tier-true cold-tax units — ONE pricing path for the chip and the sidecar. When the per-cold-leg
+// records are complete, each leg's avoidable units are weighted at the model that paid them
+// (tierWeight vs the CURRENT main tier — the same per-leg weighting every other dollar on the line
+// uses, re-read per render, never frozen to scan time). Incomplete records (a session banked by an
+// older build, or a lagging home's projection dropped the key) fall back to the raw accumulators —
+// the prior behaviour: priced at the current label's rate.
+let coldUnitsEff = rollup ? Number(rollup.coldWastedUnits) : 0;
+let lastColdUnitsEff = rollup ? Number(rollup.lastColdWastedUnits) : 0;
+if (rollup && Array.isArray(rollup.coldLegs) && rollup.coldLegs.length > 0
+  && rollup.coldLegs.length === Number(rollup.nColdLegs)) {
+  coldUnitsEff = rollup.coldLegs.reduce((a, c) => a + Number(c.avoidableUnits) * tierWeight(c.model, mainTier), 0);
+  const lastRec = rollup.coldLegs[rollup.coldLegs.length - 1];
+  lastColdUnitsEff = Number(lastRec.avoidableUnits) * tierWeight(lastRec.model, mainTier);
+}
 if (rollup && Number(rollup.nColdLegs) >= 1 && totalUnits > 0 && sessionCost > 0) {
-  const coldTax = baseTrue * Number(rollup.coldWastedUnits);
+  const coldTax = baseTrue * coldUnitsEff;
   costColdPart = DarkGray('cold ') + ColorCost(coldTax, '$' + fmtN(coldTax, 2));
 }
 // Prospective: what a cold resume would cost from here — the only thing this row displays. Gates are
@@ -935,10 +956,8 @@ if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0)
   }
 }
 
-// === Full-turn TPS =========================================================
+// === Full-turn TPS (sidecar-only fact) =====================================
 const tailBytes = 2097152;
-let tailWarning = false;
-let tpsRendered = null;
 let tps = null;
 if (tpath && existsSync(tpath)) {
   try {
@@ -968,7 +987,6 @@ if (tpath && existsSync(tpath)) {
         if (ms != null) { latestUserMs = ms; latestUserIdx = i; break; }
       }
     }
-    if (latestUserMs == null && len > tailSize) tailWarning = true;
     if (latestUserMs != null) {
       let outputSum = 0;
       // The Bun-era writer (≥ ~2.1.215) emits one assistant line PER CONTENT BLOCK, each repeating
@@ -998,9 +1016,6 @@ if (tpath && existsSync(tpath)) {
         let duration = (latestMs - latestUserMs) / 1000;
         if (duration < 0.001) duration = 0.001;
         tps = outputSum / duration;
-        const tpsStr = fmtN(tps, 0) + 't/s';
-        const coloredTps = ColorLow(tps, tpsStr, 30, 15);
-        tpsRendered = DarkGray('turn ') + FmtDuration(psRound(duration)) + DarkGray(' @ ') + coloredTps;
       }
     }
   } catch {}
@@ -1055,7 +1070,7 @@ let tierMixChip = null;
 if (agentAgg && Number(agentAgg.nAgents) > 0) {
   const aParts = [];
   aParts.push(String(Number(agentAgg.nAgents)) + DarkGray(' ag'));
-  aParts.push(DarkGray('sum ') + FmtNum(Number(agentAgg.sumMaxCtx)));
+  aParts.push(DarkGray('Σ ') + FmtNum(Number(agentAgg.sumMaxCtx)));
   if (!isNil(agentsUsd)) {
     let costChip = ColorCost(agentsUsd, '$' + fmtN(agentsUsd, 2));
     if (sessionCost > 0) costChip += ' ' + DarkGray(psRound(100.0 * Number(agentsUsd) / Number(sessionCost)).toString() + '%');
@@ -1095,11 +1110,15 @@ const nowQ = NOW;
 //   • The projection has its own floor, QUOTA_PROJECTION_MIN_ELAPSED_PCT, because rho = q/t blows up
 //     as t approaches zero. Below it the row is the gauge and `resets`, nothing else.
 // At and above the verdict floor the beta maths, the >=8h bump, the rung mapping and the at-cap
-// override run exactly as before — with rung 0 rendering chrome instead of green, because these rows
-// are always on now and a green row on every calm session would make calm the loudest thing here.
+// override run exactly as before. Colour rule (Florian's ruling, 2026-08-29): BELOW the floor the
+// gauge renders NEUTRAL — col === null, no SGR at all, like the repo slug — because no signal is
+// claimed there, so no colour is spent. At rung 0 the beta machinery has run and CLEARED the window,
+// and that earned verdict renders GREEN (ANSI 32, the file's Green — the quota ladder is plain ANSI):
+// gauge and verdict both. Calm-before-the-floor and cleared-above-the-floor are different facts and
+// now look different. The row-4 runway/projection renders off detailCol — the rung colour for rungs
+// 1-3 and at-cap, chrome (null) at rung 0 and below the floor — so the green never reaches row 4.
 const QUOTA_VERDICT_MIN_PCT = 50;
 const QUOTA_PROJECTION_MIN_ELAPSED_PCT = 10;
-const QUOTA_CALM_COL = '38;5;240';
 function QLvl(p) { let l = psRound(p / 100.0 * 8); if (p > 0 && l < 1) l = 1; if (l > 8) l = 8; return l; }
 function QuotaCells(rl, winSec) {
   if (!rl || isNil(rl.used_percentage)) return null;
@@ -1134,7 +1153,7 @@ function QuotaCells(rl, winSec) {
     const underPace = !isNil(elapsed) && consumed <= elapsed;
     const projection = (enoughElapsed && underPace)
       ? `ends ~${psRound((q / t) * 100)}% ` + '·' + ` ${psRound((1 - q / t) * 100)}% spare` : null;
-    return { col: QUOTA_CALM_COL, mid, verdict: null, detail: projection, resets };
+    return { col: null, detailCol: null, mid, verdict: null, detail: projection, resets };
   }
   const exhausted = (consumed >= 100);
   let beta = null, B = null, S = null;
@@ -1151,7 +1170,7 @@ function QuotaCells(rl, winSec) {
   else if (beta <= 0.25) rung = 2;
   else rung = 3;
   if (!isNil(B) && B >= 28800 && rung < 3) rung++;
-  let col = rung === 0 ? QUOTA_CALM_COL : rung === 1 ? '38;5;220' : rung === 2 ? '38;5;208' : '1;31';
+  let col = rung === 0 ? '32' : rung === 1 ? '38;5;220' : rung === 2 ? '38;5;208' : '1;31';
   let verdict, detail;
   if (exhausted) {
     col = '38;5;208';
@@ -1170,29 +1189,34 @@ function QuotaCells(rl, winSec) {
       detail = null;
     }
   }
-  return { col, mid, verdict, detail, resets };
+  // detailCol: the runway keeps the rung colour only when it is a warning (rungs 1-3, at-cap);
+  // rung 0's `ends ~N% · M% spare` is chrome — the green names the gauge and the verdict only.
+  const detailCol = rung === 0 ? null : col;
+  return { col, detailCol, mid, verdict, detail, resets };
 }
 // An absent window states the fact in ONE token, rather than leaving a half-empty row that reads as
 // a rendering bug.
 function QuotaGaugeValue(c) {
   if (!c) return DarkGray('n/a');
-  let s = `${ESC}[${c.col}m${c.mid}${ESC}[0m` + DarkGray(' time');
-  if (c.verdict) s += '  ' + `${ESC}[${c.col}m${c.verdict}${ESC}[0m`;
+  let s = (c.col ? `${ESC}[${c.col}m${c.mid}${ESC}[0m` : c.mid) + DarkGray(' time');
+  if (c.verdict) s += '  ' + (c.col ? `${ESC}[${c.col}m${c.verdict}${ESC}[0m` : DarkGray(c.verdict));
   return s;
 }
-// The detail renders as ONE string in the row's rung colour, its connectives included: it is a
-// sentence, not chrome, and splitting it into coloured and grey fragments would fight the alarm.
+// The detail renders as ONE string in the row's WARNING rung colour (detailCol), its connectives
+// included: it is a sentence, not chrome, and splitting it into coloured and grey fragments would
+// fight the alarm. At rung 0 and below the floor detailCol is null and the sentence is chrome.
 // When the assembled half would overflow its value field, `resets` is the field that drops — the
 // least load-bearing figure on the row (the gauge's elapsed bar already says where in the window you
 // are), and the last one, so dropping it leaves no hole.
 function QuotaDetailValue(c, valueW) {
   if (!c) return '';
+  const detail = c.detail ? (c.detailCol ? `${ESC}[${c.detailCol}m${c.detail}${ESC}[0m` : DarkGray(c.detail)) : null;
   const parts = [];
-  if (c.detail) parts.push(`${ESC}[${c.col}m${c.detail}${ESC}[0m`);
+  if (detail) parts.push(detail);
   if (c.resets) parts.push(DarkGray(c.resets));
   if (parts.length === 0) return '';
   const full = parts.join(DarkGray(' · '));
-  if (visLen(full) > valueW && c.detail && c.resets) return `${ESC}[${c.col}m${c.detail}${ESC}[0m`;
+  if (visLen(full) > valueW && detail && c.resets) return detail;
   return full;
 }
 const q5 = QuotaCells(d?.rate_limits?.five_hour, 18000);
@@ -1253,46 +1277,13 @@ if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   bigLegCells = blRows;
 }
 
-// === Cluster 5: session (built; display gated) =============================
-const costParts = [];
+// === Session facts (sidecar-only) ==========================================
+// aliveSec / apiSec feed activityPct, which the fact sheet reads for ACTIVITY. None of these renders.
 let aliveSec = null;
 if (tpath && existsSync(tpath)) {
   try { aliveSec = psRound(NOW - statSync(tpath).birthtimeMs / 1000); } catch {}
 }
 const apiSec = d?.cost?.total_api_duration_ms ? psRound(Number(d.cost.total_api_duration_ms) / 1000) : null;
-if (!isNil(aliveSec) && !isNil(apiSec)) costParts.push(DarkGray(FmtDuration(aliveSec) + ' alive / ' + FmtDuration(apiSec) + ' api'));
-else if (!isNil(aliveSec)) costParts.push(DarkGray(FmtDuration(aliveSec) + ' alive'));
-else if (!isNil(apiSec)) costParts.push(DarkGray(FmtDuration(apiSec) + ' api'));
-if (!isNil(d?.cost?.total_lines_added) || !isNil(d?.cost?.total_lines_removed)) {
-  costParts.push(DarkGray(`+${d.cost.total_lines_added}/-${d.cost.total_lines_removed} lines`));
-}
-if (tpsRendered) costParts.push(tpsRendered);
-if (tailWarning) costParts.push(RedBold('tail!'));
-// today: chip — CC's stats-cache.json aggregates every session of this config home. A row is one
-// blended number per model; since CC 2.1.221 (dailyModelTokensVersion 5) that number includes cache
-// reads/writes, older files count input+output only — the label says which. Sidecar `todayTokens`
-// carries the same fact (conditional key, present only when the chip fires).
-let todayTokens = null;
-const dailyStatsPath = join(ConfigHome, 'stats-cache.json');
-if (existsSync(dailyStatsPath)) {
-  try {
-    const stats = readJson(dailyStatsPath);
-    const today = new Date(NOW * 1000).toISOString().slice(0, 10); // UTC yyyy-MM-dd — CC keys rows by toISOString().split('T')[0]
-    const todayEntry = Array.isArray(stats?.dailyModelTokens) ? stats.dailyModelTokens.find((e) => e && e.date === today) : null;
-    if (todayEntry) {
-      let sumToday = 0;
-      for (const k of Object.keys(todayEntry.tokensByModel || {})) sumToday += Number(todayEntry.tokensByModel[k]) || 0;
-      if (sumToday > 0) {
-        const dmv = Number(stats.dailyModelTokensVersion) || 0;
-        const includesCache = dmv >= 5;
-        const n = sumToday >= 1e9 ? fmtN(sumToday / 1e9, 2) + 'B' : FmtNum(sumToday);
-        costParts.push(DarkGray(`today: ${n} tokens ${includesCache ? 'incl. cache' : 'in+out only'} · all sessions`));
-        todayTokens = { date: today, tokens: sumToday, includesCache, dailyModelTokensVersion: dmv };
-      }
-    }
-  } catch {}
-}
-const line5 = costParts.length > 0 ? DarkGray('session: ') + costParts.join(DarkGray(' | ')) : null;
 
 // === Sidecar snapshot ======================================================
 // Two-phase write. Phase 1 (here) runs BEFORE the git subprocess cluster below, so a slow or
@@ -1337,9 +1328,10 @@ try {
     renderedAt: NOW,
     transcriptPath: tpath ?? null,
     model,
-    // Present ONLY when a mid-session tier switch occurred (keeps the golden blast radius to the
-    // switch fixtures; consumers already handle absent keys).
-    ...(rollup && rollup.modelSwitch ? { modelSwitch: rollup.modelSwitch } : {}),
+    // Present ONLY when the banked legs' price tiers changed between two legs of the transcript —
+    // derived from the banked per-leg models each render (modelSwitchReport; a label change alone
+    // neither adds nor removes it). Same conditional shape as ever; consumers handle absent keys.
+    ...(modelSwitch ? { modelSwitch } : {}),
     // Present ONLY when the display tier is mapped and has NEVER served in this run (see
     // servingTierReport): { display, serving }. Provenance for the fact sheet's COST_TIER_NOTE — it
     // gates no number. Additive + conditional, so no schema bump (the fastMode / sessionName
@@ -1368,12 +1360,9 @@ try {
     // Present ONLY when the payload carries a session_name: the snapshot owner's name, persisted at
     // write time so the fact sheet's FOREIGN guard can name that side in words.
     ...(sessionName ? { sessionName } : {}),
-    // Present ONLY when today's row exists in stats-cache.json with a positive sum: what the
-    // today: chip (session line) states, incl. whether the number counts cache tokens.
-    ...(todayTokens ? { todayTokens } : {}),
     nColdLegs: rollup ? Number(rollup.nColdLegs) : null,
-    coldWastedUsd: (rollup && totalUnits > 0 && sessionCost > 0) ? mathRoundD(baseTrue * Number(rollup.coldWastedUnits), 2) : null,
-    lastColdTaxUsd: (rollup && totalUnits > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * Number(rollup.lastColdWastedUnits), 2) : null,
+    coldWastedUsd: (rollup && totalUnits > 0 && sessionCost > 0) ? mathRoundD(baseTrue * coldUnitsEff, 2) : null,
+    lastColdTaxUsd: (rollup && totalUnits > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * lastColdUnitsEff, 2) : null,
     lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
     coldStakeUsd,
     coldState,
@@ -1451,11 +1440,9 @@ try {
   }
 } catch {}
 
-// The session line (Florian's choice, 2026-08-17) has NO row in the grid. It is still BUILT above and
-// its facts still feed the sidecar — aliveSec, apiSec, tps, activityPct, linesAdded, linesRemoved and
-// the conditional todayTokens — it simply is not rendered. The old `ShowSessionLine` gate is gone
-// rather than kept: the assembler below has no branch that could read it, and a constant documenting
-// an intent it no longer enforces is worse than no constant.
+// The session facts — aliveSec, apiSec, activityPct, tps, linesAdded, linesRemoved — are sidecar-only
+// by design: nothing above builds a rendering string for them and no assembler row reads them. The
+// fact sheet (handover-facts.mjs) is their reader.
 
 // === Row assembly — the dossier grid =======================================
 // Up to six fixed rows in a frozen order, then a variable block of spotlight rows, two legs to a

@@ -98,57 +98,61 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
   const tempCwd = mkdtempSync(join(tmpdir(), 'slgolden-cwd-'));
   mkdirSync(join(tempHome, '.claude'), { recursive: true });
   mkdirSync(join(tempCwd, '.claude'), { recursive: true });
-  copyDirInto(join(fixDir, 'home-seed'), join(tempHome, '.claude'));
-  copyDirInto(join(fixDir, 'seed'), join(tempCwd, '.claude'));
+  try {
+    copyDirInto(join(fixDir, 'home-seed'), join(tempHome, '.claude'));
+    copyDirInto(join(fixDir, 'seed'), join(tempCwd, '.claude'));
 
-  const stdin = structuredClone(stdinObj);
-  const transcript = join(fixDir, 'transcript.jsonl');
-  if (existsSync(transcript)) {
-    stdin.transcript_path = transcript;
-    // The engine derives `tps` (tokens/sec) from the transcript FILE's mtime. git checkout / copy
-    // reset mtime to "now", which is non-reproducible and breaks the golden across machines / CI.
-    // Pin mtime to the transcript's latest message timestamp (content-derived → deterministic, and
-    // the semantically correct "turn end"). Applied for both --bless and check, so goldens match.
-    const endMs = latestTimestampMs(transcript);
-    if (endMs != null) { const s = endMs / 1000; utimesSync(transcript, s, s); }
+    const stdin = structuredClone(stdinObj);
+    const transcript = join(fixDir, 'transcript.jsonl');
+    if (existsSync(transcript)) {
+      stdin.transcript_path = transcript;
+      // The engine derives `tps` (tokens/sec) from the transcript FILE's mtime. git checkout / copy
+      // reset mtime to "now", which is non-reproducible and breaks the golden across machines / CI.
+      // Pin mtime to the transcript's latest message timestamp (content-derived → deterministic, and
+      // the semantically correct "turn end"). Applied for both --bless and check, so goldens match.
+      const endMs = latestTimestampMs(transcript);
+      if (endMs != null) { const s = endMs / 1000; utimesSync(transcript, s, s); }
+    }
+    stdin.workspace = stdin.workspace || {};
+    stdin.workspace.current_dir = tempCwd;
+    if ('cwd' in stdin) stdin.cwd = tempCwd;
+
+    const env = {
+      ...process.env,
+      USERPROFILE: tempHome,
+      HOME: tempHome,
+      // POSITIVE pin, never a delete: the cluster resolves its user config home from
+      // CLAUDE_CONFIG_DIR when set, so a value inherited from the surrounding shell (a session
+      // launched against a second subscription) would make the child read that home's settings.json
+      // and write its caches there — nondeterministic goldens plus pollution outside the temp home.
+      // Pinning it to the temp home's .claude makes the run identical from any session.
+      CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
+      CLAUDE_PROJECT_DIR: tempCwd,
+      TZ: 'UTC',
+      CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
+    };
+    // Inherited shell value must not flip goldens; a fixture that needs it sets it via meta.env.
+    delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    Object.assign(env, extraEnv || {});
+
+    let stdout = execFileSync(process.execPath, [nodeScript],
+      { input: JSON.stringify(stdin), env, maxBuffer: 64 * 1024 * 1024 });
+    // strip a leading UTF-8 BOM if a shell inserts one (we want the rendered bytes only)
+    if (stdout.length >= 3 && stdout[0] === 0xEF && stdout[1] === 0xBB && stdout[2] === 0xBF) {
+      stdout = stdout.subarray(3);
+    }
+
+    const sidecarPath = join(tempCwd, '.claude', 'statusline-last.json');
+    let sidecar = null;
+    if (existsSync(sidecarPath)) {
+      try { sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')); } catch { sidecar = '<unparseable>'; }
+    }
+    return { stdout, sidecar };
+  } finally {
+    // Cleanup runs on the throw path too — a failing fixture must not strand temp dirs.
+    rmSync(tempHome, { recursive: true, force: true });
+    rmSync(tempCwd, { recursive: true, force: true });
   }
-  stdin.workspace = stdin.workspace || {};
-  stdin.workspace.current_dir = tempCwd;
-  if ('cwd' in stdin) stdin.cwd = tempCwd;
-
-  const env = {
-    ...process.env,
-    USERPROFILE: tempHome,
-    HOME: tempHome,
-    // POSITIVE pin, never a delete: the cluster resolves its user config home from
-    // CLAUDE_CONFIG_DIR when set, so a value inherited from the surrounding shell (a session
-    // launched against a second subscription) would make the child read that home's settings.json
-    // and write its caches there — nondeterministic goldens plus pollution outside the temp home.
-    // Pinning it to the temp home's .claude makes the run identical from any session.
-    CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
-    CLAUDE_PROJECT_DIR: tempCwd,
-    TZ: 'UTC',
-    CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
-  };
-  // Inherited shell value must not flip goldens; a fixture that needs it sets it via meta.env.
-  delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
-  Object.assign(env, extraEnv || {});
-
-  let stdout = execFileSync(process.execPath, [nodeScript],
-    { input: JSON.stringify(stdin), env, maxBuffer: 64 * 1024 * 1024 });
-  // strip a leading UTF-8 BOM if a shell inserts one (we want the rendered bytes only)
-  if (stdout.length >= 3 && stdout[0] === 0xEF && stdout[1] === 0xBB && stdout[2] === 0xBF) {
-    stdout = stdout.subarray(3);
-  }
-
-  const sidecarPath = join(tempCwd, '.claude', 'statusline-last.json');
-  let sidecar = null;
-  if (existsSync(sidecarPath)) {
-    try { sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')); } catch { sidecar = '<unparseable>'; }
-  }
-  rmSync(tempHome, { recursive: true, force: true });
-  rmSync(tempCwd, { recursive: true, force: true });
-  return { stdout, sidecar };
 }
 
 // Structural compare with float tolerance + key-set equality.
@@ -211,6 +215,8 @@ function main() {
   }
   const fixtures = readdirSync(fixturesDir)
     .filter((n) => statSync(join(fixturesDir, n)).isDirectory())
+    // A fixture is a directory that contains stdin.json — a stray dir (scratch, editor leftovers) is not one.
+    .filter((n) => existsSync(join(fixturesDir, n, 'stdin.json')))
     .filter((n) => !only || n === only)
     .sort();
   if (fixtures.length === 0) { console.error('No fixtures found.'); process.exit(2); }

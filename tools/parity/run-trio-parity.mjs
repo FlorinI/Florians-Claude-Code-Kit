@@ -85,44 +85,48 @@ function runTrio(fixDir, nowEpoch, meta) {
   mkdirSync(join(tempHome, '.claude'), { recursive: true });
   mkdirSync(join(tempCwd, '.claude'), { recursive: true });
 
-  const env = {
-    ...process.env,
-    USERPROFILE: tempHome,
-    HOME: tempHome,
-    // POSITIVE pin, never a delete — see run-parity.mjs. The trio reads/writes handover-frozen.json,
-    // legspark.ansi and spikes.txt under the resolved config home, so an inherited CLAUDE_CONFIG_DIR
-    // would both perturb the goldens and write outside the temp home.
-    CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
-    CLAUDE_PROJECT_DIR: tempCwd,
-    TZ: 'UTC',
-    CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
-  };
-  delete env.CLAUDE_CODE_SESSION_ID; // else the FOREIGN guard fires on the harness's own session
+  try {
+    const env = {
+      ...process.env,
+      USERPROFILE: tempHome,
+      HOME: tempHome,
+      // POSITIVE pin, never a delete — see run-parity.mjs. The trio reads/writes handover-frozen.json,
+      // legspark.ansi and spikes.txt under the resolved config home, so an inherited CLAUDE_CONFIG_DIR
+      // would both perturb the goldens and write outside the temp home.
+      CLAUDE_CONFIG_DIR: join(tempHome, '.claude'),
+      CLAUDE_PROJECT_DIR: tempCwd,
+      TZ: 'UTC',
+      CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
+    };
+    delete env.CLAUDE_CODE_SESSION_ID; // else the FOREIGN guard fires on the harness's own session
 
-  // Frozen snapshot = the fixture's golden sidecar, with transcriptPath pointed at the fixture transcript.
-  const sidecar = JSON.parse(readFileSync(join(fixDir, 'golden-sidecar.json'), 'utf8'));
-  const transcript = join(fixDir, 'transcript.jsonl');
-  if (existsSync(transcript)) sidecar.transcriptPath = transcript;
-  else sidecar.transcriptPath = null;
-  // Sub-agent fixtures: pre-run the engine so the agents cache exists in the temp cwd, then point the
-  // golden sidecar's agentsCachePath at it (the committed path is a long-deleted temp dir).
-  if (existsSync(transcript) && existsSync(join(fixDir, 'transcript', 'subagents'))) {
-    preRunEngine(fixDir, tempHome, tempCwd, transcript, env, meta);
-    if (sidecar.sessionId) sidecar.agentsCachePath = join(tempCwd, '.claude', 'statusline-stats', `${sidecar.sessionId}.agents.json`);
-  }
-  // handover-facts reads the live sidecar (project-local) then freezes it; render-* read the freeze.
-  // (Written AFTER the pre-run, so the trio sees the committed golden, not the engine's fresh sidecar.)
-  writeFileSync(join(tempCwd, '.claude', 'statusline-last.json'), JSON.stringify(sidecar), 'utf8');
+    // Frozen snapshot = the fixture's golden sidecar, with transcriptPath pointed at the fixture transcript.
+    const sidecar = JSON.parse(readFileSync(join(fixDir, 'golden-sidecar.json'), 'utf8'));
+    const transcript = join(fixDir, 'transcript.jsonl');
+    if (existsSync(transcript)) sidecar.transcriptPath = transcript;
+    else sidecar.transcriptPath = null;
+    // Sub-agent fixtures: pre-run the engine so the agents cache exists in the temp cwd, then point the
+    // golden sidecar's agentsCachePath at it (the committed path is a long-deleted temp dir).
+    if (existsSync(transcript) && existsSync(join(fixDir, 'transcript', 'subagents'))) {
+      preRunEngine(fixDir, tempHome, tempCwd, transcript, env, meta);
+      if (sidecar.sessionId) sidecar.agentsCachePath = join(tempCwd, '.claude', 'statusline-stats', `${sidecar.sessionId}.agents.json`);
+    }
+    // handover-facts reads the live sidecar (project-local) then freezes it; render-* read the freeze.
+    // (Written AFTER the pre-run, so the trio sees the committed golden, not the engine's fresh sidecar.)
+    writeFileSync(join(tempCwd, '.claude', 'statusline-last.json'), JSON.stringify(sidecar), 'utf8');
 
-  const out = {};
-  for (const [key, spec] of Object.entries(SCRIPTS)) {
-    const buf = execFileSync(process.execPath, [spec.file, ...spec.args],
-      { env, maxBuffer: 64 * 1024 * 1024 });
-    out[key] = buf.toString('utf8');
+    const out = {};
+    for (const [key, spec] of Object.entries(SCRIPTS)) {
+      const buf = execFileSync(process.execPath, [spec.file, ...spec.args],
+        { env, maxBuffer: 64 * 1024 * 1024 });
+      out[key] = buf.toString('utf8');
+    }
+    return out;
+  } finally {
+    // Cleanup runs on the throw path too — a failing fixture must not strand temp dirs.
+    rmSync(tempHome, { recursive: true, force: true });
+    rmSync(tempCwd, { recursive: true, force: true });
   }
-  rmSync(tempHome, { recursive: true, force: true });
-  rmSync(tempCwd, { recursive: true, force: true });
-  return out;
 }
 
 function main() {
@@ -131,6 +135,8 @@ function main() {
   const only = args.find((a) => !a.startsWith('--'));
   const fixtures = readdirSync(fixturesDir)
     .filter((n) => statSync(join(fixturesDir, n)).isDirectory())
+    // A fixture is a directory that contains stdin.json — a stray dir (scratch, editor leftovers) is not one.
+    .filter((n) => existsSync(join(fixturesDir, n, 'stdin.json')))
     .filter((n) => !only || n === only)
     .sort();
 

@@ -35,11 +35,15 @@ function makeShims({ withCode }) {
 // dryRun:   false runs WITHOUT the dry-run seam — for the --print-title / --print-tabcolor
 //           early exits, which return raw text (not JSON) and must fire before any side effect.
 // wtSession: sets WT_SESSION so the Windows-Terminal tab-color escape is non-empty.
+// env:      extra vars added to the child environment — the ONLY way anything reaches the launcher's
+//           env, since the child env below is built from scratch rather than inherited. Every case
+//           that cares about an ambient var (a poisoned CC_TITLE_* pair, say) states it here, so no
+//           result depends on the shell the suite happens to run in.
 // USERPROFILE/HOME are pinned to the throwaway project dir so `~` expansion is deterministic and
 // the launcher can never resolve a path in the real home.
 function runLauncher({
   workspaces = [], withCode = true, ccVscode = '1', ccVscodeTile = null,
-  args = [], identity = null, dryRun = true, wtSession = null,
+  args = [], identity = null, dryRun = true, wtSession = null, env: extraEnv = {},
 }) {
   const proj = mkdtempSync(join(tmpdir(), 'ccl-proj-'));
   const shims = makeShims({ withCode });
@@ -59,6 +63,7 @@ function runLauncher({
       ...(ccVscodeTile === null ? {} : { CC_VSCODE_TILE: ccVscodeTile }),
       ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
       TEMP: process.env.TEMP, TMP: process.env.TMP,
+      ...extraEnv,
     };
     const res = spawnSync(process.execPath, [launcher, ...args], { cwd: proj, env, encoding: 'utf8' });
     const plan = (dryRun && res.stdout.trim()) ? JSON.parse(res.stdout.trim().split('\n').pop()) : null;
@@ -213,14 +218,15 @@ function coreTitle(extra = {}) {
   return runLauncher({ workspaces: [], identity: IDENT, ...extra }).plan.launch.title;
 }
 
-test('L1 — no launcher flags: the launch block is inert and the child env gains nothing', () => {
+test('L1 — no launcher flags: the launch block is inert and the child env gains nothing but cleared markers', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT });
   assert.equal(res.status, 0);
   assert.equal(plan.launch.configDir, null);
   assert.equal(plan.launch.titlePrefix, '');
   assert.equal(plan.launch.titleSuffix, '');
   assert.equal(plan.launch.noVsCode, false);
-  assert.equal(plan.claude.envDelta, null, 'no env delta when no env-carrying flag is given');
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+    'the markers are cleared (every launch owns them); no CLAUDE_CONFIG_DIR, nothing else added');
   assert.equal(plan.launch.title, plan.tile.titleMatch);
 });
 
@@ -242,7 +248,9 @@ test('L3 — --config-dir sets the child env delta and never leaks into the clau
   try {
     const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', dir] });
     assert.equal(plan.launch.configDir, resolve(dir));
-    assert.deepEqual(plan.claude.envDelta, { CLAUDE_CONFIG_DIR: resolve(dir) }, 'delta only — never the whole env');
+    assert.deepEqual(plan.claude.envDelta,
+      { CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+      'the config home plus the always-cleared markers — delta only, never the whole env');
     assert.ok(!plan.claude.argv.includes('--config-dir'), 'flag stripped from the claude argv');
     assert.ok(!plan.claude.argv.includes(dir), 'its VALUE is stripped too (never a stray positional)');
     assert.ok(!plan.claude.argv.includes(resolve(dir)), 'nor the resolved form');
@@ -331,7 +339,8 @@ test('L10 — malformed input is inert: a dangling value-flag is stripped, never
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir'] });
   assert.equal(res.status, 0);
   assert.equal(plan.launch.configDir, null);
-  assert.equal(plan.claude.envDelta, null);
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+    'no CLAUDE_CONFIG_DIR from a valueless flag — only the markers every launch clears');
   assert.ok(!plan.claude.argv.includes('--config-dir'), 'still stripped from the claude argv');
   assert.ok(plan.claude.argv.length > 0, 'claude still launches');
 });
@@ -376,10 +385,18 @@ test('L13 — the tile reason taxonomy is unchanged by the new flags', () => {
   for (const lit of produced) assert.ok(KNOWN.has(lit), `new reason literal in source: '${lit}'`);
 });
 
-// Rows L14–L18: the title markers reach the claude child env as CC_TITLE_PREFIX / CC_TITLE_SUFFIX —
+// Rows L14–L20: the title markers reach the claude child env as CC_TITLE_PREFIX / CC_TITLE_SUFFIX —
 // delta-only alongside CLAUDE_CONFIG_DIR (L5 asserts the three-key shape) — so an in-session
-// consumer (/identity's rename lines) can re-compose the marked title. Each key appears iff its
-// flag was given with a NON-EMPTY value; with no key applicable the delta stays null.
+// consumer (/identity's rename lines) can re-compose the marked title.
+//
+// BOTH keys are always present: the flag's value when it was given, '' otherwise. A launch is
+// authoritative over the markers, so a plain `cc` in a shell that inherited a marker (a tab spawned
+// from a marked session — L19) clears it rather than adopting it. The keys are unconditional by
+// design, never keyed off the ambient env, so the delta a launch reports is the same in every shell;
+// L19/L20 pin that by launching with a deliberately poisoned parent env.
+//
+// The delta stays the DELTA ONLY — a key with an empty value names something this launch sets and
+// leaks nothing of the inherited environment.
 
 test('L14 — markers without --config-dir: the env delta is exactly the two marker keys', () => {
   const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P', '--title-suffix', '·s'] });
@@ -387,23 +404,27 @@ test('L14 — markers without --config-dir: the env delta is exactly the two mar
     'two keys, no CLAUDE_CONFIG_DIR — delta only, never the whole env');
 });
 
-test('L15 — a one-sided marker exports only its own key', () => {
+test('L15 — a one-sided marker: its own key carries the value, the other is cleared', () => {
   const pre = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P'] });
-  assert.deepEqual(pre.plan.claude.envDelta, { CC_TITLE_PREFIX: 'P' }, 'prefix alone → prefix key only');
+  assert.deepEqual(pre.plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '' },
+    'prefix alone → prefix set, suffix cleared');
   const suf = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-suffix', '·s'] });
-  assert.deepEqual(suf.plan.claude.envDelta, { CC_TITLE_SUFFIX: '·s' }, 'suffix alone → suffix key only');
+  assert.deepEqual(suf.plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '·s' },
+    'suffix alone → suffix set, prefix cleared');
 });
 
-test('L16 — an empty-string marker value exports nothing: the delta stays null', () => {
+test('L16 — an empty-string marker value is a cleared marker, indistinguishable from an absent flag', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', ''] });
   assert.equal(res.status, 0);
-  assert.equal(plan.claude.envDelta, null, 'the key is non-empty-gated, and nothing else applies');
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+    'an explicitly empty marker clears its key, and nothing else applies');
 });
 
-test('L17 — a dangling --title-prefix is inert: stripped, no env key, never fatal', () => {
+test('L17 — a dangling --title-prefix is inert: stripped, marker cleared, never fatal', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix'] });
   assert.equal(res.status, 0);
-  assert.equal(plan.claude.envDelta, null);
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+    'a valueless flag adds no marker value — the keys are the cleared pair');
   assert.ok(!plan.claude.argv.includes('--title-prefix'), 'still stripped from the claude argv');
   assert.ok(plan.claude.argv.length > 0, 'claude still launches');
 });
@@ -411,7 +432,42 @@ test('L17 — a dangling --title-prefix is inert: stripped, no env key, never fa
 test('L18 — a non-ASCII marker round-trips into the env delta unchanged', () => {
   const glyph = '🧪';
   const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', glyph] });
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph });
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph, CC_TITLE_SUFFIX: '' });
+});
+
+// L19/L20 are the regression pair for the inherited-marker bug: Claude Code's new-terminal-tab
+// spawner scrubs its own vars (CLAUDE_CONFIG_DIR included) from the new shell but knows nothing about
+// the private CC_TITLE_* pair, so a tab opened from a marked session hands them to whatever runs next.
+// Both launch into the SAME pre-marked parent env and differ only in whether title flags were given.
+// The values are the file's generic P / ·s — this file ships in the public kit, so it carries no
+// caller's naming policy; the mechanism is what is under test, not the marker text.
+const INHERITED = { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s' };
+
+test('L19 — a plain launch in a shell carrying inherited markers clears them (never adopts them)', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, env: INHERITED });
+  assert.equal(res.status, 0);
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+    'both markers overwritten with empty — the child cannot read the ambient pair');
+  // The same clearing shows in the title this launch composes: unmarked, exactly as in a clean shell.
+  assert.equal(plan.launch.titlePrefix, '');
+  assert.equal(plan.launch.titleSuffix, '');
+  assert.equal(plan.launch.title, coreTitle(), 'no prefix, no suffix — the inherited pair is not read');
+  for (const m of [INHERITED.CC_TITLE_PREFIX, INHERITED.CC_TITLE_SUFFIX]) {
+    assert.ok(!plan.claude.argv.includes(m), `the inherited marker ${m} never reaches the claude argv`);
+  }
+});
+
+test('L20 — a marked launch in that same shell still marks its session, from its FLAGS', () => {
+  const core = coreTitle();
+  // Deliberately different from the inherited pair, so the assertion tells "the flags were used"
+  // apart from "the ambient value happened to survive".
+  const { plan } = runLauncher({
+    workspaces: [], identity: IDENT, env: INHERITED,
+    args: ['--title-prefix', 'Q', '--title-suffix', '·q'],
+  });
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'Q', CC_TITLE_SUFFIX: '·q' },
+    'the flags win over the inherited pair — exported for the in-session title consumer');
+  assert.equal(plan.launch.title, `Q ${core} ·q`, 'and the composed title carries both');
 });
 
 // --- /color injection vs optional-value flags (rows C1–C12) --------------------------------------
@@ -492,7 +548,7 @@ test('C11 — a real prompt after an optional flag is never clobbered', () => {
   assert.ok(!hasColor(argv));
 });
 
-test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `claude --help` (2.1.233)', () => {
+test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `claude --help` (2.1.251; set unchanged since 2.1.233)', () => {
   const src = readFileSync(launcher, 'utf8');
   const m = src.match(/const OPTIONAL_VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\);/);
   assert.ok(m, 'OPTIONAL_VALUE_FLAGS literal found');

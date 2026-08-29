@@ -9,7 +9,6 @@ COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
 COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced at this run's rate
-COST_MODELSWITCH_NOTE: the model switched mid-session (Opus 5 → Sonnet 5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COST_FAST_NOTE: fast mode on — every $ in this sheet excludes the fast premium; per-leg $, the forecast and the total are understated (CC's own figure, not recomputed)
 COST_TIER_NOTE: the model label reads `Sonnet 5`, but every leg in this run was served by `opus` — a label fact only: the $ in this sheet does not depend on which label is shown
 COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing

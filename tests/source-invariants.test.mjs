@@ -178,9 +178,11 @@ test('S15 — the relay never invents WHERE the expensive legs are (spec §A9.2)
   // WHY THIS ROW EXISTS AND WHY IT IS HERE. Both files are prose read by a composer: they emit no
   // bytes, so no golden and no mechanics test can see them. The old text told the composer that a
   // recent median below the session mean means the fat legs "sit earlier in the session ... not a
-  // trend" — false on 20 of 114 real sessions, and false *because* of the median this build chose: a
-  // median is built so a lone fat leg INSIDE the window shifts it at most one position, to the next
-  // ordinary leg's price rather than toward the spike's. Same family as S13.
+  // trend" — false on 20 of 114 real sessions, and false *because* of the median this build chose:
+  // on a full 8-leg window a lone fat leg INSIDE the window shifts the median at most one rank, to
+  // the next ordinary leg's price rather than toward the spike's — shorter windows hold less firmly,
+  // and two fat legs in a short window can put a fat leg's own size into the figure (see the
+  // handover-facts.mjs comment). Same family as S13.
   // `home/commands/handover-check.md` ships in the public kit (manifest.public.json:19) and this test
   // file is exported too, so its half runs everywhere. `.claude/commands/interpret-statusline.md` is
   // private-repo only — same treatment as the D4 private-docs row below: assert it where it exists,
@@ -430,7 +432,7 @@ test('D4-2 — the deleted display elements are removed from the source, not dis
     ["'x med'", 'the spotlight median multiple'],
     ['legs ago', 'the recency tag'],
     ["'just paid'", 'the recency tag'],
-    ['Σctx', 'the old fleet label — `sum` now'],
+    ['Σctx', 'the old fleet label — `Σ` now'],
     ["'·max '", 'the fleet median/max parenthetical'],
     ["'to-compact '", 'the old wall label'],
   ];
@@ -482,12 +484,12 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.1 (PATCH: rows collapse when silent, and the leading-pad fix)', () => {
+test('D4-5 — SL_VERSION is 6.1.3 (sprint 3 PATCH: three behaviour-affecting pricing fixes, on top of sprint 1\'s 6.1.2)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.1', 'X.Y.Z is 6.1.1 for this change');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.3', 'X.Y.Z is 6.1.3 for this change (sprint 3 spec §0.1 — PATCH, argued against MAJOR: no displayed figure changes meaning)');
 });
 
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
@@ -590,6 +592,26 @@ test('0b — statusline.mjs\'s own Median averages the middle two on an even cou
     'and the odd-count branch must still return the middle member');
 });
 
+// ---- sprint 3 (2026-08-29, spec §D5): the spikes fallback is DELETED, not gated (F7 — row NB-2) --
+test('NB-2 — render-spikes.mjs never derives a $ basis by dividing session cost by a unit sum', () => {
+  // The deleted fallback was `sessionCost / sumUnits` — written for pre-bsl4.0 snapshots that LACKED
+  // the `base` key, and firing on the published-null state instead (resume, no new leg), where it
+  // priced every leg at a fabricated rate (~1.4% of list on the ticket's live case). F7 ruled
+  // delete, not gate: no schema-6 writer emits a snapshot without the key, so the absent-key case
+  // cannot reach this line. The absence is pinned at the source so no rewrite can quietly divide the
+  // session cost by a unit aggregate again. (`agUsd / sessionCost` — division BY the cost — is a
+  // percentage and stays legal; the ban is on cost as the NUMERATOR over units.)
+  const s = codeOnly(src('home/render-spikes.mjs'));
+  const hits = s.split('\n')
+    .map((l, i) => [i + 1, l])
+    .filter(([, l]) => /(?:sessionCost|costUsd)\s*\/\s*\w*[uU]nits\w*/.test(l));
+  assert.deepEqual(hits.map(([n, l]) => `:${n} ${l.trim().slice(0, 90)}`), [],
+    'render-spikes.mjs re-grew a cost/units fallback');
+  // The positive half — the exact replacement the spec pins: the snapshot's own value, or null.
+  assert.match(s, /const base = snap\.base != null \? Number\(snap\.base\) : null;/,
+    'base is snap.base or null, nothing else (spec §D5 exact change)');
+});
+
 // ---- D4: calibration sample rows carry the session model ---------------------------------------
 // Private-repo docs; skipped when absent so this suite stays runnable from a public checkout.
 // The era-v5 file was archived to docs/_superseded/ by the froz5 removal and a fresh live samples
@@ -607,4 +629,41 @@ test('D4 — samples table header + interpret-statusline row template carry a mo
   assert.match(header, /\| model \|/, 'samples header carries a model column');
   const tmpl = readFileSync(command, 'utf8');
   assert.match(tmpl, /\| date \| git \| model \|/, 'interpret-statusline row template carries model');
+});
+
+// ---- N11 (sprint 4 2026-08-29, AE-6): the lone-fat-leg claim is window-scoped wherever it appears --
+// A median's resistance to one fat leg is a per-window-size property, not a law: at the full
+// window of eight the shift is one rank (the gap between two ordinary legs); shorter windows are
+// less protected; with two fat legs in a short window the reported figure can be a fat leg's own
+// price. This row keeps the absolute from creeping back into either chip test file as an unscoped
+// comment or title. Banned needles are assembled by concatenation and positive needles use \s+
+// escapes, so this row's own source satisfies none of them — the pins bite on the S15 rationale.
+test('N11 — the lone-fat-leg absolutes are window-scoped in the two chip test files', () => {
+  // This file ships in the public kit; last8-chip.test.mjs does not — same treatment as S15's
+  // private half: assert it where it exists, skip it where it cannot exist. Never skipped here.
+  const files = {
+    'tests/source-invariants.test.mjs': readFileSync(join(here, 'source-invariants.test.mjs'), 'utf8'),
+  };
+  const l8 = join(here, 'last8-chip.test.mjs');
+  if (existsSync(l8)) files['tests/last8-chip.test.mjs'] = readFileSync(l8, 'utf8');
+  const BANNED = ['cannot' + ' lift', 'does not' + ' lift', 'never' + ' lift',
+    'at most one' + ' position', 'at most one' + ' rank'];
+  const QUALIFIER = /8-leg|N=8|med8|full window/;
+  for (const [rel, text] of Object.entries(files)) {
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      for (const b of BANNED) {
+        if (!line.includes(b)) continue;
+        const scoped = QUALIFIER.test(line) || (i > 0 && QUALIFIER.test(lines[i - 1]));
+        assert.ok(scoped,
+          `${rel}:${i + 1} states the absolute without naming the window it holds for: "${line.trim().slice(0, 90)}"`);
+      }
+    });
+  }
+  // Positive half — the true property must be STATED, not deleted (regex needles: their \s+ escapes
+  // keep this row's own source from satisfying them).
+  const s = files['tests/source-invariants.test.mjs'];
+  assert.match(s, /full\s+8-leg\s+window/, 'the S15 rationale scopes the one-rank claim to the full 8-leg window');
+  assert.match(s, /hold\s+less\s+firmly/, 'the S15 rationale states that shorter windows hold less firmly');
+  assert.match(s, /own\s+size\s+into\s+the\s+figure/, 'the S15 rationale states the two-fat-legs short-window break');
 });

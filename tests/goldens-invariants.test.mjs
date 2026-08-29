@@ -166,8 +166,10 @@ test('B5 — uniform tiers / model-less agents: no chip (regression guard)', () 
 
 // ---- D: model switch ----------------------------------------------------------------------------
 test('D1 — sidecar carries modelSwitch {atLeg: 13, from, to} on a tier change', () => {
+  // Sprint 3 (spec §A1, F2): from/to are the raw TRANSCRIPT model ids either side of the boundary,
+  // always — the display strings the old stamp carried are gone with the stamp.
   const s = sidecar('model-switch');
-  assert.deepEqual(s.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' });
+  assert.deepEqual(s.modelSwitch, { atLeg: 13, from: 'claude-fable-5', to: 'claude-sonnet-5' });
 });
 
 test('D1 — no-switch fixtures carry NO modelSwitch key (golden blast radius stays contained)', () => {
@@ -200,8 +202,8 @@ test('D2 — the model-switch note fires on modelSwitch ALONE, once, with no rat
     assert.ok(!txt.includes('cause=model-switched'), `${f}: the COST_CHAR cause is gone`);
   }
   assert.ok(withSwitch >= 1, `vacuity guard: no fixture carries modelSwitch (found ${withSwitch})`);
-  // The boundary fixture: the note names both models and the leg, and nothing else about it moved.
-  assert.match(facts('model-switch'), /COST_MODELSWITCH_NOTE: the model switched mid-session \(Fable 5 \(1M context\) → Sonnet 5 at leg 13\)/);
+  // The boundary fixture: the note names both transcript ids and the leg (sprint 3 F2 — id-form).
+  assert.match(facts('model-switch'), /COST_MODELSWITCH_NOTE: the model switched mid-session \(claude-fable-5 → claude-sonnet-5 at leg 13\)/);
 });
 
 // ---- E: warm-rewrite tax gloss -------------------------------------------------------------------
@@ -246,9 +248,9 @@ test('H1 — costBaseline is GONE from every golden sidecar (mechanism removed o
 // (same message.id, output_tokens 500 → counts ONCE) + one id-less usage line (150 → still counts,
 // cannot be deduped) + msg B (distinct id, 250), over a 10 s turn (file mtime pinned to the last
 // content timestamp by the harness). (500 + 150 + 250) / 10 = 90 — pre-fix the duplicates made it
-// (1500 + 150 + 250) / 10 = 190. No stdout pin: the session line carrying the tps chip is
-// display-gated off (ShowSessionLine = false, statusline.mjs), so the sidecar `tps` — the single
-// computation site feeding both — is the assertable surface.
+// (1500 + 150 + 250) / 10 = 190. No stdout pin: the session line was deleted in sprint 1 F1
+// (2026-08-29), so `tps` is a sidecar-only fact and the sidecar — the single computation site — is
+// the assertable surface.
 test('I1 — turn-TPS dedups per-content-block duplicate lines: tps == 90, not 190', () => {
   assert.equal(sidecar('tps-dedup').tps, 90);
 });
@@ -279,7 +281,11 @@ test('K1 — legs-tier-mix: a Sonnet opening leg on a Fable main prices at Sonne
   assert.equal(s.agentsUsd, 0);
   assert.equal(s.runStartLeg, 0);
   assert.ok(!('legPricingSuspect' in s), 'healthy session must not trip the tripwire');
-  assert.ok(!('modelSwitch' in s), 'payload model is constant — no switch');
+  // Sprint 3 F1 (spec fork 2): an off-tier OPENING leg is a switch — the sonnet opener distorts the
+  // per-leg $ trend reading exactly as a mid-session switch does, so the caveat fires at leg 2 (the
+  // first fable-served leg). This row used to pin the old display rule ("payload model is constant —
+  // no switch"); the transcript rule replaced it at the bee0f1b freeze.
+  assert.deepEqual(s.modelSwitch, { atLeg: 2, from: 'claude-sonnet-5', to: 'claude-fable-5' });
   const line = stdout('legs-tier-mix');
   for (const cell of ['$0.28', '$0.77', '$0.40', '$0.20']) assert.ok(line.includes(cell), `sparkline cell ${cell}`);
   assert.ok(!line.includes('$0.83'), 'the Fable-dominated blend price must not appear');
@@ -370,7 +376,7 @@ test('K6 — model-switch: every dollar stays exactly where the leg-pricing spri
   near(s.nextLegUsd, 0.23, 1e-9, 'next-leg $'); // 115,000 raw × 2e-6 — the forecast was always raw
   near(s.lastLegUsd, 0.2, 1e-9, 'last-leg $');
   near(s.base, 2e-6, 1e-12, 'base');
-  assert.deepEqual(s.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' }, 'D1 stays');
+  assert.deepEqual(s.modelSwitch, { atLeg: 13, from: 'claude-fable-5', to: 'claude-sonnet-5' }, 'D1 stays (id-form since sprint 3 F2)');
   assert.ok(!('legPricingSuspect' in s));
   const line = stdout('model-switch');
   assert.match(line, /next \$0\.23/);
@@ -509,8 +515,10 @@ test('M1 — schema guard: every golden sidecar is schema 6, carries none of the
       assert.ok(!(k in s), `${f}: removed key ${k} is still in the sidecar — removed, not display-gated off`);
     }
     // legCosts is what the chip, TRAJECTORY and the sparkline all read; it must not have been lost
-    // in the deletion. Present-and-non-empty on every fixture that has a rollup at all.
-    if (withTranscript(f) && s.nLegs != null && Number(s.nLegs) > 0) {
+    // in the deletion. Present-and-non-empty on every fixture that has a rollup AND a cost basis —
+    // a base:null fixture (sprint 3's resume-pending-cold: resume detected, no new leg yet)
+    // legitimately publishes legCosts [] because no leg of that run is priced.
+    if (withTranscript(f) && s.nLegs != null && Number(s.nLegs) > 0 && s.base != null) {
       assert.ok(Array.isArray(s.legCosts) && s.legCosts.length > 0, `${f}: legCosts must survive`);
       withLegs++;
     }
@@ -526,12 +534,13 @@ test('M2 — chip guard: the rendered `last N $x` equals MEDIAN(legCosts tail), 
     if (want) present++; else absent++;
   }
   // ABSENT is the exact pin, and it is pinned rather than PRESENT because it is the number that
-  // survives the corpus growing: 21 fixtures have no legs at all and one (agents-progressive) has a
-  // single leg. Any fixture gaining or losing its chip moves this number, which is the defect this
+  // survives the corpus growing: 21 fixtures have no legs at all, one (agents-progressive) has a
+  // single leg, and one (resume-pending-cold, sprint 3) has legs but no cost basis (base null →
+  // legCosts []). Any fixture gaining or losing its chip moves this number, which is the defect this
   // row exists to catch. PRESENT is derived, so adding a fixture never forces a recount — the
   // Dossier IV sprint added seven, every one of them a copy of a parent with ≥2 banked legs.
-  assert.equal(absent, 22, 'fixtures suppressing the chip (21 with no legs, 1 with a single leg)');
-  assert.equal(present, allFixtures().length - 22, 'every other fixture shows it');
+  assert.equal(absent, 23, 'fixtures suppressing the chip (21 with no legs, 1 single-leg, 1 base:null)');
+  assert.equal(present, allFixtures().length - 23, 'every other fixture shows it');
 });
 
 test('M2b — spike guard: where the window holds a fat leg, the chip is strictly BELOW the window mean', () => {
@@ -614,8 +623,8 @@ test('M4 — sheet/line agreement: COST_RECENT reads `(none)` exactly where the 
     assert.ok(!/averag/i.test(m[1]), `${f}: the recent figure is a median and may not be called an average`);
   }
   // Same pinning choice as M2: the exact number is the ABSENT one, the other is derived.
-  assert.equal(none, 22);
-  assert.equal(valued, allFixtures().length - 22);
+  assert.equal(none, 23);
+  assert.equal(valued, allFixtures().length - 23);
 });
 
 test('M5 — key uniqueness (D7): no `KEY:` label appears twice in any fact sheet', () => {
@@ -644,8 +653,8 @@ test('M7 — label registration (D7): every emittable label is in handover-check
   const KNOWN_GAPS = new Set([
     'HEADLINE_BASIS',     // internal evidence line; the composer is told to relay HEADLINE_DIFF instead
     'COST_AGENTS_TIER',   // a routing tier for the composer's own branching, not a fact to relay
-    'COST_GATES_NOTE',    // GAP: on a sonnet/haiku main the reader is never told the $ gates grade leniently
-    'WARM_REWRITE_TAX',   // GAP: the warm-rewrite tax has no bullet at all, so it never reaches the reader
+    // COST_GATES_NOTE and WARM_REWRITE_TAX left this list on 2026-08-29 (sprint 1 N5): both are now
+    // registered in handover-check.md, and the second assertion below is what forced the shrink.
   ]);
   const md = readFileSync(join(here, '..', 'home', 'commands', 'handover-check.md'), 'utf8');
   const emitted = new Set();

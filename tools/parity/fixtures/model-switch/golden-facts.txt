@@ -8,7 +8,7 @@ COST_RECENT: `med8` (median of the last 8 legs) `$1.00`/leg; session mean `$0.94
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
-COST_MODELSWITCH_NOTE: the model switched mid-session (Fable 5 (1M context) → Sonnet 5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
+COST_MODELSWITCH_NOTE: the model switched mid-session (claude-fable-5 → claude-sonnet-5 at leg 13) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
 COLD: your recent resume re-cached the context for `$0.34` — already paid; you are warm again now
 WARM_REWRITE_TAX: (none)

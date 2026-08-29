@@ -126,8 +126,9 @@ test('F1 — post-kill state (intact stats + orphaned temp): stats survive, rend
 
 // AMENDED by spec §A9.1 (2026-08-22). `openingLegs` is NO LONGER dropped: the deployed 5.x build
 // lists it in its own requiredFields, so a file without it reads as structurally unusable and gets
-// RESET — wiping sessionName / modelSwitch / modelSwitchedAtLeg / runStartLeg, none of which a later
-// render can re-derive. It is now a declared, empty, never-filled compatibility placeholder. The
+// RESET — wiping sessionName and runStartLeg, which no later render can re-derive. (The model-switch
+// stamp used to be on that list; sprint 3, spec §A1, retired it to a per-render derivation, so a
+// reset can no longer destroy it.) It is now a declared, empty, never-filled compatibility placeholder. The
 // constant therefore SPLITS rather than shrinking: dropping the key from a list and asserting nothing
 // in its place is the vacuous pass this suite exists to prevent.
 const DROPPED_KEYS = ['firstLegColdStart', 'openingLegCw'];
@@ -143,10 +144,10 @@ const PREV_BUILD_REQUIRED_FIELDS = ['lastByteOffset', 'nLegs', 'sumUnits', 'sumO
   'lastMsgId', 'lastInputBilled', 'lastOutputTokens', 'lastSeenCost',
   'lastLegCost', 'perLegUnits', 'perLegOwnUnits', 'perLegModels', 'openingLegs'];
 
-function legLine(i, ts) {
+function legLine(i, ts, model) {
   return JSON.stringify({
     type: 'assistant', timestamp: ts,
-    message: { id: `rp${i}`, usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 5000 } },
+    message: { id: `rp${i}`, ...(model ? { model } : {}), usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 5000 } },
   }) + '\n';
 }
 
@@ -165,13 +166,16 @@ function projectionRig() {
   };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statsPath = join(cwd, '.claude', 'statusline-stats', sid + '.json');
-  const write = (nLegs) => {
+  // `legModel` (i → transcript model id, 0-based) drives a TRANSCRIPT-side model change — since
+  // sprint 3 (spec §A1) the switch is a transcript fact, so a display-label change alone stamps
+  // nothing. Omitted → legs carry no model field (unmapped), as before.
+  const write = (nLegs, legModel) => {
     let t = '';
-    for (let i = 0; i < nLegs; i++) t += legLine(i, `2026-06-18T02:${String(20 + i).padStart(2, '0')}:00.000Z`);
+    for (let i = 0; i < nLegs; i++) t += legLine(i, `2026-06-18T02:${String(20 + i).padStart(2, '0')}:00.000Z`, legModel ? legModel(i) : undefined);
     writeFileSync(transcript, t, 'utf8');
   };
-  const render = ({ legs, cost, model = 'Fable 5 (1M context)', sessionName = null }) => {
-    write(legs);
+  const render = ({ legs, cost, model = 'Fable 5 (1M context)', sessionName = null, legModel = null }) => {
+    write(legs, legModel);
     const stdin = {
       model: { display_name: model },
       version: '2.1.142', effort: { level: 'high' },
@@ -242,7 +246,8 @@ test('RP-1/RP-2/RP-4 — retired + unknown keys drop, the compat key stays and s
 test('RP-7 — AE-32: what this build writes still satisfies the PREVIOUS build\'s required-key list', () => {
   // THE BLOCKING DEFECT THIS ROW EXISTS FOR. The 5.x reader's whole compatibility check is
   // `for (const f of requiredFields) if (!(f in r)) needsReset = true` — and on reset it calls
-  // freshRollup(), destroying sessionName, modelSwitch, modelSwitchedAtLeg and runStartLeg. Measured
+  // freshRollup(), destroying sessionName and runStartLeg (and, before sprint 3 retired the
+  // persisted stamp, the model-switch keys). Measured
   // on real session 30ec7e5a: a 6.x render followed by a 5.x render silently threw the session away,
   // with every mechanics test green, because Florian's two config homes install by separate manual
   // commands and share one per-project stats file.
@@ -274,14 +279,17 @@ test('RP-7 — AE-32: what this build writes still satisfies the PREVIOUS build\
     const fresh = rigB.stats();
     assert.deepEqual(missing(fresh), [],
       `a file THIS build created is unreadable to the previous one (missing: ${missing(fresh).join(', ')})`);
-    // And the survival is real, not just structural: the four values a reset would destroy.
+    // And the survival is real, not just structural: the values a reset would destroy. (Sprint 3,
+    // spec §0.3: the stats file no longer carries modelSwitch / modelSwitchedAtLeg — neither key is
+    // in ANY build's requiredFields, so their absence resets no reader; the switch itself now rides
+    // in the sidecar, derived per render, and RP-3 asserts that path.)
     rigB.render({ legs: 4, cost: 0.40, model: 'Sonnet 5', sessionName: 'born-on-six' });
     const s = rigB.stats();
     assert.equal(s.sessionName, 'born-on-six');
-    assert.ok(s.modelSwitch, 'modelSwitch is stamped only at the render where the switch happened');
-    assert.equal(typeof s.modelSwitchedAtLeg, 'number');
     assert.equal(typeof s.runStartLeg, 'number');
-    assert.deepEqual(missing(s), [], 'still readable by the previous build after the switch render');
+    assert.ok(!('modelSwitch' in s) && !('modelSwitchedAtLeg' in s),
+      'the retired stamp keys are never written back');
+    assert.deepEqual(missing(s), [], 'still readable by the previous build after the label-change render');
   } finally { rigB.cleanup(); }
 });
 
@@ -299,35 +307,40 @@ test('RP-8 — nothing ever FILLS the compat key: it is a placeholder, not a rev
   } finally { rig.cleanup(); }
 });
 
-test('RP-3 — the three optional keys survive, asserted through to what a READER sees', () => {
-  // Spec §A3 names losing this trio as the one way the projection can do harm, so it is pinned end to
-  // end rather than as a key-presence check. `sessionName` is the dangerous one: the status line reads
-  // the name from the payload every render, so a dropped key is INVISIBLE there — it only surfaces in
-  // the fact sheet's FOREIGN block, which names THIS session by reading the stats file.
+test('RP-3 — sessionName survives the projection; the switch is DERIVED to the sidecar, never persisted', () => {
+  // AMENDED sprint 3 (2026-08-29, spec §A1/§0.3). The stats file no longer carries modelSwitch /
+  // modelSwitchedAtLeg — the switch is re-derived every render from the banked perLegModels
+  // (modelSwitchReport), so the projection cannot lose it and a stale display-based stamp cannot
+  // survive in an old file. What the projection can still lose is `sessionName` (the status line
+  // reads the name from the payload every render, so a dropped key is INVISIBLE there — it only
+  // surfaces in the fact sheet's FOREIGN block, which names THIS session by reading the stats file).
+  // The switch is driven through the TRANSCRIPT: leg 4 is served by another price tier.
+  const FAB = 'claude-fable-5', SON = 'claude-sonnet-5';
   const rig = projectionRig();
   try {
-    rig.render({ legs: 3, cost: 0.30, sessionName: 'ledger-rework' });
-    // A mid-session PRICE-TIER change stamps modelSwitch / modelSwitchedAtLeg.
-    rig.render({ legs: 4, cost: 0.40, model: 'Sonnet 5', sessionName: 'ledger-rework' });
+    rig.render({ legs: 3, cost: 0.30, sessionName: 'ledger-rework', legModel: () => FAB });
+    const legModel = (i) => (i >= 3 ? SON : FAB);
+    rig.render({ legs: 4, cost: 0.40, model: 'Sonnet 5', sessionName: 'ledger-rework', legModel });
     const s = rig.stats();
     assert.equal(s.sessionName, 'ledger-rework', 'sessionName survives the projection');
-    assert.equal(typeof s.modelSwitchedAtLeg, 'number', 'modelSwitchedAtLeg survives');
-    assert.ok(s.modelSwitch && s.modelSwitch.to === 'Sonnet 5', 'modelSwitch survives with its value');
+    assert.ok(!('modelSwitch' in s) && !('modelSwitchedAtLeg' in s),
+      'the stats file carries no stamp keys — the switch is derived per render (spec §0.3)');
 
-    // One more render, so the projection has run again over a file that already carries all three.
-    rig.render({ legs: 5, cost: 0.50, model: 'Sonnet 5', sessionName: 'ledger-rework' });
+    // One more render, so the projection has run again — the DERIVED key must still reach a reader.
+    rig.render({ legs: 5, cost: 0.50, model: 'Sonnet 5', sessionName: 'ledger-rework', legModel });
     const s2 = rig.stats();
     assert.equal(s2.sessionName, 'ledger-rework');
-    assert.ok(s2.modelSwitch, 'modelSwitch still there after a second projection pass');
+    assert.ok(!('modelSwitch' in s2), 'still no stats stamp after a second projection pass');
 
     const facts = join(here, '..', 'home', 'handover-facts.mjs');
     const sidecarPath = join(rig.cwd, '.claude', 'statusline-last.json');
 
-    // READER-VISIBLE #1 — the model-switch caveat still reaches the sheet. The sidecar carries
-    // modelSwitch straight from the rollup, so a projection that dropped the key would silently
-    // delete the caveat on the NEXT render, with nothing on screen to say it had gone.
+    // READER-VISIBLE #1 — the model-switch caveat still reaches the sheet, now by DERIVATION: the
+    // sidecar key is computed from the banked perLegModels at every render, with the transcript ids
+    // as its strings (F2), so no projection pass can delete the caveat.
     const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8'));
-    assert.ok(sidecar.modelSwitch, 'the rollup key reached the sidecar');
+    assert.deepEqual(sidecar.modelSwitch, { atLeg: 4, from: FAB, to: SON },
+      'the derived key reached the sidecar with the transcript ids');
     const sheet = execFileSync(process.execPath, [facts], { env: rig.env, maxBuffer: 32 * 1024 * 1024 }).toString('utf8');
     assert.match(sheet, /^COST_MODELSWITCH_NOTE: the model switched mid-session/m,
       'the caveat still appears in the sheet');
@@ -356,8 +369,8 @@ test('RP-5 — the key list is DERIVED from freshRollup(), never a hand-maintain
   const src = readFileSync(engine, 'utf8');
   assert.match(src, /const ROLLUP_KEYS = new Set\(\[\.\.\.Object\.keys\(freshRollup\(\)\), \.\.\.ROLLUP_OPTIONAL_KEYS,\s*\.\.\.Object\.keys\(ROLLUP_COMPAT_KEYS\)\]\)/,
     'ROLLUP_KEYS is derived from the fresh shape plus the two DECLARED lists — never a hand-written key set');
-  assert.match(src, /const ROLLUP_OPTIONAL_KEYS = \['modelSwitchedAtLeg', 'modelSwitch', 'sessionName'\]/,
-    'and the optional list is exactly the three keys assigned outside that shape');
+  assert.match(src, /const ROLLUP_OPTIONAL_KEYS = \['sessionName'\]/,
+    'and the optional list is exactly the ONE key assigned outside that shape — the switch stamp retired to a per-render derivation (sprint 3, spec §A1)');
   // §A9.1: only the two genuinely-retired keys are banned from the source now. `openingLegs` is the
   // one declared exception, and its shape is pinned POSITIVELY by source-invariants S4 — not left as
   // a hole in this loop.

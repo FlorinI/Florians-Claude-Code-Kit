@@ -4,6 +4,11 @@
   "renderedAt": 1781750000,
   "transcriptPath": "transcript.jsonl",
   "model": "Fable 5 (1M context)",
+  "modelSwitch": {
+    "atLeg": 2,
+    "from": "claude-sonnet-5",
+    "to": "claude-fable-5"
+  },
   "windowSize": 1000000,
   "effort": "high",
   "ctxTokens": 107000,

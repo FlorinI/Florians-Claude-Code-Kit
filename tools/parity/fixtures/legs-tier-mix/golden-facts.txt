@@ -8,6 +8,7 @@ COST_RECENT: `med4` (median of the last 4 legs) `$0.34`/leg; session mean `$0.41
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_MODELSWITCH_NOTE: the model switched mid-session (claude-sonnet-5 → claude-fable-5 at leg 2) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COLD: the ~1-hour cache is starting to cool (`~40 min` of warmth left) — a send keeps it warm
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `107k`, green band — sharp

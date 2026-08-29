@@ -1,0 +1,5 @@
+from session cold-tie · (no repo) · rendered 0s ago
+top 3 cost spikes  ·  of 3 legs  ·  session-$ basis  ·  leg 1 = oldest  ·  ❆ = counted in the cold tax
+❆  Leg 2  ·  $2.05  ·  re-cached ~100k (cold — cache expired after idle; $1.90 avoidable cold tax)
+   Leg 1  ·  $1.25  ·  opened cold ~60k (whole context written, no cached prefix)
+   Leg 3  ·  $0.16  ·  re-read deep context (~160k)

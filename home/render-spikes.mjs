@@ -75,31 +75,37 @@ if (legs.length === 0 || sumUnits <= 0) done('(no priced legs in the transcript 
 
 // --- session cost — total_cost_usd IS session-local (CC resets it on /clear since 2.1.211) ---
 let sessionCost = Number(snap.costUsd);
-// Use the status line's DE-INFLATED base (this run's sessionCost / (main + sub-agent EFFECTIVE units))
-// from the sidecar, so the spike $ and the avoidable cold tax reconcile with the status line. Fall back
-// to the local main-only base only for pre-bsl4.0.0.0 snapshots that lack the field.
-const base = snap.base != null ? Number(snap.base) : (sessionCost > 0 ? sessionCost / sumUnits : 0);
+// The status line's DE-INFLATED base (this run's sessionCost / (main + sub-agent EFFECTIVE units))
+// from the sidecar, so the spike $ and the avoidable cold tax reconcile with the status line.
+// null means "this run has no cost basis yet" (the state between a detected resume and the first
+// new leg) — the panel then prints no dollars: a header note states it once, rows keep their glyph,
+// index and driver (ranking by effective units and the WHY are base-independent).
+const base = snap.base != null ? Number(snap.base) : null;
 
 // --- top-N by cost (effective units are monotonic with $, base flat), oldest=leg 1 ---
 const topLegs = [...legs].sort((a, b) => b.eff - a.eff).slice(0, Top);
 let anyCold = false;
 const bodyLines = [];
 for (const l of topLegs) {
-  const usd = '$' + fmtN(l.eff * base, 2);
   let drv = getDriver(l);
   const isCold = testColdLeg(l);
   if (isCold) {
     anyCold = true;
-    // Surface THIS leg's avoidable premium INSIDE the driver text: (write units − read-equivalent) × base —
-    // the exact quantity the status line's cumulative tax sums.
-    const legTax = (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base;
-    if (drv.endsWith(')')) drv = drv.slice(0, -1) + ('; $' + fmtN(legTax, 2) + ' avoidable cold tax)');
+    if (base != null) {
+      // Surface THIS leg's avoidable premium INSIDE the driver text: (write units − read-equivalent) × base —
+      // the exact quantity the status line's cumulative tax sums. With no basis the clause is elided.
+      const legTax = (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base;
+      if (drv.endsWith(')')) drv = drv.slice(0, -1) + ('; $' + fmtN(legTax, 2) + ' avoidable cold tax)');
+    }
   }
   const mark = isCold ? `${snow} ` : '  ';
-  bodyLines.push(`${mark} Leg ${l.idx}  ${MID}  ${usd}  ${MID}  ${drv}`);
+  bodyLines.push(base != null
+    ? `${mark} Leg ${l.idx}  ${MID}  $${fmtN(l.eff * base, 2)}  ${MID}  ${drv}`
+    : `${mark} Leg ${l.idx}  ${MID}  ${drv}`);
 }
 const legend = anyCold ? `  ${MID}  ${snow} = counted in the cold tax` : '';
-const outLines = [stamp, `top ${topLegs.length} cost spikes  ${MID}  of ${legs.length} legs  ${MID}  session-$ basis  ${MID}  leg 1 = oldest${legend}`];
+const basisSeg = base != null ? 'session-$ basis' : 'no $ basis yet (no leg priced in this run)';
+const outLines = [stamp, `top ${topLegs.length} cost spikes  ${MID}  of ${legs.length} legs  ${MID}  ${basisSeg}  ${MID}  leg 1 = oldest${legend}`];
 outLines.push(...bodyLines);
 
 // --- sub-agent spikes (aggregate per agent) -------------------------------------------------------

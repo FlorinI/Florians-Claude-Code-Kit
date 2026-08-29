@@ -1,0 +1,4 @@
+{
+  "note": "the D5 no-basis state (ticket 2026-08-16-spikes-fallback-base-after-resume): 12 opus legs banked in seed/ at cost 6 (one COLD leg mid-history — gap past the 5m TTL plus a big rewrite), stdin cost 0.5 -> detected resume with no new leg, runStartLeg == nLegs == 12, sidecar base null — the spikes panel and the fact sheet must price nothing and say so",
+  "nowEpoch": 1781868000
+}

@@ -8,10 +8,12 @@ import { execFileSync } from 'node:child_process';
 import { servingTierReport } from '../home/leg-driver.mjs';
 import { rowByLabel } from './_grid.mjs';
 
-// model-switch (rows D1/D3) — stateful two-render tests of the per-session rollup's model
-// stamping. A "switch" is a price-TIER change (ModelTier(old) !== ModelTier(new)); id-form vs
-// display-form of the same model and same-tier upgrades must NOT stamp. Runs the real engine as
-// a subprocess against kept temp dirs (the parity harness can't do multi-render statefulness).
+// model-switch (rows D1/D3, rewritten by sprint 3 spec §A1) — stateful two-render tests of the
+// TRANSCRIPT-derived model switch. A "switch" is a price-TIER change between two banked legs'
+// served models (modelSwitchReport, derived per render — never persisted); a display-label change
+// alone stamps nothing, and id-form vs display-form of the same model / same-tier upgrades never
+// stamp. Runs the real engine as a subprocess against kept temp dirs (the parity harness can't do
+// multi-render statefulness).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const engine = join(here, '..', 'home', 'statusline.mjs');
@@ -72,24 +74,34 @@ function twoRenders(first, second) {
   });
 }
 
-test('D1 — fable→sonnet at leg 13 stamps mainModel + modelSwitchedAtLeg + sidecar modelSwitch', () => {
-  const { r1, r2 } = twoRenders('Fable 5 (1M context)', 'Sonnet 5');
-  assert.equal(r1.stats.mainModel, 'Fable 5 (1M context)');
-  assert.equal(r1.stats.nLegs, 12);
-  assert.ok(!('modelSwitch' in r1.stats), 'no stamp before the switch');
-  assert.ok(!('modelSwitch' in r1.sidecar), 'no sidecar key before the switch');
-
-  assert.equal(r2.stats.nLegs, 13);
-  assert.equal(r2.stats.mainModel, 'Sonnet 5');
-  assert.equal(r2.stats.modelSwitchedAtLeg, 13);
-  assert.deepEqual(r2.stats.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' });
-  assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' });
+test('D1 — a fable→sonnet TRANSCRIPT boundary at leg 13: id-form sidecar key, and NO stats-file stamp', () => {
+  // Rewritten by sprint 3 (spec §A1): the switch is driven through the served models — legs 1–12
+  // fable, leg 13 sonnet — not through the label (which also moves here, as a real /model switch
+  // would). The stats file carries neither stamp key at any render: the key is derived.
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 12; i++) lines += leg(i, 'claude-fable-5');
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r1 = render(dirs, 'Fable 5 (1M context)', 1.8);
+    assert.equal(r1.stats.mainModel, 'Fable 5 (1M context)');
+    assert.equal(r1.stats.nLegs, 12);
+    assert.ok(!('modelSwitch' in r1.stats) && !('modelSwitchedAtLeg' in r1.stats), 'the stats file never carries the stamp');
+    assert.ok(!('modelSwitch' in r1.sidecar), 'no sidecar key before the boundary');
+    appendFileSync(dirs.transcript, leg(13, 'claude-sonnet-5'), 'utf8');
+    const r2 = render(dirs, 'Sonnet 5', 2.0);
+    assert.equal(r2.stats.nLegs, 13);
+    assert.equal(r2.stats.mainModel, 'Sonnet 5');
+    assert.ok(!('modelSwitch' in r2.stats) && !('modelSwitchedAtLeg' in r2.stats), 'derived per render, never persisted (spec §0.3)');
+    assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 13, from: 'claude-fable-5', to: 'claude-sonnet-5' });
+  });
 });
 
-test('D3 — id-form vs display-form of the SAME model: no switch stamped', () => {
+test('D3 — id-form vs display-form of the SAME label, unmapped transcript: no switch stamped', () => {
+  // Negative case kept from the display era: the transcript's `claude-x` legs are unmapped, so no
+  // tier ever serves — and a label-string change (id-form → display-form) is not a switch.
   const { r2 } = twoRenders('claude-fable-5', 'Fable 5 (1M context)');
   assert.equal(r2.stats.mainModel, 'Fable 5 (1M context)');
-  assert.ok(!('modelSwitch' in r2.stats), 'raw-string change must not stamp');
+  assert.ok(!('modelSwitch' in r2.stats), 'the stats file never carries the stamp');
   assert.equal(r2.stats.modelSwitchedAtLeg, undefined);
   assert.ok(!('modelSwitch' in r2.sidecar), 'sidecar must not carry modelSwitch');
 });
@@ -99,6 +111,62 @@ test('D3 — same-tier upgrade (Opus 4.7 → Opus 4.8): no switch stamped', () =
   assert.equal(r2.stats.mainModel, 'Opus 4.8 (1M context)');
   assert.ok(!('modelSwitch' in r2.stats));
   assert.ok(!('modelSwitch' in r2.sidecar));
+});
+
+test('D5 — AE-1: a switch the label never showed (constant label, transcript opus → fable at leg 4) is reported', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 5; i++) lines += leg(i, i <= 3 ? 'claude-opus-5' : 'claude-fable-5');
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r = render(dirs, 'Fable 5 (1M context)', 1.0);
+    assert.deepEqual(r.sidecar.modelSwitch, { atLeg: 4, from: 'claude-opus-5', to: 'claude-fable-5' });
+    assert.ok(!('modelSwitch' in r.stats) && !('modelSwitchedAtLeg' in r.stats), 'no stats stamp');
+    assert.ok(!('tierMismatch' in r.sidecar), 'the labelled tier did serve → no label caveat');
+    const sheet = factsSheet(dirs);
+    const notes = sheet.split('\n').filter((l) => l.startsWith('COST_MODELSWITCH_NOTE:'));
+    assert.equal(notes.length, 1, `exactly one note: ${JSON.stringify(notes)}`);
+    assert.match(notes[0], /claude-opus-5 → claude-fable-5 at leg 4/);
+    assert.ok(!sheet.includes('COST_TIER_NOTE'), 'and no tier caveat');
+  });
+});
+
+test('D6 — AE-2: one model throughout under its own label → no key, no note', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 8; i++) lines += leg(i, 'claude-opus-5');
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r = render(dirs, 'Opus 5', 1.2);
+    assert.ok(!('modelSwitch' in r.sidecar), 'no key');
+    assert.ok(!('modelSwitch' in r.stats) && !('modelSwitchedAtLeg' in r.stats), 'no stats stamp');
+    assert.ok(!factsSheet(dirs).includes('COST_MODELSWITCH_NOTE'), 'no note');
+  });
+});
+
+test('D8 — unmapped or empty served models never open or close a boundary', () => {
+  // `''` and `claude-x` legs interleave a constant opus tier: a mapped→unmapped→same-mapped-tier
+  // sequence is not a boundary, so a stray unmapped line can neither invent nor hide a switch.
+  // (`<synthetic>` lines are dropped before banking — isSyntheticLeg — so they never reach this.)
+  withDirs((dirs) => {
+    const models = ['claude-opus-5', '', 'claude-x', 'claude-opus-5', 'claude-x', 'claude-opus-5'];
+    writeFileSync(dirs.transcript, models.map((m, i) => leg(i + 1, m)).join(''), 'utf8');
+    const r = render(dirs, 'Opus 5', 1.0);
+    assert.ok(!('modelSwitch' in r.sidecar), 'no key on a constant mapped tier with unmapped noise');
+    assert.ok(!('modelSwitch' in r.stats) && !('modelSwitchedAtLeg' in r.stats), 'no stats stamp');
+  });
+});
+
+test('D9 — incremental: a boundary banked in a LATER render is derived from the banked array', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 3; i++) lines += leg(i, 'claude-opus-5');
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r1 = render(dirs, 'Opus 5', 0.6);
+    assert.ok(!('modelSwitch' in r1.sidecar), 'no key before the boundary lands');
+    appendFileSync(dirs.transcript, leg(4, 'claude-fable-5') + leg(5, 'claude-fable-5'), 'utf8');
+    const r2 = render(dirs, 'Opus 5', 1.4);
+    assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 4, from: 'claude-opus-5', to: 'claude-fable-5' },
+      'the derivation reads the banked perLegModels, so it survives the render boundary and the projection pass');
+  });
 });
 
 // ═══ froz5-truth sprint (2026-08-21): the tier-mismatch REPORT, end to end (T1 rows S10–S16) ═══════
@@ -242,7 +310,8 @@ test('S14 — the switch note is UNCONDITIONAL on modelSwitch, with no ratio/cur
   // branches deleted with the baseline. One note now fires on `modelSwitch` alone.
   const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
   const ms = JSON.parse(readFileSync(join(FIX, 'model-switch', 'golden-sidecar.json'), 'utf8'));
-  assert.deepEqual(ms.modelSwitch, { atLeg: 13, from: 'Fable 5 (1M context)', to: 'Sonnet 5' });
+  // Sprint 3 (spec §A1, F2): from/to are the TRANSCRIPT model ids, always — the golden re-worded.
+  assert.deepEqual(ms.modelSwitch, { atLeg: 13, from: 'claude-fable-5', to: 'claude-sonnet-5' });
   const f = readFileSync(join(FIX, 'model-switch', 'golden-facts.txt'), 'utf8');
   assert.ok(!/cause=model-switched/.test(f), 'the COST_CHAR cause is gone');
   assert.ok(!f.includes('COST_FROZ5'), 'and so is the ratio line');
@@ -251,14 +320,18 @@ test('S14 — the switch note is UNCONDITIONAL on modelSwitch, with no ratio/cur
   assert.ok(!f.includes('the multiple and the depth curve still hold'), 'the ratio/curve tail is cut');
   // A LIVE switch on a session too short to have had a full-strength anchor: under the old gate this
   // was the branch where the switch preempted the depth cause. It must now produce the same single
-  // note, because the note no longer depends on anchor strength at all.
+  // note, because the note no longer depends on anchor strength at all. (Sprint 3, spec §A1: the
+  // switch is a TRANSCRIPT fact, so it is driven through a served-model change — leg 4 lands on
+  // sonnet — not through the display label, which stamps nothing on its own.)
   withModel(OPUS, (dirs) => {
     const T = table({ nWarm: 2 }).slice(0, 3);
     writeFileSync(dirs.transcript, T.map((t, i) => tokenLeg(i + 1, OPUS, t)).join(''), 'utf8');
     const cost = T.reduce((a, t) => a + unitsOf(t), 0) * 5e-6;
     render(dirs, 'Opus 5', cost);
+    appendFileSync(dirs.transcript, tokenLeg(4, SONNET, [2, 1000, 50000, 200]), 'utf8');
     const r2 = render(dirs, 'Sonnet 5', cost + 0.01);
-    assert.ok(r2.sidecar.modelSwitch, 'the switch stamped on a 3-leg session');
+    assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 4, from: OPUS, to: SONNET },
+      'the switch stamped on a 4-leg session, from the transcript ids');
     assert.ok(!('freshLegN' in r2.sidecar), 'and there is no anchor-strength key left to gate on');
   });
 });
@@ -301,5 +374,102 @@ test('S16 — BOTH transpositions render the chip: label dearer than served, and
   withModel(SONNET, (dirs) => {
     const r = renderTable(dirs, table(), 'Haiku 4.5', 1);
     assert.deepEqual(r.sidecar.tierMismatch, { display: 'haiku', serving: 'sonnet' });
+  });
+});
+
+// ═══ sprint 3 (2026-08-29, spec §A1): the switch is a TRANSCRIPT fact — QA rows D7/D10–D12 ═════════
+// The stamp is derived per render from the banked per-leg models (modelSwitchReport); a display-label
+// change alone neither adds nor removes it, and the stats file no longer carries it (spec §0.3 — the
+// stats-file half of row D5 is asserted inside D7 here). The D1/D3 rewrite and rows D5/D6/D8/D9 are
+// the developer's; these four are QA's.
+
+// Runs the fact sheet against the state the render above just wrote, the way a /handover-check would.
+function factsSheet(dirs) {
+  const env = {
+    ...process.env, USERPROFILE: dirs.home, HOME: dirs.home,
+    CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CLAUDE_PROJECT_DIR: dirs.cwd,
+    TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW + 5),
+  };
+  delete env.CLAUDE_CODE_SESSION_ID;   // else the FOREIGN ownership guard fires
+  return execFileSync(process.execPath, [join(here, '..', 'home', 'handover-facts.mjs')],
+    { env, maxBuffer: 32 * 1024 * 1024 }).toString('utf8');
+}
+
+test('D7 — label and transcript switch at the SAME render: one key with the transcript ids, one note, no stats-file stamp', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 12; i++) lines += leg(i, FABLE);
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r1 = render(dirs, 'Fable 5 (1M context)', 1.8);
+    assert.ok(!('modelSwitch' in r1.sidecar), 'no key before the boundary');
+    assert.ok(!('modelSwitch' in r1.stats) && !('modelSwitchedAtLeg' in r1.stats),
+      'the stats file never carries the stamp keys (spec §0.3 — the D5 stats-file half)');
+    appendFileSync(dirs.transcript, leg(13, SONNET), 'utf8');
+    const r2 = render(dirs, 'Sonnet 5', 2.0);
+    assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 13, from: FABLE, to: SONNET },
+      'from/to are the transcript ids, ALWAYS (F2) — even at the render where the label moved too');
+    assert.ok(!('modelSwitch' in r2.stats) && !('modelSwitchedAtLeg' in r2.stats),
+      'the stats file carries neither key at the switch render either');
+    const sheet = factsSheet(dirs);
+    const notes = sheet.split('\n').filter((l) => l.startsWith('COST_MODELSWITCH_NOTE:'));
+    assert.equal(notes.length, 1, `one note, never two (label + transcript is ONE switch): ${JSON.stringify(notes)}`);
+    assert.match(notes[0], /claude-fable-5 → claude-sonnet-5 at leg 13/, 'named with the ids and the leg');
+    assert.equal(sheet.split('switched mid-session').length - 1, 1, 'the fact is stated once in the whole sheet');
+  });
+});
+
+test('D10 — F3: detection spans the WHOLE banked history — a boundary before runStartLeg still stamps', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 12; i++) lines += leg(i, i <= 3 ? OPUS : FABLE);
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r0 = render(dirs, 'Fable 5 (1M context)', 6.0);
+    assert.deepEqual(r0.sidecar.modelSwitch, { atLeg: 4, from: OPUS, to: FABLE }, 'stamped in run 0');
+    // The resume (cost drops to 0) opens run 1 at leg 12 — the only boundary (leg 4) lies BEFORE it.
+    // Pre-resume legs' dollars are still displayed at this run's rate, so their comparability matters.
+    const r1 = render(dirs, 'Fable 5 (1M context)', 0);
+    assert.equal(r1.stats.runIdx, 1, 'the resume was detected (P1 shape)');
+    assert.equal(r1.stats.runStartLeg, 12);
+    assert.deepEqual(r1.sidecar.modelSwitch, { atLeg: 4, from: OPUS, to: FABLE },
+      'the pre-resume boundary still stamps — detection is not gated on runStartLeg');
+    appendFileSync(dirs.transcript, leg(13, FABLE), 'utf8');
+    const r2 = render(dirs, 'Fable 5 (1M context)', 0.5);
+    assert.deepEqual(r2.sidecar.modelSwitch, { atLeg: 4, from: OPUS, to: FABLE }, 'and survives the first new leg');
+  });
+});
+
+test('D11 — F4: two boundaries in the transcript → ONE key naming the LATEST', () => {
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 12; i++) lines += leg(i, i <= 4 ? OPUS : (i <= 8 ? FABLE : OPUS));
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    const r = render(dirs, 'Opus 5', 6.0);
+    assert.deepEqual(r.sidecar.modelSwitch, { atLeg: 9, from: FABLE, to: OPUS },
+      'opus → fable → opus names the return boundary, not the first');
+    const sheet = factsSheet(dirs);
+    const notes = sheet.split('\n').filter((l) => l.startsWith('COST_MODELSWITCH_NOTE:'));
+    assert.equal(notes.length, 1, `one note on a double switch: ${JSON.stringify(notes)}`);
+    assert.match(notes[0], /at leg 9/);
+    assert.ok(!notes[0].includes('leg 5'), 'the earlier boundary is not the one named');
+  });
+});
+
+test('D12 — the false-stamp regression, live: a display flip over a constant-tier transcript stamps NOTHING', () => {
+  // The `flags-many` shape. Before this sprint the display-based detector stamped Opus → Sonnet here,
+  // and the fixture's own COST_TIER_NOTE contradicted it ("every leg in this run was served by
+  // `opus`"). Driven live rather than read off the re-blessed golden, so it cannot come back silently.
+  withDirs((dirs) => {
+    let lines = '';
+    for (let i = 1; i <= 12; i++) lines += leg(i, OPUS);
+    writeFileSync(dirs.transcript, lines, 'utf8');
+    render(dirs, 'Opus 5', 1.8);
+    appendFileSync(dirs.transcript, leg(13, OPUS), 'utf8');
+    const r2 = render(dirs, 'Sonnet 5', 2.0);
+    assert.ok(!('modelSwitch' in r2.sidecar), 'no sidecar key — no leg was ever served at another tier');
+    assert.ok(!('modelSwitch' in r2.stats) && !('modelSwitchedAtLeg' in r2.stats), 'no stats stamp');
+    const sheet = factsSheet(dirs);
+    assert.ok(!sheet.includes('COST_MODELSWITCH_NOTE'), 'no switch note');
+    assert.match(sheet, /COST_TIER_NOTE:.*served by `opus`/,
+      'the LABEL caveat still fires — sonnet never served; that is the different fact, and the only one');
   });
 });

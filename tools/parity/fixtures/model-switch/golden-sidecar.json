@@ -6,8 +6,8 @@
   "model": "Sonnet 5",
   "modelSwitch": {
     "atLeg": 13,
-    "from": "Fable 5 (1M context)",
-    "to": "Sonnet 5"
+    "from": "claude-fable-5",
+    "to": "claude-sonnet-5"
   },
   "windowSize": 1000000,
   "effort": "high",

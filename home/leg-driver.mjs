@@ -82,6 +82,34 @@ export function servingTierReport(legModels, runStartLeg, displayName) {
   return { display, serving }; // ties break to the higher TIER_BASE — chip TEXT only, never a number
 }
 
+// Transcript-tier MODEL SWITCH — "the served model's price tier changed between two legs of the
+// transcript". The sibling of servingTierReport: that one answers the LABEL question (does the
+// display name match what served?); this one marks the per-leg-DOLLAR comparability break a real
+// tier change causes. Derived per render from the banked per-leg models — never persisted — so a
+// stats-file reset cannot destroy it and a stale display-based stamp cannot survive in old files.
+// Walks the WHOLE banked history (pre-resume legs' dollars are still displayed at this run's rate,
+// so their comparability matters). Each mapped-tier leg is compared against the PREVIOUS mapped
+// leg; unmapped models ('' / 'other') never open or close a boundary. An off-tier opening leg IS a
+// switch — the detector cannot distinguish "CC routed the opener" from "the user started elsewhere
+// and switched", and both distort the trend reading identically. On more than one boundary the
+// LATEST wins (one note, last-wins — today's semantics).
+// Returns { atLeg, from, to } — atLeg = 1-based index of the first banked leg served at the new
+// tier; from/to = the raw transcript model strings either side of that boundary — or null.
+export function modelSwitchReport(legModels) {
+  const arr = Array.isArray(legModels) ? legModels : [];
+  let prevIdx = -1, prevTier = null;
+  let latest = null;
+  for (let i = 0; i < arr.length; i++) {
+    const t = ModelTier(arr[i]);
+    if (t === null || TIER_BASE[t] == null) continue; // unmapped never opens or closes a boundary
+    if (prevTier !== null && t !== prevTier) {
+      latest = { atLeg: i + 1, from: String(arr[prevIdx]), to: String(arr[i]) };
+    }
+    prevTier = t; prevIdx = i;
+  }
+  return latest;
+}
+
 // Dominant cost DRIVER = the largest WEIGHTED term. Mirrors Get-Driver in leg-driver.ps1.
 export function getDriver(l) {
   // Term order matches the pwsh hashtable's practical argmax; weighted ties are measure-zero

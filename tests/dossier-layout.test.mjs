@@ -21,7 +21,8 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const FIX = join(here, '..', 'tools', 'parity', 'fixtures');
 
-const dirs = () => readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory());
+// A fixture is a directory that contains stdin.json — a stray dir (scratch, editor leftovers) is not one.
+const dirs = () => readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory() && existsSync(join(FIX, n, 'stdin.json')));
 // Blessed only — a fixture's goldens appear when it is blessed, and the bless is a separate reviewed
 // act at the quality gate. `fixture inventory` below is the row that fails while any dir is unblessed.
 const blessed = () => dirs().filter((n) => existsSync(join(FIX, n, 'golden.txt')));
@@ -473,27 +474,22 @@ test('33 — a model name past its budget truncates at 29 code points plus an el
   assert.match(value, /effort \S+/, `the effort field still renders: ${value}`);
 });
 
-test('15 — a calm quota half is drawn entirely in the chrome gray, never green (A5, spec §7.3)', () => {
-  const GREEN = '38;5;40';       // the retired rung-0 colour
+test('15 — a below-floor quota half is never green (AE-1 as re-frozen at e1c6db5)', () => {
+  // Sprint 1 N19, re-frozen 2026-08-29 (commit e1c6db5, Florian's ruling): only BELOW the verdict
+  // floor is the gauge neutral-and-never-green. The second half this row used to carry ("rung 0
+  // must render 240, not green", Dossier IV §7.3) is superseded by that ruling and DELETED — rung 0
+  // at/above the floor now renders ANSI-32 green, pinned by sprint1-status.test.mjs row 35b.
+  const GREENS = ['38;5;40', '\x1b[32m'];   // the retired Dossier-IV rung-0 colour + the new rung-0 green
   for (const f of blessed()) {
     for (const win of ['five_hour', 'seven_day']) {
       const r = regimeOf(f, win);
       if (r !== 'calm-bare' && r !== 'calm-projecting' && r !== 'absent') continue;
       const rowsRaw = rawRows(f);
       const half = win === 'five_hour' ? halves(rowsRaw[2]).left : (halves(rowsRaw[2]).right ?? '');
-      assert.ok(!half.includes(GREEN),
-        `${f}/${win}: a calm window renders green — these rows render always now, so green on calm would make calm the loudest thing on screen (spec §7.3)`);
-    }
-  }
-  // And rung 0 AT or above the floor is gray too, which is the same ruling one step up.
-  for (const f of blessed()) {
-    for (const win of ['five_hour', 'seven_day']) {
-      if (regimeOf(f, win) !== 'verdict') continue;
-      const { gauge } = quotaHalf(f, win);
-      if (!gauge.includes('you can keep this pace')) continue;
-      const rowsRaw = rawRows(f);
-      const half = win === 'five_hour' ? halves(rowsRaw[2]).left : (halves(rowsRaw[2]).right ?? '');
-      assert.ok(!half.includes(GREEN), `${f}/${win}: rung 0 must render 240, not green (spec §7.3)`);
+      for (const g of GREENS) {
+        assert.ok(!half.includes(g),
+          `${f}/${win}: a below-floor window renders green (${JSON.stringify(g)}) — under 50% consumed there is no verdict, so green here would make silence the loudest thing on screen`);
+      }
     }
   }
 });
@@ -796,7 +792,8 @@ test('27 — every deleted element is absent from every golden (A16)', () => {
     [/x med\b/, 'the spotlight median multiple'],
     [/\(med [\d.]+[kM]?·max/, 'the fleet median/max parenthetical'],
     [/\(\d+\)\s*$/m, 'the parenthesised trend leg count'],
-    [/\bΣctx\b/, 'the old fleet Σctx label (now `sum`)'],
+    [/\bΣctx\b/, 'the old fleet Σctx label (now `Σ`)'],
+    [/\bsum\b/, 'the fleet sum label (now `Σ`, sprint 1 N20)'],
   ];
   for (const f of blessed()) {
     const p = plain(f);

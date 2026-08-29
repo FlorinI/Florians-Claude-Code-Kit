@@ -21,7 +21,8 @@
 // Title/name = [<title-prefix>] <identity name | repo name | folder leaf>@<branch> [<title-suffix>].
 //
 // Launcher-owned flags (self-consumed — never forwarded to claude, never seen by the prompt scan):
-//   --config-dir <path>    run claude against another config home (CLAUDE_CONFIG_DIR, child env only)
+//   --config-dir <path>    run claude against another config home (CLAUDE_CONFIG_DIR in the child env;
+//                          deleted from the child env when the flag is absent — every launch owns it)
 //   --title-prefix <text>  prepend to the title   --title-suffix <text>  append to the title
 //   --no-vscode            force the VS Code co-launch (and tiling) off regardless of CC_VSCODE
 //   --print-title / --print-tabcolor   the shell-function seams (see below)
@@ -43,7 +44,8 @@ const loc = process.cwd();
 // given as the last element is ignored and still stripped.
 //
 //   --config-dir <path>    launch claude against a different config home (CLAUDE_CONFIG_DIR in the
-//                          SPAWNED CHILD's env only). `~/` or `~\` expands; the result is absolute.
+//                          SPAWNED CHILD's env only; without the flag the child gets NO such variable,
+//                          whatever the shell carries). `~/` or `~\` expands; the result is absolute.
 //   --title-prefix <text>  prepended to the computed title, one space separator
 //   --title-suffix <text>  appended to the computed title, one space separator
 //   --no-vscode            force the VS Code co-launch (and hence tiling) off, whatever CC_VSCODE says
@@ -160,16 +162,19 @@ if (rgb) {
 // restores it on resume when `--name` is absent — but passing `--name` overwrites the restored name,
 // destroying any `: <topic>` suffix the user had set via /rename. So on a resume-shaped argv the
 // launcher stays out of the way and pushes no `--name`. Matched on the flag NAME, so `--resume <id>`
-// and `--resume=<id>` both count. Deliberately excluded: `--session-id` (names a NEW session),
-// `--cloud` (a bare description creates a new session), `--fork-session` (never appears without
-// `--resume`/`--continue`, so it is covered transitively).
+// and `--resume=<id>` both count. Deliberately excluded: `--session-id` (names a NEW session) and
+// `--cloud` (a bare description creates a new session).
+// `--fork-session` OVERRIDES the resume shape: a fork is a NEW session that starts from the parent's
+// history, so it gets a fresh `--name` — otherwise it inherits the parent's stored name verbatim and
+// the fleet tray shows two identical rows it cannot tell apart.
 const RESUME_FLAGS = new Set(['-r', '--resume', '-c', '--continue', '--from-pr', '--teleport']);
-const isResume = flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')[0]));
+const isFork = flags.rest.includes('--fork-session');
+const isResume = !isFork && flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')[0]));
 
 const cli = [];
 if (idModel) cli.push('--model', idModel);
 if (idEffort) cli.push('--effort', idEffort);
-if (title && !isResume) cli.push('--name', title);   // fresh launch only — a resume keeps its own name
+if (title && !isResume) cli.push('--name', title);   // fresh launch (a fork included) — a resume keeps its own name
 const userArgs = flags.rest;                     // the launcher's own flags never reach claude
 cli.push(...userArgs);
 
@@ -177,32 +182,55 @@ cli.push(...userArgs);
 // prompt of their own. Flags (and their values, per `claude --help`) are not a prompt, so `cc --chrome`
 // still self-colors but `cc "do X"` is left untouched. Unknown flags are treated as boolean — a
 // mis-read only skips the /color, never clobbers a real prompt.
+//
+// The three flag tables below mirror `claude --help` of Claude Code 2.1.251 (`<value>` flags, `<x...>`
+// variadic flags, `[value]` optional flags); a test pins them against the checked-in help text.
 const VALUE_FLAGS = new Set([
-  '--add-dir', '--agent', '--agents', '--allowed-tools', '--append-system-prompt', '--betas',
-  '--debug-file', '--disallowed-tools', '--effort', '--fallback-model', '--file', '--input-format',
-  '--json-schema', '--max-budget-usd', '--mcp-config', '--model', '--name', '--output-format',
-  '--permission-mode', '--plugin-dir', '--plugin-url', '--remote-control-session-name-prefix',
-  '--session-id', '--setting-sources', '--settings', '--system-prompt', '--tools',
+  '--agent', '--agents', '--append-system-prompt', '--autocompact', '--debug-file', '--effort',
+  '--environment', '--fallback-model', '--input-format', '--json-schema', '--max-budget-usd', '--model',
+  '-n', '--name', '--output-format', '--permission-mode', '--plugin-dir', '--plugin-url',
+  '--remote-control-session-name-prefix', '--session-id', '--setting-sources', '--settings',
+  '--system-prompt',
 ]);
-// Flags whose value is OPTIONAL (`--flag [value]` in `claude --help`, Claude Code 2.1.233). Commander
-// gives such a flag the next argv token as its value iff one follows and it does not start with '-'.
-// So a bare `cc --resume` (= "open the picker") must NOT get "/color …" appended — claude would read
-// it as the session id. When the last user arg is one of these written bare, the picker is the
-// user's prompt and nothing is injected; `cc -r <id>` still gets /color as the prompt.
+// Variadic flags (`--flag <x...>`): commander keeps taking argv tokens as list items until one starts
+// with '-'. So the scan consumes every following non-flag token — and when the argv ENDS inside such
+// a list, nothing is injected: "/color …" would become one more list item.
+const VARIADIC_FLAGS = new Set([
+  '--add-dir', '--allowed-tools', '--allowedTools', '--betas', '--disallowed-tools', '--disallowedTools',
+  '--file', '--mcp-config', '--tools',
+]);
+// Flags whose value is OPTIONAL (`--flag [value]` in `claude --help`). Commander gives such a flag the
+// next argv token as its value iff one follows and it does not start with '-'. So a bare `cc --resume`
+// (= "open the picker") must NOT get "/color …" appended — claude would read it as the session id.
+// When the last user arg is one of these written bare, the picker is the user's prompt and nothing is
+// injected; `cc -r <id>` still gets /color as the prompt.
 const OPTIONAL_VALUE_FLAGS = new Set([
   '--cloud', '-d', '--debug', '--from-pr', '--prompt-suggestions', '--remote-control',
   '-r', '--resume', '--teleport', '-w', '--worktree',
 ]);
+// Optional-value flags whose consumed value IS the user's prompt: `--cloud "a description"` creates a
+// cloud session from that description, so nothing may be appended after it. (`-r <id>` is a session
+// id, not a prompt, and still self-colors.)
+const PROMPT_VALUE_FLAGS = new Set(['--cloud']);
 let userHasPrompt = false;
+let lastGroupVariadic = false;
 for (let i = 0; i < userArgs.length; i++) {
   const a = userArgs[i];
   if (a.startsWith('-')) {
     const name = a.split('=')[0];
     const bare = !a.includes('=');
-    if (VALUE_FLAGS.has(name) && bare) i++;               // consume the flag's value
+    lastGroupVariadic = false;                            // any flag closes an open variadic list
+    if (VARIADIC_FLAGS.has(name) && bare) {
+      while (userArgs[i + 1] !== undefined && !userArgs[i + 1].startsWith('-')) i++;  // consume the list
+      lastGroupVariadic = true;
+    }
+    else if (VALUE_FLAGS.has(name) && bare) i++;          // consume the flag's value
     else if (OPTIONAL_VALUE_FLAGS.has(name) && bare) {
       const next = userArgs[i + 1];
-      if (next !== undefined && !next.startsWith('-')) i++;  // commander: next non-flag token = value
+      if (next !== undefined && !next.startsWith('-')) {  // commander: next non-flag token = value
+        i++;
+        if (PROMPT_VALUE_FLAGS.has(name)) { userHasPrompt = true; break; }
+      }
     }
     continue;
   }
@@ -211,7 +239,7 @@ for (let i = 0; i < userArgs.length; i++) {
 const lastArg = userArgs[userArgs.length - 1];
 const lastIsBareOptional = lastArg !== undefined && lastArg.startsWith('-')
   && !lastArg.includes('=') && OPTIONAL_VALUE_FLAGS.has(lastArg);
-if (!userHasPrompt && !lastIsBareOptional && idColor) cli.push(`/color ${idColor}`);
+if (!userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor) cli.push(`/color ${idColor}`);
 
 // --- resolve + launch claude ------------------------------------------------------------------
 // CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are
@@ -244,16 +272,28 @@ function shimVector(exe, args) {
 const claudeArgv = shimVector(claudePath, cli);
 
 // The env delta scopes to the CLAUDE CHILD only — not the VS Code co-launch, not the tiler, and not
-// this launcher's own identity/git reads (those are per-project, not per-config-home). Three inputs,
-// each independent: `--config-dir` → CLAUDE_CONFIG_DIR; the title markers → CC_TITLE_PREFIX /
-// CC_TITLE_SUFFIX, exported so in-session title composition (the /identity rename lines) can
-// reproduce the full marked title. null when none apply — the delta is never the inherited env.
-const envDelta = {};
+// this launcher's own identity/git reads (those are per-project, not per-config-home). Two inputs:
+// `--config-dir` → CLAUDE_CONFIG_DIR, set only when the flag was given; and the title markers →
+// CC_TITLE_PREFIX / CC_TITLE_SUFFIX, exported so in-session title composition (the /identity rename
+// lines) can reproduce the full marked title.
+//
+// EVERY launch is authoritative over the two markers: both keys are ALWAYS written, empty when the
+// flag was absent. A marker must not outlive the launch that asked for it, and it can arrive without
+// one — a shell descended from a marked session carries the variables to whatever runs next. Writing
+// '' unconditionally makes a plain `cc` clear them, so it can never inherit another launch's marker.
+// Unconditional by design: keying off the ambient env would make the launcher behave differently
+// depending on the shell it runs in (test suites included). The delta is still the DELTA ONLY, never
+// the inherited env — `CC_TITLE_PREFIX: ''` names a key this launch sets and leaks nothing.
+//
+// CLAUDE_CONFIG_DIR is owned the same way, with one difference: without `--config-dir` the child must
+// see NO such variable — an empty string would survive the chain as a defined (empty) config home —
+// so it is DELETED from the child env, unconditionally, never keyed on the ambient value. A bare `cc`
+// typed in a shell descended from a second-home launch therefore runs on the primary home, as its
+// title says. The deletion is not part of envDelta: the delta names keys this launch WRITES.
+const envDelta = { CC_TITLE_PREFIX: flags.titlePrefix, CC_TITLE_SUFFIX: flags.titleSuffix };
 if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
-if (flags.titlePrefix) envDelta.CC_TITLE_PREFIX = flags.titlePrefix;
-if (flags.titleSuffix) envDelta.CC_TITLE_SUFFIX = flags.titleSuffix;
-const childEnvDelta = Object.keys(envDelta).length ? envDelta : null;
-const childEnv = childEnvDelta ? { ...process.env, ...childEnvDelta } : process.env;
+const childEnv = { ...process.env, ...envDelta };
+if (!flags.configDir) delete childEnv.CLAUDE_CONFIG_DIR;
 
 // --- VS Code co-launch (env-gated; default off) -------------------------------------------------
 // CC_VSCODE truthy → open VS Code on this project, detached, before claude launches. Exactly one
@@ -441,8 +481,9 @@ if (EnvTruthy(process.env.CC_LAUNCH_DRYRUN)) {
     },
     vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true } },
     // envDelta is the DELTA ONLY — never the inherited environment, so a dry-run captured in a CI
-    // log can't spill anything. null when the launch adds nothing to the child's env.
-    claude: { argv: claudeArgv, envDelta: childEnvDelta },
+    // log can't spill anything. Always carries both title markers (empty when the flag was absent —
+    // every launch is authoritative over them); CLAUDE_CONFIG_DIR only when --config-dir was given.
+    claude: { argv: claudeArgv, envDelta },
     tile: {
       enabled: tilePlan.enabled, reason: tilePlan.reason, side: tilePlan.side, ratio: tilePlan.ratio,
       captureMethod: tilePlan.captureMethod, snapGroup: tilePlan.snapGroup, titleMatch: tilePlan.titleMatch,

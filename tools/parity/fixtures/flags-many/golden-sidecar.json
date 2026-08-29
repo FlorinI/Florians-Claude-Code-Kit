@@ -4,11 +4,6 @@
   "renderedAt": 1781750000,
   "transcriptPath": "transcript.jsonl",
   "model": "Sonnet 5",
-  "modelSwitch": {
-    "atLeg": 13,
-    "from": "Opus 5",
-    "to": "Sonnet 5"
-  },
   "tierMismatch": {
     "display": "sonnet",
     "serving": "opus"

@@ -8,7 +8,7 @@ Convene a **two-party dialogue**: this session and one other agent discuss a top
 
 The rules both parties follow live in the protocol doc; this skill creates the per-use dialogue file, emits the other party's launch prompt, and then plays **Party A** in this very session.
 
-Protocol doc (canonical rules): `~/.claude/dialogue-protocol.md` — resolve `~` via `$env:USERPROFILE` (Windows) or `$HOME`. Read it before Step 4; you don't need to copy it.
+Protocol doc (canonical rules): `<config home>/dialogue-protocol.md`, where the config home is `$env:CLAUDE_CONFIG_DIR` when it is set, else `$env:USERPROFILE\.claude` (`$HOME/.claude` off Windows), so a session running from a second config home reads its own deployed copy. Read it before Step 4; you don't need to copy it.
 
 ## Step 1 — gather the blanks
 
@@ -34,7 +34,7 @@ If the file already exists and is non-empty, **stop and warn** rather than overw
 
 ## Step 3 — emit ONE launch prompt for the other party
 
-Resolve the absolute protocol path (`<PROTOCOL_PATH>` = the deployed `~/.claude/dialogue-protocol.md`) and the absolute dialogue-file path (`<DIALOGUE_FILE>`). Build the **universal, assume-nothing launch prompt** for Party B by filling §8 of the protocol — the canonical template — with these values. It must be self-contained: an agent with no Claude Code skills, memory, or conventions can act on it using only the prompt plus the two files it names. **Display the full prompt to the user in a fenced copy-paste block — this is required; never copy it silently to the clipboard only.** Then *also* copy it to the clipboard for convenience:
+Resolve the absolute protocol path (`<PROTOCOL_PATH>` = the deployed `<config home>/dialogue-protocol.md`) and the absolute dialogue-file path (`<DIALOGUE_FILE>`). Build the **universal, assume-nothing launch prompt** for Party B by filling §8 of the protocol — the canonical template — with these values. It must be self-contained: an agent with no Claude Code skills, memory, or conventions can act on it using only the prompt plus the two files it names. **Display the full prompt to the user in a fenced copy-paste block — this is required; never copy it silently to the clipboard only.** Then *also* copy it to the clipboard for convenience:
 
 ```powershell
 Set-Clipboard -Value '<PARTY-B-LAUNCH-PROMPT>'

@@ -6,7 +6,7 @@
 // (~/.claude/claude-launch.mjs) serves every project — invoked via a tiny `cc` shell function the
 // installer adds to your shell profile ($PROFILE on Windows, ~/.zshrc or ~/.bashrc on macOS/Linux).
 //
-// Reads <cwd>/.claude/session-identity.json:
+// Reads <cwd>/.desk/session-identity.json:
 //   name   -> session name/title via `--name <name>@<branch>` on a FRESH launch; omitted when the
 //             user's argv is resume-shaped, so Claude Code restores that session's own stored name.
 //             Falls back through three tiers: identity name -> repo name (origin slug, else git
@@ -77,8 +77,13 @@ function parseLauncherFlags(argv) {
 const flags = parseLauncherFlags(process.argv.slice(2));
 
 // --- identity ---------------------------------------------------------------------------------
+// <cwd>/.desk/ is the home; the .claude/ read is the LEGACY fallback for a repo whose file hasn't
+// moved yet. Drop it once every config home has installed the move.
 let id = {};
-try { id = JSON.parse(readFileSync(join(loc, '.claude', 'session-identity.json'), 'utf8')) || {}; } catch {}
+for (const dir of ['.desk', '.claude']) {
+  try { id = JSON.parse(readFileSync(join(loc, dir, 'session-identity.json'), 'utf8')) || {}; } catch {}
+  if (Object.keys(id).length) break;
+}
 const idName = typeof id.name === 'string' ? id.name.trim() : '';
 const idColor = typeof id.color === 'string' ? id.color.trim() : '';
 const idModel = typeof id.model === 'string' ? id.model.trim() : '';

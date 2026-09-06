@@ -118,7 +118,11 @@ Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons
 
 Then add a **slug** naming what the handover is *about*: 2–4 kebab-case words drawn from the semantics of the H payload — `sprint-chain-flight`, `cold-tax-recal`, `handover-file-naming` — never a generic filler like `session`, `work`, or `misc`. A handover usually has one dominant topic; when the payload genuinely splits across two or three unrelated topics, join their slugs with commas and no spaces (`sprint-chain-flight,inbox-triage`). Lowercase ASCII letters, digits, hyphens, and those separating commas only.
 
-Write to `<cwd>/.claude/handovers/<timestamp>-<slug>.md`. Create the `.claude/handovers/` directory if it doesn't exist.
+Write to `<cwd>/.desk/handovers/<timestamp>-<slug>.md`. Create the `.desk/handovers/` directory if it doesn't exist.
+
+**Scaffold `.desk/.gitignore` when it is missing** — one line, `handovers/*.consumed.md`, plus a comment saying consumed notes are spent and only unconsumed ones belong in the repo. Only unconsumed handovers live in the repo; a consumed one is a note some session already loaded. The rule sits *inside* `.desk/` rather than in the repo's root `.gitignore` because `.desk/` is this env's own directory — so it needs no entry in a file the project owns, no per-machine git config, and it survives a fresh clone. Never add a `.desk` rule to the repo's root `.gitignore`.
+
+`.desk/` is the project's own store for what this env persists — the handover notes and `session-identity.json`. It sits outside `.claude/`, which repos routinely blanket-ignore, so a handover written here is visible to git by default and can travel to another machine. Whether and when to commit it is the user's call: never offer to commit, and never nudge. A repo that still has notes under the old `.claude/handovers/` is still picked up at session start; new ones go to `.desk/`.
 
 The timestamp stays the leading component so the files still sort chronologically by name (which is how session pickup finds the most recent one); the slug is what makes a directory listing readable months later.
 

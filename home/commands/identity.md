@@ -1,12 +1,12 @@
 ---
-description: View or update this project's session identity (name/color/model/effort) in .claude/session-identity.json — the file the `cc` launcher reads to name and color each session — then echo paste-ready /rename, /color, /model, /effort lines for the live session.
+description: View or update this project's session identity (name/color/model/effort) in .desk/session-identity.json — the file the `cc` launcher reads to name and color each session — then echo paste-ready /rename, /color, /model, /effort lines for the live session.
 argument-hint: "[show] | name <text> | color <name> | model <id> | effort <level>"
 ---
 
 # /identity
 
 Manage the **remembered** session identity for this project — the `name` / `color` / `model` /
-`effort` stored in `<project>/.claude/session-identity.json`. The **`cc` launcher**
+`effort` stored in `<project>/.desk/session-identity.json`. The **`cc` launcher**
 (`~/.claude/claude-launch.mjs`) reads this file at launch to title and color the terminal tab and to
 apply per-project `--model` / `--effort`.
 
@@ -45,9 +45,15 @@ If a clause is malformed or you can't tell what to change, ask one short questio
 
 ## Procedure
 
-1. **Resolve the target file:** `.claude/session-identity.json` under the project root
+1. **Resolve the target file:** `.desk/session-identity.json` under the project root
    (`$CLAUDE_PROJECT_DIR` if set, else the current working directory) — the same file the `cc`
    launcher reads. Use your file tools (Read / Write / Edit); it's plain JSON, no shell required.
+
+   Earlier versions kept this file at `.claude/session-identity.json`. If `.desk/session-identity.json`
+   is absent and that one exists, read it, write the result to `.desk/`, delete the old file, and say
+   in one line that the file moved. `.desk/` is this kit's own store and no gitignore convention
+   claims it, so the file stays visible to git; `.claude/` is routinely blanket-ignored, and a `!`
+   negation cannot re-include a file under a directory git has pruned. Never write the old path.
 2. **Read current state.** If the file exists, parse it. If it doesn't and the request is `show`/empty,
    say so and stop.
 3. **Route:**
@@ -59,8 +65,10 @@ If a clause is malformed or you can't tell what to change, ask one short questio
    (forward-compat — the schema may grow). Validate `effort` as above; accept `model` verbatim. A
    `<field> none`/`unset`/empty clause **removes** that key.
 5. **Write back** pretty-printed, 2-space indent, UTF-8 without BOM, trailing newline — matching the
-   existing file's shape. Create `.claude/` if missing. Confirm in one line what each changed value is
-   now (old → new).
+   existing file's shape. Create `.desk/` if missing — and when creating it, scaffold
+   `.desk/.gitignore` with the single line `handovers/*.consumed.md`, so consumed handover notes stay
+   out of the repo while unconsumed ones travel with it. Confirm in one line what each changed value
+   is now (old → new).
 6. **Echo the live-apply paste-lines.** For each field that is set, print the exact command
    on its own line in a fenced block:
 
@@ -156,5 +164,5 @@ On "Leave unset": write nothing for `name`.
 - Keep `color` to one the built-in `/color` accepts: **red, blue, green, yellow, purple, orange,
   pink, cyan**. If the user passes something off (a hex code, a sentence, an unknown name), flag it
   before writing rather than persisting a value `/color` will reject.
-- This command does not commit anything. Whether `session-identity.json` is tracked or git-ignored is
-  a separate, per-project decision.
+- This command does not commit anything, and never asks you to. The file lives in `.desk/` rather
+  than `.claude/` so it stays visible to git without a fight; when to commit it is your call.

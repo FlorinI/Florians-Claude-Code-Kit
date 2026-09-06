@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 // G2 VALUE_FLAGS / VARIADIC_FLAGS vs the installed `claude --help` 2.1.251.
 //
 // Spec: .claude/plans/260829-sprint1-status-launcher-spec.md
-// Acceptance examples (frozen at [G1], commit 87b16ef): AE-13 … AE-15, AE-18 … AE-21.
+// Acceptance examples (frozen at [G1], commit d094872): AE-13 … AE-15, AE-18 … AE-21.
 // Test plan rows: L21–L24, R9–R11, C13–C19 (ids continue launcher-vscode / launcher-resume-name).
 //
 // Two seams. The dry-run seam (CC_LAUNCH_DRYRUN=1) prints the plan as one JSON line — `plan.claude.argv`
@@ -43,8 +43,8 @@ function runLauncher({ args = [], identity = IDENT, dryRun = true, env: extraEnv
   const shims = makeShims();
   try {
     if (identity) {
-      mkdirSync(join(proj, '.claude'), { recursive: true });
-      writeFileSync(join(proj, '.claude', 'session-identity.json'), JSON.stringify(identity), 'utf8');
+      mkdirSync(join(proj, '.desk'), { recursive: true });
+      writeFileSync(join(proj, '.desk', 'session-identity.json'), JSON.stringify(identity), 'utf8');
     }
     const env = {
       PATH: shims,
@@ -130,6 +130,17 @@ test('N14 source — the deletion is unconditional, a real `delete`, keyed on th
     assert.ok(!/spawner scrubs/.test(doc), 'the "spawner scrubs CLAUDE_CONFIG_DIR" claim is gone from cc-launcher.md');
   }
   assert.ok(!/scrubs its own vars/.test(s), 'and gone from the launcher comment');
+  // …and gone from the tests too. The claim outlived its deletion once already, in a test-file comment
+  // no row read, so the sweep covers every file in tests/ rather than the launcher and the doc alone.
+  const swept = readdirSync(join(ROOT, 'tests')).filter((f) => f.endsWith('.mjs'));
+  assert.ok(swept.length > 1, 'the sweep actually found test files');
+  for (const f of swept) {
+    // Assertion lines carry the phrase as the thing they forbid — this row's own line included — so
+    // they are dropped before the check. What remains is prose: comments and headers.
+    const prose = readFileSync(join(ROOT, 'tests', f), 'utf8')
+      .split('\n').filter((l) => !l.includes('assert.')).join('\n');
+    assert.ok(!/spawner scrubs|scrubs its own vars/.test(prose), `tests/${f} repeats the deleted new-tab-spawner claim`);
+  }
 });
 
 // ================================================================================================

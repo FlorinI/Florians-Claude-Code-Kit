@@ -31,7 +31,7 @@ function makeShims({ withCode }) {
 // ccVscode: a string sets CC_VSCODE to that value; null leaves it UNSET in the child env.
 // ccVscodeTile: same convention for CC_VSCODE_TILE (the default-on tiling switch).
 // args:     extra argv handed to the launcher (the launcher-owned flags, a user prompt, …).
-// identity: written to <proj>/.claude/session-identity.json so name/color are deterministic.
+// identity: written to <proj>/.desk/session-identity.json so name/color are deterministic.
 // dryRun:   false runs WITHOUT the dry-run seam — for the --print-title / --print-tabcolor
 //           early exits, which return raw text (not JSON) and must fire before any side effect.
 // wtSession: sets WT_SESSION so the Windows-Terminal tab-color escape is non-empty.
@@ -50,8 +50,8 @@ function runLauncher({
   try {
     for (const w of workspaces) writeFileSync(join(proj, w), '{}', 'utf8');
     if (identity) {
-      mkdirSync(join(proj, '.claude'), { recursive: true });
-      writeFileSync(join(proj, '.claude', 'session-identity.json'), JSON.stringify(identity), 'utf8');
+      mkdirSync(join(proj, '.desk'), { recursive: true });
+      writeFileSync(join(proj, '.desk', 'session-identity.json'), JSON.stringify(identity), 'utf8');
     }
     const env = {
       PATH: shims,
@@ -435,9 +435,9 @@ test('L18 — a non-ASCII marker round-trips into the env delta unchanged', () =
   assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph, CC_TITLE_SUFFIX: '' });
 });
 
-// L19/L20 are the regression pair for the inherited-marker bug: Claude Code's new-terminal-tab
-// spawner scrubs its own vars (CLAUDE_CONFIG_DIR included) from the new shell but knows nothing about
-// the private CC_TITLE_* pair, so a tab opened from a marked session hands them to whatever runs next.
+// L19/L20 are the regression pair for the inherited-marker bug: CC_TITLE_PREFIX / CC_TITLE_SUFFIX are
+// ordinary environment variables, so a shell descended from a marked session hands them to whatever
+// runs next. The launcher therefore writes both keys on EVERY launch — empty when no flag was given.
 // Both launch into the SAME pre-marked parent env and differ only in whether title flags were given.
 // The values are the file's generic P / ·s — this file ships in the public kit, so it carries no
 // caller's naming policy; the mechanism is what is under test, not the marker text.

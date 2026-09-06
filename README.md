@@ -81,7 +81,7 @@ See [docs/status-line.md](docs/status-line.md) and [docs/handover.md](docs/hando
 
 The installer also adds a tiny **`cc`** shell function (to your PowerShell `$PROFILE` on Windows, or
 `~/.zshrc` / `~/.bashrc` on macOS/Linux). Run `cc` instead of `claude` and it reads a per-project
-`<cwd>/.claude/session-identity.json` to title and color the session before launching:
+`<cwd>/.desk/session-identity.json` to title and color the session before launching:
 
 ```json
 { "name": "my-project", "color": "blue", "model": "", "effort": "" }

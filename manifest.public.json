@@ -9,6 +9,7 @@
     { "source": "home/leg-driver.mjs", "dest": "leg-driver.mjs" },
     { "source": "home/sidecar-path.mjs", "dest": "sidecar-path.mjs" },
     { "source": "home/sanitize-name.mjs", "dest": "sanitize-name.mjs" },
+    { "source": "home/quota-file.mjs", "dest": "quota-file.mjs" },
     { "source": "home/render-legspark.mjs", "dest": "render-legspark.mjs" },
     { "source": "home/render-spikes.mjs", "dest": "render-spikes.mjs" },
     { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },
@@ -41,6 +42,6 @@
   "launcher": {
     "script": "claude-launch.mjs",
     "command": "cc",
-    "comment": "Installs a cross-platform `cc` shell function (PowerShell profile on Windows; ~/.zshrc or ~/.bashrc on macOS/Linux) that runs `node ~/.claude/claude-launch.mjs` — titling/coloring the tab and applying per-project name/model/effort from .claude/session-identity.json."
+    "comment": "Installs a cross-platform `cc` shell function (PowerShell profile on Windows; ~/.zshrc or ~/.bashrc on macOS/Linux) that runs `node ~/.claude/claude-launch.mjs` — titling/coloring the tab and applying per-project name/model/effort from .desk/session-identity.json."
   }
 }

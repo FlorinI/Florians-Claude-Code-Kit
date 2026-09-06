@@ -42,7 +42,7 @@ const FCCK_BLOCK_BODY = `## Session handover pickup (runs first, every session)
 
 Before any other on-session-start behavior, check the working directory for a pending handover:
 
-1. List files in \`<cwd>/.claude/handovers/\` matching \`*.md\` but NOT \`*.consumed.md\`.
+1. List files in \`<cwd>/.desk/handovers/\` matching \`*.md\` but NOT \`*.consumed.md\`.
 2. If one or more exist, pick the most recent by filename (ISO timestamps sort lexicographically).
 3. **Rename the file** to insert \`.consumed\` before \`.md\` — do this BEFORE reading it. That's the consumed marker.
 4. Read the renamed file and use it as orientation for this session.

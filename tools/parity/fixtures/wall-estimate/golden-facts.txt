@@ -14,7 +14,7 @@ QUALITY_LEAD: `300k`, orange band — real degradation on complex full-context r
 QUALITY_SECONDARY: `30%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `175k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
-ACTIVITY: (omit)
+ACTIVITY: the model was generating `2%` of the elapsed wall-clock (this times LLM generation only) — the rest is tool calls and your read/think time in unknown proportion
 TRAJECTORY: mostly flat with spikes, range `$0.36`–`$0.95`
 YOURCALL_POLARITY: -
 YOURCALL_BASIS: quality is in the degradation band and each leg is already pricey — cost is high but flat, not climbing — lean toward handing over

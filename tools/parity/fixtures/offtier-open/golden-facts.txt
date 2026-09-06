@@ -15,7 +15,7 @@ QUALITY_LEAD: `652k`, red band — heavy degradation
 QUALITY_SECONDARY: `65%` fill — at/just past the ~60% cliff
 QUALITY_HEADROOM: past the auto-compact wall by `177k` — compaction is due on the next turn
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
-ACTIVITY: (omit)
+ACTIVITY: the model was generating `0%` of the elapsed wall-clock (this times LLM generation only) — the rest is tool calls and your read/think time in unknown proportion
 TRAJECTORY: climbing, with spikes, range `$0.02`–`$5.81`
 YOURCALL_POLARITY: -
 YOURCALL_BASIS: quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work

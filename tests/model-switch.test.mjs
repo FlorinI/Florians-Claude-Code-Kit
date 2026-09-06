@@ -268,7 +268,7 @@ test('S12 — the fact sheet emits COST_TIER_NOTE exactly once, naming both the 
   const notes = fired.split('\n').filter((l) => l.startsWith('COST_TIER_NOTE:'));
   assert.equal(notes.length, 1, `exactly one note: ${JSON.stringify(notes)}`);
   assert.match(notes[0], /Fable 5 \(1M context\)/, 'names the LABEL');
-  assert.match(notes[0], /served by `opus`/, 'and names the tier that did serve');
+  assert.match(notes[0], /`opus` served the most legs/, 'and names the tier that did serve');
   // It is a label fact only — it must not claim a number changed. D2d (froz5-removal) cut "and the
   // multiple" from the claim, so it now reads "the `$` in this sheet does not depend …".
   assert.match(notes[0], /does not depend on which label is shown/, 'states it gates no number');
@@ -456,8 +456,9 @@ test('D11 — F4: two boundaries in the transcript → ONE key naming the LATEST
 
 test('D12 — the false-stamp regression, live: a display flip over a constant-tier transcript stamps NOTHING', () => {
   // The `flags-many` shape. Before this sprint the display-based detector stamped Opus → Sonnet here,
-  // and the fixture's own COST_TIER_NOTE contradicted it ("every leg in this run was served by
-  // `opus`"). Driven live rather than read off the re-blessed golden, so it cannot come back silently.
+  // which the fixture's own COST_TIER_NOTE contradicted — the label caveat said opus did the serving
+  // while the stamp claimed a switch away from it. Driven live rather than read off the re-blessed
+  // golden, so it cannot come back silently.
   withDirs((dirs) => {
     let lines = '';
     for (let i = 1; i <= 12; i++) lines += leg(i, OPUS);
@@ -469,7 +470,7 @@ test('D12 — the false-stamp regression, live: a display flip over a constant-t
     assert.ok(!('modelSwitch' in r2.stats) && !('modelSwitchedAtLeg' in r2.stats), 'no stats stamp');
     const sheet = factsSheet(dirs);
     assert.ok(!sheet.includes('COST_MODELSWITCH_NOTE'), 'no switch note');
-    assert.match(sheet, /COST_TIER_NOTE:.*served by `opus`/,
+    assert.match(sheet, /COST_TIER_NOTE:.*`opus` served the most legs/,
       'the LABEL caveat still fires — sonnet never served; that is the different fact, and the only one');
   });
 });

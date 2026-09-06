@@ -474,8 +474,8 @@ test('33 — a model name past its budget truncates at 29 code points plus an el
   assert.match(value, /effort \S+/, `the effort field still renders: ${value}`);
 });
 
-test('15 — a below-floor quota half is never green (AE-1 as re-frozen at e1c6db5)', () => {
-  // Sprint 1 N19, re-frozen 2026-08-29 (commit e1c6db5, Florian's ruling): only BELOW the verdict
+test('15 — a below-floor quota half is never green (AE-1 as re-frozen at 26581a3)', () => {
+  // Sprint 1 N19, re-frozen 2026-08-29 (commit 26581a3, Florian's ruling): only BELOW the verdict
   // floor is the gauge neutral-and-never-green. The second half this row used to carry ("rung 0
   // must render 240, not green", Dossier IV §7.3) is superseded by that ruling and DELETED — rung 0
   // at/above the floor now renders ANSI-32 green, pinned by sprint1-status.test.mjs row 35b.
@@ -525,7 +525,11 @@ const CAVEATS = [
   '⚠ $ excludes fast premium (understated)',
   '⚠ $-gates Fable/Opus-calibrated',
   '⚠ serving:',
-  '⚠ tier-mix ',
+  // `⚠ tier-mix ` was the fifth. Retired 2026-09-06 (bsl6.1.8.0): it named a condition with no
+  // consequence — the $ split it sat beside is tier-weighted either way — and with fable sub-agents
+  // it fired on every working session. Not listed here as a must-never-appear string: this list's
+  // vacuity guard requires each entry to fire somewhere in the corpus, and a guard against text
+  // nothing writes would have to be inverted to survive, which guards nothing.
 ];
 const flagsOf = (f) => { const r = rowWithLabel(f, 'flags'); return r ? rightValue(halves(r).right) : ''; };
 
@@ -559,7 +563,7 @@ test('18 — `fast off` and `think on` render nowhere, in any fixture (A11)', ()
   }
 });
 
-test('19 — all five caveat chips live on the flags row, verbatim, and nowhere else (A11, A14)', () => {
+test('19 — all four caveat chips live on the flags row, verbatim, and nowhere else (A11, A14)', () => {
   const seen = new Map(CAVEATS.map((c) => [c, 0]));
   for (const f of blessed()) {
     const rows = plainRows(f);

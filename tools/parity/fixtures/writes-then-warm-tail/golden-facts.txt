@@ -14,7 +14,7 @@ QUALITY_LEAD: `150k`, yellow band — mild weakening on hard multi-fact recall
 QUALITY_SECONDARY: `15%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `325k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
-ACTIVITY: (omit)
+ACTIVITY: the model was generating `22%` of the elapsed wall-clock (this times LLM generation only) — the rest is tool calls and your read/think time in unknown proportion
 TRAJECTORY: mostly flat with spikes, range `$0.05`–`$0.58`
 YOURCALL_POLARITY: +
 YOURCALL_BASIS: getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next

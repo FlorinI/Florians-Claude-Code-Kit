@@ -29,9 +29,9 @@
   "legCosts": [
     0.5
   ],
-  "aliveSec": -5093251,
+  "aliveSec": 1400,
   "apiSec": 300,
-  "activityPct": null,
+  "activityPct": 21.4,
   "linesAdded": 0,
   "linesRemoved": 0,
   "tps": null,

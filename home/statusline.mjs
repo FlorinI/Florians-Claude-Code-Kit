@@ -18,11 +18,12 @@ import {
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
+import { WriteQuotaFile } from './quota-file.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.3.0';
+export const SL_VERSION = '6.1.9.1';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -317,7 +318,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     lastInputBilled: 0, lastOutputTokens: 0, lastSeenCost: 0, lastLegCost: null,
     perLegUnits: [], perLegOwnUnits: [], perLegModels: [], lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0, coldLegs: [],
-    lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], mainModel: '',
+    lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], seenMsgIds: [], mainModel: '',
     runIdx: 0, runStartLeg: 0,
   });
   // The stats file is written as a PROJECTION of the declared shape, never as "the object we read
@@ -373,6 +374,16 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   // next write; this build re-patches [] and, finding it incomplete (length !== nColdLegs), the read
   // side falls back to the raw accumulators — today's figure, never a wrong new one, and no reset.
   if (!('coldLegs' in r)) r.coldLegs = [];
+  // Additive, NEVER required: the message ids this session has already banked, so the incremental
+  // scan dedups GLOBALLY — the same discipline getScannedLegs uses. A fork or history rewrite
+  // re-emits an earlier assistant line verbatim thousands of lines later, and an adjacent-only
+  // dedup banks that re-emission as a second leg: the banked world then disagrees with the scanned
+  // world on the leg count, on every leg index, and — through the re-emitted leg's warm baseline —
+  // on whether the next leg was cold. One id per banked leg, the same order of size as the per-leg
+  // arrays beside it. A lagging home's projection drops the key; this build re-patches [], which
+  // forgets the ids banked so far and degrades to the adjacent-only behaviour — today's answer,
+  // never a wrong new one. Ticket: .inbox/2026-08-29-nonadjacent-dup-msgids-bank-vs-scan-divergence.md
+  if (!Array.isArray(r.seenMsgIds)) r.seenMsgIds = [];
   if (!('lastLegTtlSec' in r)) r.lastLegTtlSec = 0;
   if (!('recentWriteTtls' in r)) r.recentWriteTtls = [];
   if (!('recentLegs' in r)) r.recentLegs = [];
@@ -406,7 +417,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
         // The cold counters and clock reset with the arrays — the rescan below re-derives all of
         // them; leaving them standing would double-count every cold leg the rescan re-walks.
         r.nColdLegs = 0; r.coldWastedUnits = 0; r.lastColdWastedUnits = 0; r.lastColdLegIdx = 0;
-        r.coldLegs = []; r.lastLegTs = null; r.lastLegTtlSec = 0;
+        r.coldLegs = []; r.lastLegTs = null; r.lastLegTtlSec = 0; r.seenMsgIds = [];
         if ('recentWriteTtls' in r) r.recentWriteTtls = [];
         if ('recentLegs' in r) r.recentLegs = [];
         if ('lastWarm' in r) r.lastWarm = 0;
@@ -417,6 +428,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
         if (lastNl >= 0) {
           const processable = newText.substring(0, lastNl + 1);
           const consumedBytes = Buffer.byteLength(processable, 'utf8');
+          const seenIds = new Set(r.seenMsgIds);
           for (let line of processable.split('\n')) {
             line = line.trim();
             if (!line) continue;
@@ -425,10 +437,14 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               const p = JSON.parse(line);
               if (p.type !== 'assistant') continue;
               const msgId = p?.message?.id;
-              // First-wins adjacent dedup — HAZARD: exact for MAIN transcripts (per-block dup lines
-              // carry byte-identical usage); agent transcripts carry PROGRESSIVE output_tokens and
-              // are handled by the max-wins branch in UpdateAgentRollups, never by this scan.
-              if (!msgId || msgId === r.lastMsgId) continue;
+              // First-wins GLOBAL dedup, keyed on every id this session has banked — the identical
+              // discipline getScannedLegs uses, at the identical point in the line (before the usage
+              // and synthetic tests), so the banked world and the scanned world cannot disagree
+              // about what counts as a leg. Exact for MAIN transcripts (per-block dup lines carry
+              // byte-identical usage); agent transcripts carry PROGRESSIVE output_tokens and are
+              // handled by the max-wins branch in UpdateAgentRollups, never by this scan.
+              if (!msgId || seenIds.has(msgId)) continue;
+              seenIds.add(msgId); r.seenMsgIds.push(msgId);
               const u = p?.message?.usage;
               if (!u) continue;
               const inTok = Number(u.input_tokens) || 0;
@@ -447,12 +463,14 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               // line processed no tokens. Skipped AFTER the message-id dedup and BEFORE any state is
               // touched, so it consumes no leg index and no sparkline cell,
               // and — critically — does not reset the cold-cache clock: it refreshed no cache.
-              // `lastMsgId` is deliberately left alone, so its own duplicate lines are dropped by
-              // this same test rather than by the adjacent-dedup slot a real leg needs.
+              // Its id is already in `seenMsgIds` (recorded above, as getScannedLegs records it), so
+              // a multi-line placeholder is dropped once by the dedup and once here, never banked.
               if (isSyntheticLeg({ model: legModel, inT: inTok, cw: cwTok, cr: crTok, out: outTok })) continue;
               r.nLegs = Number(r.nLegs) + 1;
               r.sumUnits = Number(r.sumUnits) + units;
               r.sumOutputTokens = Number(r.sumOutputTokens) + outTok;
+              // Still stamped although `seenMsgIds` now does the deduping: `lastMsgId` is on
+              // requiredFields, and a deployed reader that finds it missing resets the whole file.
               r.lastMsgId = msgId;
               r.lastInputBilled = inTok + cwTok + crTok;
               r.lastOutputTokens = outTok;
@@ -534,15 +552,17 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   // reclaims it. Cutoff 7 days. Stats dirs: .json = expired session state (incl. .agents.json /
   // .nudge.json), .tmp. = an orphaned atomic-write temp — a concurrent writer's in-flight temp is
   // never that old. The current session's own files (every `<sessionId>.` name) are never touched.
-  // Sidecar dirs (<cwd>/.claude and ConfigHome itself) are swept ONLY for the sidecar's own orphaned
-  // temps — never statusline-last.json, never any other file there. Best-effort, never throws.
+  // Sidecar dirs (<cwd>/.claude and ConfigHome itself) are swept ONLY for the orphaned atomic-write
+  // temps of the two state files written there — statusline-last.json and statusline-quota.json —
+  // never the files themselves, never anything else in those dirs. Best-effort, never throws.
   const utcDay = (sec) => Math.floor(sec / 86400);
   const doSweep = !hadPrior || (priorMtimeSec !== null && utcDay(priorMtimeSec) < utcDay(NOW));
   if (doSweep) {
     try {
       const cutoff = NOW - 7 * 86400;
       const stateMatch = (n) => n.endsWith('.json') || n.includes('.tmp.');
-      const sidecarTmpMatch = (n) => n.startsWith('statusline-last.json.tmp.');
+      const sidecarTmpMatch = (n) => n.startsWith('statusline-last.json.tmp.')
+        || n.startsWith('statusline-quota.json.tmp.');
       const keep = { match: stateMatch, keepPrefix: sessionId + '.' };
       sweepStaleFiles(statsDir, cutoff, keep);
       const globalStatsDir = join(ConfigHome, 'statusline-stats');
@@ -626,15 +646,27 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
       walkAgentFiles(subDir, files);
       for (const fp of files) {
         let e = byPath[fp];
-        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', model: '', lastMsgId: '', lastOut: 0, lastLegUnits: 0, run: runIdx }; byPath[fp] = e; }
+        if (!e) { e = { path: fp, offset: 0, units: 0, ownUnits: 0, legs: 0, out: 0, maxCtx: 0, maxLegUnits: 0, label: '', model: '', lastMsgId: '', lastOut: 0, lastLegUnits: 0, seenLegs: {}, run: runIdx }; byPath[fp] = e; }
         if (!('run' in e)) e.run = runIdx;
+        // Per-id leg state, the agent-transcript answer to the main scan's `seenMsgIds` (which cannot
+        // be reused here: a main transcript's duplicate lines are byte-identical, so first-wins is
+        // exact, while an agent's duplicate lines carry PROGRESSIVE output_tokens and must be folded
+        // into the leg they belong to). Keyed on the message id rather than on adjacency, so a
+        // re-emitted line lands back on its own leg however far away the first copy sits. One small
+        // record per agent leg. Additive and never required: an entry written by a build that does
+        // not know the key arrives without it and is re-seeded from the adjacency stamp below, which
+        // keeps a group straddling that boundary resolving as it did before.
+        if (!e.seenLegs || typeof e.seenLegs !== 'object') e.seenLegs = {};
+        if (e.lastMsgId && Object.keys(e.seenLegs).length === 0) {
+          e.seenLegs[e.lastMsgId] = { out: Number(e.lastOut) || 0, units: Number(e.lastLegUnits) || 0 };
+        }
         // Idle skip: an unchanged transcript (same mtime, same size as the banked offset) is not
         // re-read and not label-backfilled. `mtimeMs` is bookkeeping only, never counted/displayed;
         // an entry without it (older cache) takes the full path once and gains it.
         let len = 0, mtimeMs = null; try { const st = statSync(fp); len = st.size; mtimeMs = st.mtimeMs; } catch {}
         if (mtimeMs !== null && e.mtimeMs === mtimeMs && Number(e.offset) === len) continue;
         if (mtimeMs !== null) e.mtimeMs = mtimeMs;
-        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.model = ''; e.lastMsgId = ''; e.lastOut = 0; e.lastLegUnits = 0; e.run = runIdx; }
+        if (Number(e.offset) > len) { e.offset = 0; e.units = 0; e.ownUnits = 0; e.legs = 0; e.out = 0; e.maxCtx = 0; e.maxLegUnits = 0; e.label = ''; e.model = ''; e.lastMsgId = ''; e.lastOut = 0; e.lastLegUnits = 0; e.seenLegs = {}; e.run = runIdx; }
         if (Number(e.offset) < len) {
           try {
             const buf = readFileSync(fp);
@@ -660,21 +692,26 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
                   const u = p?.message?.usage;
                   if (!u) continue;
                   const outTok = Number(u.output_tokens) || 0;
-                  if (mid === e.lastMsgId) {
+                  const seen = e.seenLegs[mid];
+                  if (seen) {
                     // Max-wins on output_tokens: agent transcripts stream one line per content
                     // block with PROGRESSIVE output_tokens (the last line carries the total; the
                     // first is a tiny partial). Input/cache fields are identical across the group,
-                    // so only the output delta is banked. lastOut/lastLegUnits persist per entry, so
-                    // a group straddling two scans still resolves.
-                    const prevOut = Number(e.lastOut) || 0;
+                    // so only the output delta is banked. The record persists per entry, so a group
+                    // straddling two scans still resolves — and so does a line re-emitted by a fork
+                    // or history rewrite, which is not adjacent to its first copy and used to bank a
+                    // whole second leg, inflating the agent's units, output and dollars.
+                    const prevOut = Number(seen.out) || 0;
                     if (outTok > prevOut) {
                       const dU = (outTok - prevOut) * M_OUTPUT;
                       e.units = Number(e.units) + dU;
                       e.ownUnits = Number(e.ownUnits) + dU;
                       e.out = Number(e.out) + (outTok - prevOut);
-                      e.lastOut = outTok;
-                      e.lastLegUnits = Number(e.lastLegUnits) + dU;
-                      if (Number(e.lastLegUnits) > Number(e.maxLegUnits || 0)) e.maxLegUnits = Number(e.lastLegUnits);
+                      seen.out = outTok;
+                      seen.units = Number(seen.units) + dU;
+                      if (Number(seen.units) > Number(e.maxLegUnits || 0)) e.maxLegUnits = Number(seen.units);
+                      // The adjacency stamps stay current for a reader that only knows them.
+                      e.lastMsgId = mid; e.lastOut = seen.out; e.lastLegUnits = seen.units;
                     }
                     continue;
                   }
@@ -692,6 +729,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
                   e.lastMsgId = mid;
                   e.lastOut = outTok;
                   e.lastLegUnits = legU;
+                  e.seenLegs[mid] = { out: outTok, units: legU };
                 } catch {}
               }
               e.offset = Number(e.offset) + consumed;
@@ -712,9 +750,7 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
   const live = cache.agents.filter((a) => a && Number(a.legs) > 0 && (a.run ?? runIdx) === runIdx);
   if (live.length === 0) return null;
   let sumUnits = 0, sumEffUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
-  const tierCounts = {};
   for (const a of live) {
-    const tier = ModelTier(a.model);
     // Tier-weighted effective units (tierWeight — the same function render-spikes uses): an
     // agent's units scale by its tier's headline input price relative to the MAIN tier, so the
     // main-vs-agents $ split of total_cost_usd stays honest when tiers mix. The total itself is
@@ -725,19 +761,18 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
     sumMaxCtx += Number(a.maxCtx);
     if (Number(a.maxCtx) > maxCtx) maxCtx = Number(a.maxCtx);
     if (Number(a.units) > maxUnits) maxUnits = Number(a.units);
-    if (tier) tierCounts[tier] = (tierCounts[tier] || 0) + 1;
   }
   // No median of the per-agent peak contexts: the fleet cluster no longer displays one, and the
   // sidecar never carried it (`agentCtxMax` is the surviving snapshot key). The median over agent
   // peak contexts is guarded directly by tests/agent-ctx-median.test.mjs.
-  return { nAgents: live.length, sumUnits, sumEffUnits, sumLegs, sumOut, sumMaxCtx, maxCtx, maxUnits, tierCounts, cachePath };
+  return { nAgents: live.length, sumUnits, sumEffUnits, sumLegs, sumOut, sumMaxCtx, maxCtx, maxUnits, cachePath };
 }
 function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
 // === Row 1 left: model + effort ============================================
 const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
 // Tier from the RAW payload model (never the 'unknown' render fallback, which would read as a
-// real 'other' tier): absent display_name → null → no tier-mix contribution, weight 1.0.
+// real 'other' tier): absent display_name → null → weight 1.0, the un-weighted baseline.
 const mainTier = ModelTier(d?.model?.display_name);
 const version = d?.version;
 const effort = (d?.effort?.level) ? d.effort.level : '?';
@@ -1064,9 +1099,8 @@ let trendValue = '';
 
 // === Row 5 left: sub-agent fleet ===========================================
 // The median-and-max parenthetical is gone (agentCtxMax survives in the sidecar; per-agent detail
-// lives in /handover-check's agent panel). The tier-mix caveat moves to the flags row.
+// lives in /handover-check's agent panel).
 let agentsValue = '';
-let tierMixChip = null;
 if (agentAgg && Number(agentAgg.nAgents) > 0) {
   const aParts = [];
   aParts.push(String(Number(agentAgg.nAgents)) + DarkGray(' ag'));
@@ -1079,22 +1113,10 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
   aParts.push(fmtN(avgLegs, 1) + DarkGray(' l/ag'));
   agentsValue = aParts.join(DarkGray(' · '));
-  // Tier-mix chip: main named separately from the per-tier agent head-count, so the main+agents
-  // totals can never misread (12 agents vs a 13-entry tier sum). Fires when main + agents span
-  // more than one tier — 'other' (present-but-unmapped model) counts, absent/empty models never
-  // do (pre-change caches with no `model` field can't fire this). The $ split itself is
-  // tier-weighted above; the chip stays as the visibility layer. It renders on the flags row, in
-  // full, breakdown included — that row is the one allowed to run long.
-  const agTiers = agentAgg.tierCounts || {};
-  const agTierNames = Object.keys(agTiers).sort();
-  const distinct = new Set(agTierNames);
-  if (mainTier) distinct.add(mainTier);
-  if (distinct.size > 1) {
-    const agList = agTierNames.map((t) => `${t}×${agTiers[t]}`).join('·');
-    const mainPart = mainTier ? `main·${mainTier}` : null;
-    const agPart = agList ? `ag ${agList}` : null;
-    tierMixChip = DarkGray('⚠ tier-mix ' + [mainPart, agPart].filter(Boolean).join(' + '));
-  }
+  // No tier-mix chip. The main-vs-agents $ split is tier-weighted above and stays honest when
+  // tiers mix, so the chip named a condition without naming a consequence — and with fable
+  // sub-agents the condition is every working session, which made it a permanent fixture rather
+  // than a warning. Retired 2026-09-06 by Florian's ruling; the tier WEIGHTING is untouched.
 }
 
 // === Rows 3 and 4: quota gauge + runway ====================================
@@ -1110,7 +1132,7 @@ const nowQ = NOW;
 //   • The projection has its own floor, QUOTA_PROJECTION_MIN_ELAPSED_PCT, because rho = q/t blows up
 //     as t approaches zero. Below it the row is the gauge and `resets`, nothing else.
 // At and above the verdict floor the beta maths, the >=8h bump, the rung mapping and the at-cap
-// override run exactly as before. Colour rule (Florian's ruling, 2026-08-29): BELOW the floor the
+// override run exactly as before. Colour rule: BELOW the floor the
 // gauge renders NEUTRAL — col === null, no SGR at all, like the repo slug — because no signal is
 // claimed there, so no colour is spent. At rung 0 the beta machinery has run and CLEARED the window,
 // and that earned verdict renders GREEN (ANSI 32, the file's Green — the quota ladder is plain ANSI):
@@ -1135,7 +1157,11 @@ function QuotaCells(rl, winSec) {
   const ebar = !isNil(elapsed) ? qBlocks[QLvl(elapsed)] : ' ';
   const qn = psRound(consumed);
   const tn = !isNil(elapsed) ? psRound(elapsed) : null;
-  const mid = '→' + `${qn}%${cbar}${ebar}` + (!isNil(tn) ? `${tn}%` : '') + '←';
+  // ONE COMPOSITION, TWO RENDERINGS. `core` is the gauge itself; `mid` is this line's own cell, which
+  // is `core` inside its arrows. The fleet tray draws `core` — the arrows frame nothing its columns
+  // do not already frame — and composing `mid` from `core` is what keeps this line byte-identical.
+  const core = `${qn}%${cbar}${ebar}` + (!isNil(tn) ? `${tn}%` : '');
+  const mid = '→' + core + '←';
   const resets = rl.resets_at ? 'resets ' + FmtDurShort(psRound(Number(rl.resets_at) - nowQ)) : null;
   if (consumed < QUOTA_VERDICT_MIN_PCT) {
     // TWO named gates, and the projection is silent unless BOTH open.
@@ -1153,7 +1179,13 @@ function QuotaCells(rl, winSec) {
     const underPace = !isNil(elapsed) && consumed <= elapsed;
     const projection = (enoughElapsed && underPace)
       ? `ends ~${psRound((q / t) * 100)}% ` + '·' + ` ${psRound((1 - q / t) * 100)}% spare` : null;
-    return { col: null, detailCol: null, mid, verdict: null, detail: projection, resets };
+    return {
+      col: null, detailCol: null, mid, core, verdict: null, detail: projection, resets,
+      // The structured half (spec §4.1). It exists so the fleet tray can AGREE with this row rather
+      // than re-derive it: the ladder runs once, here, and the QUOTA FILE carries its outputs.
+      rung: null, exhausted: (consumed >= 100), belowFloor: true,
+      actSec: null, darkSec: null, note: null,
+    };
   }
   const exhausted = (consumed >= 100);
   let beta = null, B = null, S = null;
@@ -1172,12 +1204,17 @@ function QuotaCells(rl, winSec) {
   if (!isNil(B) && B >= 28800 && rung < 3) rung++;
   let col = rung === 0 ? '32' : rung === 1 ? '38;5;220' : rung === 2 ? '38;5;208' : '1;31';
   let verdict, detail;
+  // The figures the detail sentence spells out, kept as numbers for the quota file (§4.1). Each is
+  // set on exactly the branch that produced the sentence, so a figure the row did not state is null
+  // rather than recomputed behind it.
+  let actSec = null, darkSec = null, note = null;
   if (exhausted) {
     col = '38;5;208';
     // The verdict drops the window label: the label field already carries 5h / 7d, and dropping the
     // repeat is what makes the exhausted state fit a half-width column.
     if (consumed > 100) { verdict = 'over cap'; detail = 'on usage credits ' + '·' + ' paying overage'; }
     else { verdict = 'cap reached'; detail = 'on credits, or blocked til reset'; }
+    note = detail;
   } else {
     verdict = rung === 0 ? 'you can keep this pace' : rung === 1 ? 'slow down just a bit' : rung === 2 ? 'slow down' : 'slow down hard';
     if (rung === 0 && !isNil(t) && t > 0) {
@@ -1185,6 +1222,8 @@ function QuotaCells(rl, winSec) {
       detail = `ends ~${psRound(rho * 100)}% ` + '·' + ` ${psRound((1 - rho) * 100)}% spare`;
     } else if (!isNil(B)) {
       detail = FmtDurShort(S) + ' to act ' + '→' + ' ' + FmtDurShort(B) + ' dark';
+      actSec = psRound(S);
+      darkSec = psRound(B);
     } else {
       detail = null;
     }
@@ -1192,7 +1231,11 @@ function QuotaCells(rl, winSec) {
   // detailCol: the runway keeps the rung colour only when it is a warning (rungs 1-3, at-cap);
   // rung 0's `ends ~N% · M% spare` is chrome — the green names the gauge and the verdict only.
   const detailCol = rung === 0 ? null : col;
-  return { col, detailCol, mid, verdict, detail, resets };
+  return {
+    col, detailCol, mid, core, verdict, detail, resets,
+    rung, exhausted, belowFloor: false,
+    actSec, darkSec, note,
+  };
 }
 // An absent window states the fact in ONE token, rather than leaving a half-empty row that reads as
 // a rendering bug.
@@ -1221,6 +1264,68 @@ function QuotaDetailValue(c, valueW) {
 }
 const q5 = QuotaCells(d?.rate_limits?.five_hour, 18000);
 const q7 = QuotaCells(d?.rate_limits?.seven_day, 604800);
+// One window's quota reading, as the quota file carries it for the fleet tray (docs/fleet-tray.md).
+// ELEVEN KEYS, AND EVERY ONE HAS A READER (spec §4.2): `usedPercentage` orders the merge and ranks
+// the tray's `next`; `resetsAt` orders the merge, drives the countdown and decides whether a window
+// has reset; `reportedAt` is the age; the remaining eight are drawn.
+//
+// THE LADDER IS NOT RE-DERIVED ANYWHERE: everything below is what QuotaCells already computed, plus
+// the two raw payload fields. The tray recomputes exactly two figures, both pure elapsed time — the
+// `resets` countdown and the `as of` age — off epochs, which do not go stale the way a formatted
+// duration does.
+//
+// NO WINDOW WITHOUT A RESET MOMENT. Without one there is no age and no countdown, so the row would
+// be a photograph with no date — which is the one thing the tray's whole layout exists to prevent.
+// Today's payloads always carry `resets_at`; if that ever changes the block goes quiet for that
+// window, which is the honest outcome.
+//
+// `reportedAt` — WHEN THIS READING WAS TAKEN, and the mechanism the tray's `as of` rests on. It is
+// stamped here, once, and TRAVELS INSIDE THE READING: the merge never restamps it, so a session
+// re-rendering a nine-day-old payload carries the old stamp forward unchanged. That is what makes
+// the anti-zombie property structural rather than a rule some merge branch has to defend.
+//
+// THE CLAMP AT `resets_at` IS THE LOAD-BEARING HALF, NOT A DETAIL. A reading cannot have been taken
+// after the window it names ended, so a reading whose window had already closed when it was reported
+// is at least as old as that closure. Without the clamp a session idle for days re-renders its stale
+// payload and stamps TODAY on it — the tray would draw `as of 0m` beside `window has reset`, which
+// is the exact contradiction this file has already shipped once.
+//
+// One limit, and a reader will meet it: this is the REPORT time, not the API-call time. An idle
+// session reports the payload from its own last API call, so the true reading can be older than its
+// report. The gap is bounded by the part of the window the gauge is already drawing.
+function QuotaWindow(c, rl) {
+  if (!c || isNil(rl.resets_at)) return null;
+  const resetsAt = Number(rl.resets_at);
+  if (!Number.isFinite(resetsAt)) return null;
+  return {
+    usedPercentage: Number(rl.used_percentage),
+    resetsAt,
+    reportedAt: Math.min(NOW, resetsAt),
+    gauge: c.core,
+    rung: c.rung,
+    exhausted: c.exhausted,
+    belowFloor: c.belowFloor,
+    verdict: c.verdict ?? null,
+    actSec: c.actSec,
+    darkSec: c.darkSec,
+    note: c.note,
+  };
+}
+// The windows this render observed, for the quota file (home/quota-file.mjs). A window appears only
+// when QuotaCells returned one AND the payload carried a `resets_at` — so a payload with no reading
+// yields {} and the writer leaves the file exactly as it found it.
+//
+// THESE DO NOT GO IN THE SIDECAR. They were carried there for one render of this sprint's first
+// pass, and the reason they are not any more is that `statusline-last.json` is a SINGLE SLOT every
+// session in the home overwrites: the tray read whichever session rendered last, not whichever
+// reading was freshest. The quota file is merged instead (see quota-file.mjs), and it is the only
+// place this reading is persisted — a second copy in a file nothing reads it from would be a key
+// with no consumer.
+const quotaWindows = (() => {
+  const fiveHour = QuotaWindow(q5, d?.rate_limits?.five_hour);
+  const sevenDay = QuotaWindow(q7, d?.rate_limits?.seven_day);
+  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) };
+})();
 
 // === Rows 7+: big-leg spotlight ============================================
 // Selection is today's code, untouched. A cell shows the glyph, the leg index, the dollars and what
@@ -1277,11 +1382,39 @@ if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   bigLegCells = blRows;
 }
 
+// Session START — the timestamp of the transcript's first stamped entry, read from the file head.
+// Returns epoch seconds, or null when the head carries no parseable timestamp. A truncated last
+// line in the buffer fails its own JSON.parse and is skipped; the first success wins.
+function transcriptStartEpoch(fp) {
+  try {
+    const fd = openSync(fp, 'r');
+    const buf = Buffer.alloc(65536);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    closeSync(fd);
+    for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
+      const t = line.trim();
+      if (!t || !t.includes('"timestamp"')) continue;
+      try {
+        const p = JSON.parse(t);
+        if (p && p.timestamp) { const e = parseUtcEpoch(p.timestamp); if (e != null) return e; }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 // === Session facts (sidecar-only) ==========================================
 // aliveSec / apiSec feed activityPct, which the fact sheet reads for ACTIVITY. None of these renders.
+// The session's span is anchored on the TRANSCRIPT's first entry, not on the transcript FILE's
+// birthtime: a transcript that was copied — an `/xresume` into the sibling config home, a machine
+// migration, a backup restore — carries the birthtime of the copy while the API-time total stays
+// cumulative for the whole session, so the ratio of the two read as a share of wall-clock is not a
+// share of anything. Birthtime stays the fallback for a head that carries no timestamp.
 let aliveSec = null;
 if (tpath && existsSync(tpath)) {
-  try { aliveSec = psRound(NOW - statSync(tpath).birthtimeMs / 1000); } catch {}
+  const startTs = transcriptStartEpoch(tpath);
+  if (startTs != null && startTs <= NOW) aliveSec = psRound(NOW - startTs);
+  else { try { aliveSec = psRound(NOW - statSync(tpath).birthtimeMs / 1000); } catch {} }
 }
 const apiSec = d?.cost?.total_api_duration_ms ? psRound(Number(d.cost.total_api_duration_ms) / 1000) : null;
 
@@ -1389,6 +1522,13 @@ try {
   writeSidecar(JSON.stringify(snapshot));
 } catch {}
 
+// === The quota file (phase 1 too, and independent of the sidecar) ==========
+// Written here, before the git subprocess cluster, so a hung git can never delay it — and NOT
+// rewritten in phase 2, which refreshes only gitRepo and would otherwise double the merge's race
+// window for no gain. It carries its own try/catch inside WriteQuotaFile, so a sidecar failure above
+// does not cost the home its quota update and vice versa.
+WriteQuotaFile(ConfigHome, quotaWindows);
+
 // === Cluster 6: git ========================================================
 // The sync glyph is hoisted out of the porcelain parse so the repo cluster can render it during
 // row assembly at the end of the file — the two-phase sidecar write must not wait on git.
@@ -1475,7 +1615,6 @@ if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
   flagChips.push(DarkGray('⚠ $-gates Fable/Opus-calibrated'));
 }
 if (tierMismatch) flagChips.push(DarkGray('⚠ serving:' + tierMismatch.serving));
-if (tierMixChip) flagChips.push(tierMixChip);
 const flagsValue = flagChips.join('  ');
 
 // `no repo` is two words, not the label alone: the label alone would leave the version badges

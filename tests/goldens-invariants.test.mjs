@@ -85,7 +85,6 @@ test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent �
   assert.equal(s.agentsUsd, 2.5);       // 0.2M / 3.2M × $40 — NOT the unweighted $10
   const line = stdout('a1-tier-weighted');
   assert.match(line, /\$2\.50 6%/); // fleet line: no parens (spec §7.5)
-  assert.match(line, /⚠ tier-mix main·fable \+ ag sonnet×1/);
 });
 
 test('A4 — attribution never changes the total: split sums to sessionCost to the cent', () => {
@@ -106,42 +105,53 @@ test('A6 — handover-facts KPI consumes the corrected agentsUsd ($2.50, tier mi
   assert.match(f, /COST_AGENTS_TIER: minor/);
 });
 
-test('A3/B4 — empty-string and absent model: invisible, weight 1.0 ($10.00, no chip)', () => {
+test('A3/B4 — empty-string and absent model: invisible, weight 1.0 ($10.00)', () => {
   for (const f of ['a3-empty-model', 'b4-absent-model']) {
     const s = sidecar(f);
     assert.equal(s.agentsUsd, 10); // 1.0M of 4.0M units × $40 — unweighted
-    assert.ok(!stdout(f).includes('tier-mix'), `${f}: chip must not fire`);
   }
 });
 
-// ---- B: chip + families -----------------------------------------------------------------------
-test('B1 — chip names main separately; agents head-count stays 12', () => {
+// ---- B: tier families -------------------------------------------------------------------------
+//
+// THE `⚠ tier-mix` CHIP IS GONE (2026-09-06, bsl6.1.8.0, Florian's ruling): it named a condition
+// (main and agents span more than one price tier) without naming a consequence, and with fable
+// sub-agents that condition is every working session — a permanent fixture, not a warning. Every
+// row below used to assert its text; each keeps the property the chip was only the visibility layer
+// for, which is the TIER WEIGHTING of the main-vs-agents $ split. That is untouched by the cut.
+test('B1 — the fleet row counts a wide fleet: 12 agents, and the one off-tier agent is weighted', () => {
   const line = stdout('b1-chip-main');
-  assert.match(line, /\b12 ag\b/);
-  assert.match(line, /⚠ tier-mix main·fable \+ ag fable×11·sonnet×1/);
+  assert.match(line, /\b12 ag\b/); // the corpus's only two-digit agent count
+  // Hand-computed, not read off the output. Each of the 12 agents is cr 1,000 + out 1,000 =
+  // 5,100 units; on a Fable main the 11 Fable agents weigh 1.0 and the one Sonnet agent 0.2, so
+  // effective agent units are 11×5,100 + 1,020 = 57,120 against the main's 3.0M (6 legs × 100k out
+  // × 5). $40 × 57,120/3,057,120 = $0.75 — the UNWEIGHTED 12×5,100 would have said $0.80.
+  assert.equal(sidecar('b1-chip-main').agentsUsd, 0.75);
 });
 
 test('B2 — mythos weighted at its map price (opus main: $20.00, not the weight-1.0 $12.50)', () => {
   const s = sidecar('b2-mythos');
   assert.equal(s.agentsUsd, 20); // 1.0M × (10/5) = 2.0M of 5.0M × $50
   assert.equal(s.mainSessionUsd, 30);
-  assert.match(stdout('b2-mythos'), /⚠ tier-mix main·opus \+ ag mythos×1/);
 });
 
-test('B3 — unmapped id is visible as `other`, weighted 1.0', () => {
+test('B3 — an unmapped model id is weighted 1.0, never guessed at', () => {
   const s = sidecar('b3-unmapped');
   assert.equal(s.agentsUsd, 10); // weight 1.0: 1.0M of 4.0M × $40
-  assert.match(stdout('b3-unmapped'), /⚠ tier-mix main·fable \+ ag other×1/);
 });
 
-test('B1-format also landed on the pre-existing tier-mix fixture', () => {
-  assert.match(stdout('tier-mix'), /⚠ tier-mix main·opus \+ ag opus×1·sonnet×1/);
-});
-
-test('B5 — uniform tiers / model-less agents: no chip (regression guard)', () => {
-  for (const f of ['tier-same', 'tier-nomodel']) {
-    assert.ok(!stdout(f).includes('tier-mix'), `${f}: chip must not fire`);
-  }
+// B5's display half died with the chip: it asserted that `tier-mix` text does NOT appear on the
+// uniform-tier twins, and a guard against a string nothing writes any more is worse than no guard.
+// What it was really protecting is the money, and that is asserted here instead. `tier-nomodel` IS
+// `tier-same` minus the agents' `model` fields (the byte-diff twin the 2026-07-04 plan built): a
+// same-tier model weighs 1.0 and an ABSENT model also weighs 1.0, so the two fixtures must split the
+// $ identically. Equality between the twins, not a literal — the point is that model presence alone
+// moves no money.
+test('B5 — same-tier and model-less agents split the money identically (the byte-diff twins)', () => {
+  const same = sidecar('tier-same'), none = sidecar('tier-nomodel');
+  assert.ok(Number(same.agentsUsd) > 0, 'vacuity guard: the twins must actually attribute agent cost');
+  assert.equal(same.agentsUsd, none.agentsUsd);
+  assert.equal(same.mainSessionUsd, none.mainSessionUsd);
 });
 
 // ---- C: median regression — SUPERSEDED, moved off the display (Dossier IV, 2026-08-22) ----------
@@ -550,8 +560,9 @@ test('M2b — spike guard: where the window holds a fat leg, the chip is strictl
   // a real 180-leg session where one $6.02 compaction leg put the chip in the red band while `next`
   // sat in yellow and every ordinary leg cost about a third of a dollar.
   //
-  // "Fat" = a leg at 2x the window's own median or more. Measured against the pre-sprint corpus:
-  // 24 of the 51 chip-bearing windows qualify, so this row has real coverage, not a hypothetical.
+  // "Fat" = a leg at 2x the window's own median or more. The count below is a vacuity floor, not a
+  // property: it says the row has real coverage rather than silently matching nothing. It moves when
+  // a fixture is added — `nonadjacent-dup` (2026-08-29) took it from 24 to 25.
   let qualifying = 0;
   for (const f of allFixtures()) {
     const win = windowOf(sidecar(f));
@@ -567,7 +578,7 @@ test('M2b — spike guard: where the window holds a fat leg, the chip is strictl
     assert.ok(chip, `${f}: no chip in golden.txt though legCosts has ${win.length} entries — a stale (unblessed) golden reads as a missing chip, so say so rather than throwing`);
     assert.equal(chip.usd, fmt2(med), `${f}: the rendered chip is the median`);
   }
-  assert.equal(qualifying, 24, 'windows carrying a leg at >=2x their own median');
+  assert.equal(qualifying, 25, 'windows carrying a leg at >=2x their own median');
 });
 
 test('M3 — verdict guard: HEADLINE_BASIS `cost=next N (lvl L)` follows D2a\'s three-rung dollar ladder', () => {

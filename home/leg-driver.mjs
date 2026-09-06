@@ -30,9 +30,9 @@ export const TIER_BASE = { fable: 10, mythos: 10, opus: 5, sonnet: 2, haiku: 1 }
 // transcripts) and the display form ("Opus 4.8 (1M context)", the stdin payload), so a
 // main-vs-agent comparison can never read a format difference as a tier difference. Absent or
 // empty-string model → null, and null NEVER counts as a tier: every pre-change agents cache lacks
-// `model` forever (incremental offsets), and the cache's initialized/transient state is '' — the
-// tier-mix warn must not fire on either. A present, NON-EMPTY, unmapped string is 'other': visible
-// in the chip and counted for warn-firing, but excluded from tier weighting (weight 1.0).
+// `model` forever (incremental offsets), and the cache's initialized/transient state is ''. A
+// present, NON-EMPTY, unmapped string is 'other', which is excluded from tier weighting
+// (weight 1.0) rather than guessed at.
 export function ModelTier(m) {
   if (!m) return null;
   const s = String(m).toLowerCase();

@@ -56,11 +56,13 @@ const normPaths = (s) => {
   if (typeof out.agentsCachePath === 'string') out.agentsCachePath = out.agentsCachePath.replace(/\\/g, '/').split('/').pop();
   return out;
 };
-// normSidecar — comparison only. aliveSec / activityPct derive from the transcript FILE's birthtime
-// (statSync), which git checkout / copy resets to "now", so the raw value differs on every clone.
-// The render clamps it, so stdout stays stable; only the raw sidecar value is unstable. They must
-// still be WRITTEN, because handover-facts reads activityPct out of the frozen snapshot and states
-// it — drop them from the file and the trio's ACTIVITY line changes.
+// normSidecar — comparison only. `aliveSec` / `activityPct` are anchored on the transcript's first
+// stamped entry, which every committed fixture carries, so today they are reproducible across
+// clones. They stay normalised for the FALLBACK: a fixture whose transcript head carries no
+// timestamp falls back to the file's birthtime, and the harness copies each transcript into a fresh
+// temp directory, so that value is the age of a file created moments ago — different on every clone
+// and on every run. They must still be WRITTEN, because handover-facts reads activityPct out of the
+// frozen snapshot and states it; the trio's ACTIVITY line is where these two are pinned by golden.
 const normSidecar = (s) => {
   const out = normPaths(s);
   if (!out || typeof out !== 'object') return out;

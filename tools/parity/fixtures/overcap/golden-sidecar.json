@@ -31,9 +31,9 @@
     8.3585,
     10.7682
   ],
-  "aliveSec": -21610,
+  "aliveSec": 300,
   "apiSec": 900,
-  "activityPct": null,
+  "activityPct": 300,
   "linesAdded": 5,
   "linesRemoved": 1,
   "tps": null,

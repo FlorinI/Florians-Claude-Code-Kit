@@ -318,7 +318,7 @@ test('AV-3 — the chip\'s retired names appear nowhere on the live surface', ()
   // the parity fixtures (committed goldens, blessed from the code) and build output.
   const ROOTS = ['home', 'docs', 'tests', 'tools', 'SPEC.md', 'CLAUDE.md', '.claude/commands', '.claude/skills'];
   const EXCLUDED = [
-    /^docs[\\/]_superseded/, /^\.claude[\\/](plans|sprints|handovers)/, /^\.sprint-chain/,
+    /^docs[\\/]_superseded/, /^\.claude[\\/](plans|sprints)/, /^\.desk[\\/]handovers/, /^\.sprint-chain/,
     /^\.inbox/, /^tools[\\/]parity[\\/]fixtures/, /^build/, /^node_modules/,
   ];
   const files = [];
@@ -484,12 +484,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.3 (sprint 3 PATCH: three behaviour-affecting pricing fixes, on top of sprint 1\'s 6.1.2)', () => {
+test('D4-5 — SL_VERSION is 6.1.9 (PATCH: the quota file forks to schema 2 and carries reportedAt)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.3', 'X.Y.Z is 6.1.3 for this change (sprint 3 spec §0.1 — PATCH, argued against MAJOR: no displayed figure changes meaning)');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.9',
+    'X.Y.Z is 6.1.9: the status-line cluster starts writing a DIFFERENT FILE SHAPE under a new schema — `<config-home>/statusline-quota.json` goes to schema 2, five keys are removed and `reportedAt` is added — and a config home still running an older build stops contributing rows to the fleet tray until it is installed. That is a behaviour change a person has to be able to name in a deployment note, so a hand-set Z with a recorded rationale, not the automatic B tick install.mjs applies to a re-deploy of an unchanged X.Y.Z. 6.1.8.x is the deployed tier-mix-chip build and cannot be reused. Not X (no displayed figure changes meaning, no threshold moved, and the rendered status line is byte-identical — spec §9.1), not Y (no new cluster or line); B resets to 0. Because X.Y.Z is hand-set, install.mjs will NOT auto-tick B on the first deploy: a trailing `.1` appearing later is an ordinary re-deploy tick, not a finding');
 });
 
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
@@ -504,6 +505,53 @@ test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   assert.match(doc, /two-column|dossier/i, 'and it must actually describe the new layout');
 
   // interpret-statusline.md has its own row below (D4-7) — it needs more than a three-string check.
+});
+
+test('D4-8 — docs/fleet-tray.md carries BOTH halves of what `as of` can and cannot tell you', () => {
+  // WHY A DOC SENTENCE IS PINNED BY A TEST, AND WHY THIS ONE.
+  //
+  // Spec §4.3 case 3 is the one place the quota block can show a fresh date on a materially stale
+  // number: the OTHER MACHINE is burning quota, so every reading taken here is stale-low, every merge
+  // is a tie, and idle renders keep the date moving while the window is still open — the clamp never
+  // fires, because the window has not ended. Nothing on this panel can see that, and nothing on it
+  // ever could: the other machine is invisible from here.
+  //
+  // It is NOT an acceptance example, and the reason is the form rule rather than convenience. An
+  // acceptance example names a concrete scenario with an observable outcome; this is a property of
+  // the whole block, and the only scenario that exercises it has an outcome nobody would want to
+  // pin — the panel showing a number that is too low beside a date that looks fresh, which is correct
+  // behaviour under a limit rather than a desirable rendering. Written as an example it would be
+  // unfailable.
+  //
+  // So it lives in the documentation, and this row is what stops it being edited away. TWO
+  // ASSERTIONS, EACH NAMING WHICH HALF IT PROTECTS, because the failure mode is a later trim that
+  // keeps the reassuring clause and drops the limit — leaving a doc that says what the field means
+  // and no longer says what it cannot mean.
+  //
+  // PRIVATE-REPO ONLY, AND THE GUARD IS NOT A BARE `existsSync` ON THE DOC. The fleet tray is private
+  // by construction, so the exported public kit ships this suite WITHOUT `docs/fleet-tray.md` — a
+  // row that simply read the file turns the kit's own suite red (its CI is the only CI this project
+  // has). The guard therefore keys on the TOOL: where `home/fleet-tray.ps1` is present, its
+  // documentation must be present too and must carry both halves. That keeps a deleted doc red here
+  // instead of silently skipped.
+  const docPath = join(repo, 'docs', 'fleet-tray.md');
+  if (!existsSync(join(repo, 'home', 'fleet-tray.ps1'))) return;   // the exported kit: no tray, no doc
+  assert.ok(existsSync(docPath),
+    'home/fleet-tray.ps1 is present, so docs/fleet-tray.md must be too — it is the only surface that can carry the limit of `as of`');
+  const doc = readFileSync(docPath, 'utf8');
+
+  // HALF 1 — WHAT IT DOES SAY: how long ago a session IN THIS CONFIG HOME last reported the reading.
+  // "in this config home" is the load-bearing phrase, not decoration: it is what scopes the claim to
+  // one machine's own sessions.
+  assert.match(doc, /how long ago a session[^.]{0,60}in this config home[^.]{0,60}(last )?reported/i,
+    'docs/fleet-tray.md must say that `as of` is how long ago a session IN THIS CONFIG HOME last reported the reading (spec §4.3) '
+    + '— the scope of the claim is the half that makes it true');
+
+  // HALF 2 — WHAT IT DOES NOT SAY: it is not a measure of how current the subscription's true
+  // consumption is. This is the half a trim removes first, because it is the uncomfortable one.
+  assert.match(doc, /not a measure of how current[^.]{0,80}true consumption/i,
+    'docs/fleet-tray.md must also say that `as of` is NOT a measure of how current the subscription’s true consumption is (spec §4.3) '
+    + '— the limit is the half that stops the first half being read as a freshness guarantee');
 });
 
 test('D4-7 — interpret-statusline.md reads the labels that actually ship', () => {

@@ -32,9 +32,9 @@
     0.0118,
     0.008
   ],
-  "aliveSec": -3455035,
+  "aliveSec": 100,
   "apiSec": 9,
-  "activityPct": null,
+  "activityPct": 9,
   "linesAdded": 3,
   "linesRemoved": 0,
   "tps": 90,

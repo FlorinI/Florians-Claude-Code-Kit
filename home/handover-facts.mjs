@@ -331,6 +331,11 @@ const qHeadroom = s.autoCompactOff === true
 // ---- ACTIVITY (omit when sub-agents ran — activity% is agent-polluted) ----
 let act;
 if (Number(s.nAgents) > 0) act = '(omit — ' + Math.trunc(Number(s.nAgents)) + ' sub-agents ran; activity% folds their parallel compute, so it does not signal your work pattern)';
+// A share above the whole is not a share: the API-time total outran the session clock, so the clock
+// is the thing that is wrong. It is anchored on the transcript's first entry and falls back to the
+// file's birthtime, which a copied or rebuilt transcript resets. Omitted the same way the sub-agent
+// case is — the raw percentage stays in the sidecar for anyone reading it there.
+else if (s.activityPct != null && Number(s.activityPct) > 100) act = '(omit — the timed generation exceeds the session clock, so this is not a share of anything; the clock is anchored on the transcript and a copied or rebuilt transcript breaks that anchor)';
 else if (s.activityPct != null) act = 'the model was generating ' + FmtPct(s.activityPct) + ' of the elapsed wall-clock (this times LLM generation only) — the rest is tool calls and your read/think time in unknown proportion';
 else act = '(omit)';
 
@@ -406,8 +411,12 @@ if (s.fastMode === true) {
 // has never served in this run): the label is wrong, no number is. Pure provenance, like the fast
 // caveat — the DISPLAY TIER CANCELS out of per-leg dollars (`base` = cost / Σ(rawᵢ × wᵢ /
 // TIER_BASE[main]) and a leg's dollars are rawᵢ × wᵢ × base, so TIER_BASE[main] divides out).
+// The wording states exactly what `servingTierReport` computes: the labelled tier served NO leg in
+// this run (presence-based, certain), and `serving` is the tier that served the most legs (argmax,
+// not unanimity). A run that mixed two other tiers is the case that makes the difference visible —
+// the switch note names the minority tier's legs in the same sheet.
 if (s.tierMismatch && s.tierMismatch.serving) {
-  emit(`COST_TIER_NOTE: the model label reads ${BT}${s.model}${BT}, but every leg in this run was served by ${BT}${String(s.tierMismatch.serving)}${BT} — a label fact only: the $ in this sheet does not depend on which label is shown`);
+  emit(`COST_TIER_NOTE: the model label reads ${BT}${s.model}${BT}, but no leg in this run was served by that model — ${BT}${String(s.tierMismatch.serving)}${BT} served the most legs — a label fact only: the $ in this sheet does not depend on which label is shown`);
 }
 // temporary — removed by Stage B (dollar-gate re-anchor): the $ verdict floors (COST_FLOOR_*) are
 // calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main they grade too leniently.

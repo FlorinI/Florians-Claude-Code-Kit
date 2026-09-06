@@ -14,7 +14,7 @@ QUALITY_LEAD: `340k`, orange band — real degradation on complex full-context r
 QUALITY_SECONDARY: `34%` fill — well under the ~60% cliff
 QUALITY_HEADROOM: `135k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
-ACTIVITY: (omit)
+ACTIVITY: (omit — the timed generation exceeds the session clock, so this is not a share of anything; the clock is anchored on the transcript and a copied or rebuilt transcript breaks that anchor)
 TRAJECTORY: mostly flat with spikes, range `$8.36`–`$33.37`
 YOURCALL_POLARITY: -
 YOURCALL_BASIS: cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context

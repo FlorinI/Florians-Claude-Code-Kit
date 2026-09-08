@@ -30,7 +30,7 @@ function makeShims() {
   writeFileSync(join(d, 'claude.cmd'),
     '@echo off\r\nif defined CLAUDE_CONFIG_DIR (echo CFGDIR=[%CLAUDE_CONFIG_DIR%]) else (echo CFGDIR=unset)\r\nexit /b 0\r\n', 'utf8');
   writeFileSync(join(d, 'claude'),
-    '#!/bin/sh\necho "CFGDIR=${CLAUDE_CONFIG_DIR+[$CLAUDE_CONFIG_DIR]}${CLAUDE_CONFIG_DIR-unset}"\nexit 0\n', 'utf8');
+    '#!/bin/sh\nif [ -n "${CLAUDE_CONFIG_DIR+x}" ]; then echo "CFGDIR=[$CLAUDE_CONFIG_DIR]"; else echo "CFGDIR=unset"; fi\nexit 0\n', 'utf8');
   try { chmodSync(join(d, 'claude'), 0o755); } catch {}
   return d;
 }

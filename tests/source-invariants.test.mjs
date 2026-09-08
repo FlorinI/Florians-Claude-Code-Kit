@@ -12,6 +12,10 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..');
 const src = (p) => readFileSync(join(repo, ...p.split('/')), 'utf8');
+// The public-kit marker. This file ships in the kit, and the kit has neither the exporter nor
+// SPEC.md — so the exporter's absence says "this checkout is the public kit". A bare existsSync on a
+// private doc cannot tell the kit from a deletion; this can (docs/260908-suite-skip-guards-spec.md §2).
+const IN_PUBLIC_KIT = !existsSync(join(repo, 'tools', 'export-public.mjs'));
 
 // ---- A5: TIER_BASE is literal constants — no fetching, no config, no env ----------------------
 test('A5 — TIER_BASE is a hand-maintained literal map in leg-driver.mjs', () => {
@@ -185,8 +189,8 @@ test('S15 — the relay never invents WHERE the expensive legs are (spec §A9.2)
   // handover-facts.mjs comment). Same family as S13.
   // `home/commands/handover-check.md` ships in the public kit (manifest.public.json:19) and this test
   // file is exported too, so its half runs everywhere. `.claude/commands/interpret-statusline.md` is
-  // private-repo only — same treatment as the D4 private-docs row below: assert it where it exists,
-  // skip it where it cannot. It is NEVER skipped on Florian's checkout, which is where it is read.
+  // private-repo only — assert it where it exists, skip it where it cannot. It is NEVER skipped on
+  // Florian's checkout, which is where it is read.
   const isPath = join(repo, '.claude', 'commands', 'interpret-statusline.md');
   const RELAYS = { 'home/commands/handover-check.md': src('home/commands/handover-check.md') };
   if (existsSync(isPath)) RELAYS['.claude/commands/interpret-statusline.md'] = readFileSync(isPath, 'utf8');
@@ -661,17 +665,18 @@ test('NB-2 — render-spikes.mjs never derives a $ basis by dividing session cos
 });
 
 // ---- D4: calibration sample rows carry the session model ---------------------------------------
-// Private-repo docs; skipped when absent so this suite stays runnable from a public checkout.
-// The era-v5 file was archived to docs/_superseded/ by the froz5 removal and a fresh live samples
-// file took its place (D4) — /interpret-statusline appends one row per screenshot, so it needs a
-// live target.
-test('D4 — samples table header + interpret-statusline row template carry a model column', (t) => {
+// Private-repo docs; skipped in the public kit, which ships neither file (keyed on IN_PUBLIC_KIT, not
+// on the docs); asserted in the private repo, where a missing file means /interpret-statusline has
+// nowhere to write. The era-v5 file was archived to docs/_superseded/ by the froz5 removal and a
+// fresh live samples file took its place (D4) — /interpret-statusline appends one row per screenshot,
+// so it needs a live target.
+test('D4 — samples table header + interpret-statusline row template carry a model column', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
   const samples = join(repo, 'docs', 'statusline-calibration-samples.md');
   const command = join(repo, '.claude', 'commands', 'interpret-statusline.md');
-  if (!existsSync(samples) || !existsSync(command)) {
-    t.skip('private-repo docs not present in this checkout');
-    return;
-  }
+  assert.ok(existsSync(samples),
+    'docs/statusline-calibration-samples.md is missing — it is where /interpret-statusline appends one row per screenshot; in the private repo its absence is a build gap');
+  assert.ok(existsSync(command),
+    '.claude/commands/interpret-statusline.md is missing — it is what resolves the samples file by name; in the private repo its absence is a build gap');
   const header = readFileSync(samples, 'utf8').split('\n').find((l) => l.startsWith('| date |'));
   assert.ok(header, 'samples table header found');
   assert.match(header, /\| model \|/, 'samples header carries a model column');
@@ -687,8 +692,8 @@ test('D4 — samples table header + interpret-statusline row template carry a mo
 // comment or title. Banned needles are assembled by concatenation and positive needles use \s+
 // escapes, so this row's own source satisfies none of them — the pins bite on the S15 rationale.
 test('N11 — the lone-fat-leg absolutes are window-scoped in the two chip test files', () => {
-  // This file ships in the public kit; last8-chip.test.mjs does not — same treatment as S15's
-  // private half: assert it where it exists, skip it where it cannot exist. Never skipped here.
+  // This file ships in the public kit; last8-chip.test.mjs does not — assert it where it exists,
+  // skip it where it cannot exist. Never skipped here.
   const files = {
     'tests/source-invariants.test.mjs': readFileSync(join(here, 'source-invariants.test.mjs'), 'utf8'),
   };

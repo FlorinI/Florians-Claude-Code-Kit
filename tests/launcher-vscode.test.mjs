@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -16,10 +16,11 @@ import { spawnSync } from 'node:child_process';
 const here = dirname(fileURLToPath(import.meta.url));
 const launcher = join(here, '..', 'home', 'claude-launch.mjs');
 
-// Shim dir with a fake `claude` (always) and optionally a fake `code` — both POSIX and .cmd forms.
-function makeShims({ withCode }) {
+// Shim dir with a fake `claude` (default) and optionally a fake `code` — both POSIX and .cmd forms.
+// `withClaude: false` builds a `code`-only PATH (P9: pair mode must not need `claude`).
+function makeShims({ withCode, withClaude = true }) {
   const d = mkdtempSync(join(tmpdir(), 'ccl-shim-'));
-  const names = withCode ? ['claude', 'code'] : ['claude'];
+  const names = [...(withClaude ? ['claude'] : []), ...(withCode ? ['code'] : [])];
   for (const n of names) {
     writeFileSync(join(d, n + '.cmd'), '@echo off\r\nexit /b 0\r\n', 'utf8');
     writeFileSync(join(d, n), '#!/bin/sh\nexit 0\n', 'utf8');
@@ -42,11 +43,11 @@ function makeShims({ withCode }) {
 // USERPROFILE/HOME are pinned to the throwaway project dir so `~` expansion is deterministic and
 // the launcher can never resolve a path in the real home.
 function runLauncher({
-  workspaces = [], withCode = true, ccVscode = '1', ccVscodeTile = null,
+  workspaces = [], withCode = true, withClaude = true, ccVscode = '1', ccVscodeTile = null,
   args = [], identity = null, dryRun = true, wtSession = null, env: extraEnv = {},
 }) {
   const proj = mkdtempSync(join(tmpdir(), 'ccl-proj-'));
-  const shims = makeShims({ withCode });
+  const shims = makeShims({ withCode, withClaude });
   try {
     for (const w of workspaces) writeFileSync(join(proj, w), '{}', 'utf8');
     if (identity) {
@@ -374,6 +375,9 @@ test('L13 — the tile reason taxonomy is unchanged by the new flags', () => {
     runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', tmpdir()] }).plan.tile.reason,
     runLauncher({ workspaces: [], identity: IDENT, withCode: false }).plan.tile.reason,
     runLauncher({ workspaces: [], identity: IDENT, ccVscodeTile: 'off' }).plan.tile.reason,
+    // P12 — pair mode (rows P1–P11 below) reuses the chain: `code` missing and tiling off, paired.
+    runLauncher({ workspaces: [], identity: IDENT, withCode: false, args: ['--pair-vscode'] }).plan.tile.reason,
+    runLauncher({ workspaces: [], identity: IDENT, ccVscodeTile: 'off', args: ['--pair-vscode'] }).plan.tile.reason,
   ];
   for (const r of reasons) assert.ok(KNOWN.has(r), `unknown tile reason introduced: ${r}`);
   // …and the source itself grew no new reason literal. Only the RESULT positions of the ternary
@@ -557,4 +561,209 @@ test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `
     '--resume', '--teleport', '--worktree', '-d', '-r', '-w'].sort());
   // Public file: zero deps, zero private references (the launcher ships in the kit).
   assert.ok(!/from\s+['"](?!node:)/.test(src), 'no non-builtin imports');
+});
+
+// --- pair mode (rows P1–P14) ---------------------------------------------------------------------
+// Test plan: docs/260908-vscode-pair-test-plan.md Part 3. `--pair-vscode` runs the EXISTING VS Code
+// co-launch + tiler against process.cwd() and exits 0 without launching claude — the machinery a
+// running session uses to get its editor back (the /vscode command). Asserted through the same
+// dry-run seam: `plan.launch.mode` says 'pair' or 'launch', `plan.claude.argv` is empty in pair
+// mode, and the tile block gains `captureMethod: 'parent-walk'` (fallback 'foreground-sync'),
+// `terminalPid`, and `wait` (pair mode waits for the tiler instead of unref'ing it).
+
+const PAIR = ['--pair-vscode'];
+const oneLine = (s) => s.trim().length > 0 && s.trim().split('\n').length === 1;
+
+test('P1 — pair mode with CC_VSCODE unset: VS Code on, plan says pair, claude not launched', () => {
+  const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, ccVscode: null, args: PAIR });
+  assert.equal(res.status, 0);
+  assert.equal(plan.launch.mode, 'pair');
+  assert.equal(plan.vscode.action, 'folder');
+  assert.equal(plan.vscode.target, '.', 'cwd, exactly as at launch');
+  assert.deepEqual(plan.claude.argv, [], 'nothing is launched');
+  assert.ok(oneLine(res.stdout), 'stdout is exactly one line of JSON');
+  assert.equal(res.stderr, '');
+});
+
+test('P2 — pair mode with CC_VSCODE=0: the flag wins over the env', () => {
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, ccVscode: '0', args: PAIR });
+  assert.equal(plan.launch.mode, 'pair');
+  assert.equal(plan.vscode.action, 'folder');
+});
+
+test('P3 — a normal launch reports mode launch, still launches claude, still captures by foreground (T1 unchanged)', () => {
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT });
+  assert.equal(plan.launch.mode, 'launch');
+  assert.ok(plan.claude.argv.length > 0);
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+});
+
+test('P4 — `--pair-vscode --no-vscode` is a usage error: non-zero, one stderr line naming both, no plan', () => {
+  let ref = null;
+  for (const dryRun of [true, false]) {
+    for (const args of [['--pair-vscode', '--no-vscode'], ['--no-vscode', '--pair-vscode']]) {
+      const { res } = runLauncher({ workspaces: [], identity: IDENT, dryRun, args });
+      const label = `${args.join(' ')} dryRun=${dryRun}`;
+      assert.notEqual(res.status, 0, `${label}: exits non-zero`);
+      assert.equal(res.stdout, '', `${label}: no plan, even under dry-run`);
+      assert.ok(oneLine(res.stderr), `${label}: exactly one stderr line, got ${JSON.stringify(res.stderr)}`);
+      assert.ok(res.stderr.includes('--pair-vscode') && res.stderr.includes('--no-vscode'), `${label}: names both flags`);
+      if (ref === null) ref = res.stderr; else assert.equal(res.stderr, ref, `${label}: byte-identical across orderings`);
+    }
+  }
+});
+
+test('P5 — `code` missing in pair mode: vscode-no-cli in the plan; live path exits non-zero with one line', () => {
+  const dry = runLauncher({ workspaces: [], identity: IDENT, withCode: false, args: PAIR });
+  assert.equal(dry.plan.vscode.action, 'skip-no-cli');
+  assert.equal(dry.plan.tile.reason, IS_WIN ? 'vscode-no-cli' : 'not-win32');
+  // Live half is safe: with no `code` nothing can spawn (tiling is gated on vsPlan.exe).
+  const live = runLauncher({ workspaces: [], identity: IDENT, withCode: false, dryRun: false, args: PAIR });
+  assert.notEqual(live.res.status, 0);
+  assert.equal(live.res.stdout, '');
+  assert.ok(oneLine(live.res.stderr), `one stderr line, got ${JSON.stringify(live.res.stderr)}`);
+  assert.ok(live.res.stderr.includes('vscode-no-cli'), 'the existing reason names the failure');
+});
+
+test('P6 — exactly one .code-workspace in the cwd: pair mode opens the workspace (H1 reused)', () => {
+  const { plan } = runLauncher({ workspaces: ['proj.code-workspace'], identity: IDENT, args: PAIR });
+  assert.equal(plan.launch.mode, 'pair');
+  assert.equal(plan.vscode.action, 'workspace');
+  assert.equal(plan.vscode.target, 'proj.code-workspace');
+  assert.equal(plan.tile.projectMatch, 'proj');
+});
+
+test('P7 — CC_VSCODE_TILE=off in pair mode: VS Code on, tiling off by flag', () => {
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, ccVscodeTile: 'off', args: PAIR });
+  assert.equal(plan.launch.mode, 'pair');
+  assert.equal(plan.vscode.action, 'folder');
+  assert.equal(plan.tile.enabled, false);
+  assert.equal(plan.tile.reason, IS_WIN ? 'disabled-flag' : 'not-win32');
+});
+
+// --- the terminal-window resolver (the parent-process walk), rows P8a–P8f -----------------------
+// The walk cannot run against a real process tree from a test (our ancestry is node → node --test,
+// never WindowsTerminal.exe), so it is a pure function over a process table, reached through the
+// dry-run seam: CC_LAUNCH_PROCTABLE names a JSON file of [{pid, ppid, name}] and CC_LAUNCH_PROCPID
+// is the start pid. Both are honoured only under CC_LAUNCH_DRYRUN. The tables live here rather than
+// as checked-in files: the exporter copies fixtures one by one, and an inline table travels with
+// this public suite by construction. Synthetic pids (1000–9999) can never be mistaken for real ones.
+const P = (pid, ppid, name) => ({ pid, ppid, name });
+const CHAIN_TAIL = [P(4100, 1200, 'WindowsTerminal.exe'), P(1200, 0, 'explorer.exe')];
+const PROCTABLES = {
+  'chain-found': [P(9001, 8002, 'node.exe'), P(8002, 7003, 'pwsh.exe'), P(7003, 6004, 'claude.exe'), P(6004, 4100, 'pwsh.exe'), ...CHAIN_TAIL],
+  'chain-no-wt': [P(9001, 8002, 'node.exe'), P(8002, 7003, 'pwsh.exe'), P(7003, 6004, 'claude.exe'), P(6004, 4100, 'pwsh.exe'), P(4100, 1200, 'conhost.exe'), P(1200, 0, 'explorer.exe')],
+  'chain-broken': [P(9001, 8002, 'node.exe'), P(8002, 7003, 'pwsh.exe'), P(7003, 5555, 'claude.exe'), ...CHAIN_TAIL],   // 5555 is absent
+  'chain-cycle': [P(9001, 8002, 'node.exe'), P(8002, 9001, 'pwsh.exe'), ...CHAIN_TAIL],
+  'chain-lower': [P(9001, 8002, 'node.exe'), P(8002, 4100, 'pwsh.exe'), P(4100, 1200, 'windowsterminal.exe'), P(1200, 0, 'explorer.exe')],
+  'chain-near-miss': [P(9001, 8002, 'node.exe'), P(8002, 4100, 'pwsh.exe'), P(4100, 1200, 'notWindowsTerminal.exe'), P(1200, 0, 'explorer.exe')],
+};
+
+// Writes the named table to a temp file and runs the launcher with the seam pointed at it.
+function runWalk(name, { pair = true, startPid = 9001 } = {}) {
+  const d = mkdtempSync(join(tmpdir(), 'ccl-proc-'));
+  try {
+    const file = join(d, `${name}.json`);
+    writeFileSync(file, JSON.stringify(PROCTABLES[name]), 'utf8');
+    return runLauncher({
+      workspaces: [], identity: IDENT, args: pair ? PAIR : [],
+      env: { CC_LAUNCH_PROCTABLE: file, CC_LAUNCH_PROCPID: String(startPid) },
+    });
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+}
+
+test('P8a — the chain reaches Windows Terminal: parent-walk, its pid reported', () => {
+  const { res, plan } = runWalk('chain-found');
+  assert.equal(res.status, 0);
+  assert.equal(plan.tile.captureMethod, 'parent-walk');
+  assert.equal(plan.tile.terminalPid, 4100);
+});
+
+test('P8b — the chain ends at the root without Windows Terminal: foreground fallback, no pid', () => {
+  const { plan } = runWalk('chain-no-wt');
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+  assert.equal(plan.tile.terminalPid, null);
+});
+
+test('P8c — a broken link (ppid absent from the table): fallback, no throw', () => {
+  const { res, plan } = runWalk('chain-broken');
+  assert.equal(res.status, 0);
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+  assert.equal(plan.tile.terminalPid, null);
+});
+
+test('P8d — a cycle (a → b → a): the walk terminates and falls back', () => {
+  const { res, plan } = runWalk('chain-cycle');
+  assert.equal(res.status, 0, 'no hang, no throw');
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+  assert.equal(plan.tile.terminalPid, null);
+});
+
+test('P8e — the process name matches case-insensitively and by whole basename only', () => {
+  assert.equal(runWalk('chain-found').plan.tile.terminalPid, 4100, 'WindowsTerminal.exe');
+  assert.equal(runWalk('chain-lower').plan.tile.terminalPid, 4100, 'windowsterminal.exe');
+  const near = runWalk('chain-near-miss').plan.tile;
+  assert.equal(near.terminalPid, null, 'notWindowsTerminal.exe is not a match');
+  assert.equal(near.captureMethod, 'foreground-sync');
+});
+
+test('P8f — a normal launch never reads the table: the seam is inert outside pair mode', () => {
+  const { plan } = runWalk('chain-found', { pair: false });
+  assert.equal(plan.tile.captureMethod, 'foreground-sync');
+  assert.ok(!('terminalPid' in plan.tile), 'no terminalPid key at all — distinct from P8b\'s null');
+});
+
+// --- behaviour the dry-run cannot reach: structural rows (the T6/H6 pattern) ----------------------
+
+test('P9 — pair mode does not require `claude` on PATH; a launch still does', () => {
+  const pair = runLauncher({ workspaces: [], identity: IDENT, withClaude: false, args: PAIR });
+  assert.equal(pair.res.status, 0, `pair mode without claude: ${pair.res.stderr}`);
+  assert.equal(pair.plan.launch.mode, 'pair');
+  const launch = runLauncher({ workspaces: [], identity: IDENT, withClaude: false });
+  assert.equal(launch.res.status, 1, 'launch mode without claude still exits 1');
+  assert.match(launch.res.stderr, /claude executable not found/);
+});
+
+test('P10 — pair mode keeps the snap gesture, focus ending on the terminal (one tiler serves both modes)', () => {
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: PAIR });
+  assert.equal(plan.tile.snapGroup, true);
+  // T6's order assertions are the other half of this row and run unchanged above.
+  const src = readFileSync(launcher, 'utf8');
+  assert.equal((src.match(/SnapKey 0x27/g) || []).length, 1, 'one snap-right site — no pair-only variant of the gesture');
+});
+
+test('P11 — pair mode WAITS for the tiler (never unref\'d, never detached); launch mode does not', () => {
+  const pair = runLauncher({ workspaces: [], identity: IDENT, args: PAIR }).plan;
+  const launch = runLauncher({ workspaces: [], identity: IDENT }).plan;
+  assert.equal(pair.tile.wait, true);
+  assert.equal(launch.tile.wait, false);
+  const src = readFileSync(launcher, 'utf8');
+  // A synchronous spawn of the tiler exists, with a timeout bound (its exact value is the developer's;
+  // it must be at least the poll deadline plus slack, so a hung tiler cannot hang /vscode forever).
+  const sync = src.match(/spawnSync\(\s*'powershell\.exe'\s*,\s*psArgs\(tilerScript\([\s\S]*?\)\s*;/);
+  assert.ok(sync, 'a spawnSync of the tiler script exists (the pair-mode wait)');
+  assert.match(sync[0], /timeout\s*:/, 'the wait is bounded by a timeout');
+  const lit = sync[0].match(/timeout\s*:\s*(\d+)/);
+  if (lit) assert.ok(Number(lit[1]) >= pair.tile.pollMs + 2000, `literal timeout ${lit[1]} ≥ pollMs + 2000`);
+  else assert.match(sync[0], /pollMs/, 'a non-literal timeout is expressed in terms of the poll deadline');
+  // The memory-recorded trap: DETACHED_PROCESS gives powershell.exe no console; the opts stay as they are.
+  assert.match(src, /const TILE_SPAWN_OPTS = \{ stdio: 'ignore', windowsHide: true \};/);
+});
+
+// The doc is private-repo only. The skip keys on the CHECKOUT, not on the doc: the kit ships neither
+// the exporter nor SPEC.md, so the exporter's absence says "this is the public kit", whereas a bare
+// existsSync on the doc could not tell the kit from a deletion. In the private repo a missing doc is
+// a build gap and fails the row (docs/260908-suite-skip-guards-spec.md §2, §4).
+const IN_PUBLIC_KIT = !existsSync(join(here, '..', 'tools', 'export-public.mjs'));
+const DOC = join(here, '..', 'docs', 'cc-launcher.md');
+test('P14 — the flag and the command are documented in docs/cc-launcher.md, in one section', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
+  assert.ok(existsSync(DOC), 'docs/cc-launcher.md exists in the private repo');
+  const doc = readFileSync(DOC, 'utf8');
+  assert.ok(doc.includes('--pair-vscode'), 'the flag is documented');
+  assert.ok(doc.includes('/vscode'), 'the command is documented');
+  const sections = doc.split(/^## /m);
+  assert.ok(sections.some((s) => s.includes('--pair-vscode') && s.includes('/vscode')),
+    'one ## section mentions both the flag and the command');
 });

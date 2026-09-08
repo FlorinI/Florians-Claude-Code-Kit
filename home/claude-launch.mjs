@@ -25,6 +25,9 @@
 //                          deleted from the child env when the flag is absent — every launch owns it)
 //   --title-prefix <text>  prepend to the title   --title-suffix <text>  append to the title
 //   --no-vscode            force the VS Code co-launch (and tiling) off regardless of CC_VSCODE
+//   --pair-vscode          PAIR MODE: run the VS Code co-launch + tiling for the session already
+//                          running in this terminal, then exit — no claude is launched (the /vscode
+//                          command). Implies VS Code on; contradicts --no-vscode (usage error).
 //   --print-title / --print-tabcolor   the shell-function seams (see below)
 
 import { readFileSync, existsSync, statSync, readdirSync, appendFileSync } from 'node:fs';
@@ -37,7 +40,7 @@ const BEL = '\x07';
 const loc = process.cwd();
 
 // --- launcher's own flags (self-consumed) -------------------------------------------------------
-// Four flags belong to the LAUNCHER, not to claude. They are stripped from the argv forwarded to
+// Five flags belong to the LAUNCHER, not to claude. They are stripped from the argv forwarded to
 // claude AND from the prompt scan, so `cc --config-dir <d> "do X"` still detects "do X" as the
 // user's prompt (and therefore still suppresses the /color injection). Because they never reach the
 // scan they need no VALUE_FLAGS entry. Malformed input is inert, never fatal: a value-taking flag
@@ -49,6 +52,8 @@ const loc = process.cwd();
 //   --title-prefix <text>  prepended to the computed title, one space separator
 //   --title-suffix <text>  appended to the computed title, one space separator
 //   --no-vscode            force the VS Code co-launch (and hence tiling) off, whatever CC_VSCODE says
+//   --pair-vscode          pair mode: VS Code co-launch + tiling only, for a session that is already
+//                          running in this terminal; claude is not launched (see the pair branch below)
 //
 // Prefix/suffix are deliberately generic: `--config-dir` alone changes NOTHING visually. A caller
 // that wants a visual marker for a second subscription opts into it explicitly.
@@ -57,10 +62,11 @@ function expandTilde(p) {
   return (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) ? join(homedir(), s.slice(1)) : s;
 }
 function parseLauncherFlags(argv) {
-  const o = { configDir: null, titlePrefix: '', titleSuffix: '', noVsCode: false, rest: [] };
+  const o = { configDir: null, titlePrefix: '', titleSuffix: '', noVsCode: false, pairVsCode: false, rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-vscode') { o.noVsCode = true; continue; }
+    if (a === '--pair-vscode') { o.pairVsCode = true; continue; }
     if (a === '--config-dir' || a === '--title-prefix' || a === '--title-suffix') {
       const v = argv[i + 1];
       i++;                                       // consume the value (or fall off the end — inert)
@@ -75,6 +81,14 @@ function parseLauncherFlags(argv) {
   return o;
 }
 const flags = parseLauncherFlags(process.argv.slice(2));
+// Pair mode exists to open VS Code, so forbidding VS Code in the same invocation is a contradiction,
+// not a preference to resolve. Refused before any side effect — and before the dry-run seam, so no
+// plan is printed for an invocation that cannot run. One static line: byte-identical in both orders.
+if (flags.pairVsCode && flags.noVsCode) {
+  console.error('--pair-vscode and --no-vscode contradict each other: pair mode exists to open VS Code. Drop one.');
+  process.exit(2);
+}
+const pair = flags.pairVsCode;
 
 // --- identity ---------------------------------------------------------------------------------
 // <cwd>/.desk/ is the home; the .claude/ read is the LEGACY fallback for a repo whose file hasn't
@@ -250,6 +264,7 @@ if (!userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor) cli.
 // CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are
 // truthy; every other value — '0', 'off', '', junk — is falsy. Kept local; this file has no deps.
 function EnvTruthy(v) { return v != null && ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase().trim()); }
+const dryRun = EnvTruthy(process.env.CC_LAUNCH_DRYRUN);
 
 // PATH + PATHEXT-aware executable resolver (Windows shims are .cmd/.bat, not bare names).
 function resolveOnPath(name) {
@@ -266,15 +281,16 @@ function resolveOnPath(name) {
   }
   return null;
 }
-const claudePath = resolveOnPath('claude');
-if (!claudePath) { console.error('claude executable not found on PATH.'); process.exit(1); }
+// Pair mode launches no claude, so it neither needs nor checks for the executable: argv stays empty.
+const claudePath = pair ? null : resolveOnPath('claude');
+if (!pair && !claudePath) { console.error('claude executable not found on PATH.'); process.exit(1); }
 
 // Windows .cmd/.bat shims must be run through the shell; native binaries spawn directly.
 function shimVector(exe, args) {
   const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(exe);
   return viaCmd ? [process.env.ComSpec || 'cmd.exe', '/c', exe, ...args] : [exe, ...args];
 }
-const claudeArgv = shimVector(claudePath, cli);
+const claudeArgv = pair ? [] : shimVector(claudePath, cli);
 
 // The env delta scopes to the CLAUDE CHILD only — not the VS Code co-launch, not the tiler, and not
 // this launcher's own identity/git reads (those are per-project, not per-config-home). Two inputs:
@@ -311,7 +327,8 @@ let vsPlan = { action: 'off', target: null, exe: null };
 // globally, so an env-only opt-out can't express "this one session, without VS Code". vsPlan stays
 // {action:'off'}, so tiling gates off through the existing path (tileEnabled needs vsPlan.exe) and
 // reports the existing 'vscode-off' reason — the reason taxonomy is not extended.
-if (!flags.noVsCode && EnvTruthy(process.env.CC_VSCODE)) {
+// `--pair-vscode` is the inverse: the user asked for VS Code explicitly, so the env is not consulted.
+if (pair || (!flags.noVsCode && EnvTruthy(process.env.CC_VSCODE))) {
   let action = 'folder', target = '.';
   try {
     const ws = readdirSync(loc).filter((n) => n.toLowerCase().endsWith('.code-workspace'));
@@ -345,11 +362,6 @@ const tileReason = tileEnabled ? 'on'
 const projectMatch = vsPlan.action === 'workspace'
   ? String(vsPlan.target).replace(/\.code-workspace$/i, '')
   : folder;
-const tilePlan = {
-  enabled: tileEnabled, reason: tileReason, side: 'terminal-left', ratio: 0.5,
-  captureMethod: 'foreground-sync', snapGroup: true, titleMatch: title, projectMatch,
-  pollMs: 5000, pollStepMs: 200,
-};
 
 // Debug (opt-in): CC_TILE_DEBUG truthy → the launcher + tiler append a trace to %TEMP%\cc-tile.log.
 const tileDbg = EnvTruthy(process.env.CC_TILE_DEBUG);
@@ -377,6 +389,70 @@ function captureForegroundHwnd() {
   tlog(`capture: status=${r.status} out=${JSON.stringify(out)} err=${JSON.stringify((r.stderr || '').toString().trim())}`);
   return /^-?\d+$/.test(out) && out !== '0' ? out : null;
 }
+
+// --- pair mode: which terminal window is "this session's"? ---------------------------------------
+// At launch the terminal is the foreground window by construction. In pair mode it is not — the
+// command is issued from inside a running claude, and the user may have clicked elsewhere — but the
+// session's own ancestry knows: walk the parent-process chain from this process up to the
+// WindowsTerminal.exe hosting it (each Windows Terminal window is its own process) and take that
+// process's main window. The walk is a pure function over a [{pid, ppid, name}] table so it is
+// testable without a real process tree; it stops at the first match, a missing pid, a cycle, or the
+// root, and returns null when no Windows Terminal is found — the caller then falls back to the
+// foreground capture, exactly as at launch.
+function terminalPidFor(startPid, table) {
+  const byPid = new Map(table.map((r) => [Number(r.pid), r]));
+  const seen = new Set();
+  let pid = Number(startPid);
+  while (byPid.has(pid) && !seen.has(pid)) {
+    seen.add(pid);
+    const row = byPid.get(pid);
+    if (String(row.name).split(/[\\/]/).pop().toLowerCase() === 'windowsterminal.exe') return pid;
+    pid = Number(row.ppid);
+  }
+  return null;
+}
+// The table: one CIM query, live. Under the dry-run seam the table comes from CC_LAUNCH_PROCTABLE
+// (a JSON file) and the start pid from CC_LAUNCH_PROCPID — both honoured ONLY under CC_LAUNCH_DRYRUN,
+// so no live path can be redirected; a dry-run with neither spawns nothing and reports the fallback.
+// Live, the query runs only when tiling is on: without a tile there is no window to find.
+function processTable() {
+  if (dryRun) {
+    const f = process.env.CC_LAUNCH_PROCTABLE;
+    if (!f) return null;
+    try { const t = JSON.parse(readFileSync(f, 'utf8')); return Array.isArray(t) ? t : null; } catch { return null; }
+  }
+  if (process.platform !== 'win32' || !tileEnabled) return null;
+  const ps = `$t=@(Get-CimInstance Win32_Process|ForEach-Object{[pscustomobject]@{pid=[int64]$_.ProcessId;ppid=[int64]$_.ParentProcessId;name=[string]$_.Name}});[Console]::Out.Write((ConvertTo-Json -Compress -InputObject $t))`;
+  const r = spawnSync('powershell.exe', psArgs(ps), { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, windowsHide: true });
+  try { const t = JSON.parse((r.stdout ? r.stdout.toString() : '').trim()); return Array.isArray(t) ? t : null; }
+  catch (e) { tlog(`proctable: status=${r.status} parse failed ${e}`); return null; }
+}
+// The main window of a process, as a decimal HWND string; null when the process is gone or windowless.
+function mainWindowHwnd(pid) {
+  const ps = `$p=Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue;if($p){[Console]::Out.Write($p.MainWindowHandle.ToInt64())}`;
+  const r = spawnSync('powershell.exe', psArgs(ps), { stdio: ['ignore', 'pipe', 'pipe'], timeout: 4000, windowsHide: true });
+  const out = (r.stdout ? r.stdout.toString() : '').trim();
+  tlog(`mainWindow pid=${pid}: status=${r.status} out=${JSON.stringify(out)}`);
+  return /^-?\d+$/.test(out) && out !== '0' ? out : null;
+}
+let terminalPid = null;
+if (pair) {
+  const table = processTable();
+  const startPid = (dryRun && process.env.CC_LAUNCH_PROCPID) ? Number(process.env.CC_LAUNCH_PROCPID) : process.pid;
+  if (table) terminalPid = terminalPidFor(startPid, table);
+}
+
+// `wait`: pair mode blocks on the tiler (the /vscode report must follow the arrangement, and the
+// process would otherwise exit before the tiler runs); launch mode fires it and moves on to claude.
+// `terminalPid` is reported in pair mode only, so a launch-mode plan is distinguishable from a
+// pair-mode fallback by the missing key.
+const tilePlan = {
+  enabled: tileEnabled, reason: tileReason, side: 'terminal-left', ratio: 0.5,
+  captureMethod: (pair && terminalPid) ? 'parent-walk' : 'foreground-sync',
+  snapGroup: true, titleMatch: title, projectMatch,
+  pollMs: 5000, pollStepMs: 200, wait: pair,
+  ...(pair ? { terminalPid } : {}),
+};
 
 // The detached tiler: polls up to pollMs for the VS Code window (Code.exe, title contains the project
 // token), then restores + SetWindowPos the terminal↔VS Code to the two halves of the terminal's
@@ -478,9 +554,10 @@ Dbg "snap: focusCode=$f1 winRight; focusTerm=$f2 winLeft DONE"
 }
 
 // --- dry-run seam: print the launch plan as ONE JSON line, spawn nothing ------------------------
-if (EnvTruthy(process.env.CC_LAUNCH_DRYRUN)) {
+if (dryRun) {
   process.stdout.write(JSON.stringify({
     launch: {
+      mode: pair ? 'pair' : 'launch',
       title, titlePrefix: flags.titlePrefix, titleSuffix: flags.titleSuffix,
       configDir: flags.configDir, noVsCode: flags.noVsCode,
     },
@@ -492,18 +569,32 @@ if (EnvTruthy(process.env.CC_LAUNCH_DRYRUN)) {
     tile: {
       enabled: tilePlan.enabled, reason: tilePlan.reason, side: tilePlan.side, ratio: tilePlan.ratio,
       captureMethod: tilePlan.captureMethod, snapGroup: tilePlan.snapGroup, titleMatch: tilePlan.titleMatch,
-      projectMatch: tilePlan.projectMatch, pollMs: tilePlan.pollMs,
+      projectMatch: tilePlan.projectMatch, pollMs: tilePlan.pollMs, wait: tilePlan.wait,
+      ...(pair ? { terminalPid: tilePlan.terminalPid } : {}),
     },
   }) + '\n');
   process.exit(0);
 }
 
-// Windows tiling: capture the launching terminal's HWND BEFORE VS Code opens (foreground = terminal
-// at this instant). Any failure → null → tiling silently skipped; the claude launch is untouched.
+// Pair mode has nothing to fall through to: with no `code` on PATH there is no VS Code to open, so
+// it says so (the existing reason, one line) and fails — where a launch would skip silently.
+if (pair && vsPlan.action === 'skip-no-cli') {
+  console.error('vscode-no-cli: the `code` command is not on PATH, so VS Code cannot be opened.');
+  process.exit(1);
+}
+
+// Windows tiling: capture the terminal's HWND BEFORE VS Code opens. At launch the foreground window
+// IS the terminal at this instant; in pair mode the parent walk names the terminal's process and its
+// main window is taken, with the foreground capture as the fallback. Any failure → null → tiling
+// silently skipped; the claude launch is untouched.
 let termHwnd = null;
+let captureUsed = 'foreground-sync';   // the method that actually produced termHwnd (the plan's is the intent)
 if (tilePlan.enabled) {
   tlog(`plan=${JSON.stringify(tilePlan)}`);
-  try { termHwnd = captureForegroundHwnd(); } catch (e) { termHwnd = null; tlog(`capture threw ${e}`); }
+  try {
+    if (pair && terminalPid) { termHwnd = mainWindowHwnd(terminalPid); if (termHwnd) captureUsed = 'parent-walk'; }
+    if (!termHwnd) termHwnd = captureForegroundHwnd();
+  } catch (e) { termHwnd = null; tlog(`capture threw ${e}`); }
 }
 
 if (vsPlan.exe) {
@@ -511,6 +602,29 @@ if (vsPlan.exe) {
     const [vsExe, ...vsArgs] = shimVector(vsPlan.exe, [vsPlan.target]);
     spawn(vsExe, vsArgs, VS_SPAWN_OPTS).unref();   // the one VS Code spawn site
   } catch { /* never block or fail the claude launch */ }
+}
+
+// Pair mode: WAIT for the tiler, then exit. The /vscode report must follow the arrangement, and this
+// process has no claude to block on, so the tiler runs synchronously — bounded by its own poll
+// deadline plus slack for Add-Type and the snap gesture, so a hung tiler cannot hang the session.
+// Same spawn opts as the launch path (no `detached`: DETACHED_PROCESS starves powershell.exe of a
+// console and the script never runs — `windowsHide` is the working alternative).
+if (pair) {
+  if (tilePlan.enabled && termHwnd) {
+    try {
+      spawnSync('powershell.exe', psArgs(tilerScript(termHwnd, tilePlan)), { ...TILE_SPAWN_OPTS, timeout: tilePlan.pollMs + 5000 });
+      tlog(`tiler finished termHwnd=${termHwnd}`);
+    } catch (e) { tlog(`tiler threw ${e}`); }
+  } else if (tilePlan.enabled) { tlog(`tiler NOT run (termHwnd=${termHwnd})`); }
+  // One summary line for the caller (/vscode words its report from this): what happened, not what
+  // was planned — `tile` is 'on' only when the tiler actually ran, and `terminal` is the capture
+  // method that produced the window, so a walk that resolved a pid but no window reads as the fallback.
+  process.stdout.write(JSON.stringify({
+    mode: 'pair', vscode: vsPlan.action,
+    tile: tilePlan.enabled ? (termHwnd ? 'on' : 'no-terminal-window') : tilePlan.reason,
+    terminal: captureUsed,
+  }) + '\n');
+  process.exit(0);
 }
 
 // Windows tiling: spawn the detached tiler (best-effort; never blocks or fails the claude launch).

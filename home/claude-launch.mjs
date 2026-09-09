@@ -30,9 +30,9 @@
 //                          command). Implies VS Code on; contradicts --no-vscode (usage error).
 //   --print-title / --print-tabcolor   the shell-function seams (see below)
 
-import { readFileSync, existsSync, statSync, readdirSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, appendFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 
 const ESC = '\x1b';
@@ -368,6 +368,40 @@ const tileDbg = EnvTruthy(process.env.CC_TILE_DEBUG);
 const TILE_LOG = `${process.env.TEMP || process.env.TMP || '.'}\\cc-tile.log`;
 function tlog(m) { if (tileDbg) { try { appendFileSync(TILE_LOG, `[node ${new Date().toISOString()}] ${m}\n`); } catch {} } }
 
+// --- the tiler's result file, and the seam that stands in for it --------------------------------
+// Pair mode reports what the arrangement BECAME, not that the tiler was started, so the tiler writes
+// one JSON object — at its end and at every early return — and the launcher (which already blocks on
+// it) reads it back. Launch mode passes an empty result path: the detached tiler writes nothing,
+// because nobody is waiting to read it.
+//
+// CC_TILE_FAKE_RESULT is the pair-mode TEST SEAM. When it names a path, the launcher spawns neither
+// the tiler nor the window capture and derives the summary from that file exactly as it would from a
+// real run — so the result→report mapping is covered offline, on any platform, without a window
+// being touched. It takes precedence over everything else in pair mode and is ignored outside it.
+const fakeTileResult = pair ? String(process.env.CC_TILE_FAKE_RESULT || '').trim() : '';
+
+// Absent, unreadable, unparsable, or not a JSON object → null, which maps to 'unknown' below.
+function readTileResult(p) {
+  try {
+    const r = JSON.parse(readFileSync(p, 'utf8'));
+    return (r && typeof r === 'object' && !Array.isArray(r)) ? r : null;
+  } catch { return null; }
+}
+// result → the pair summary's `tile` and `focus`. Only a literal `true` counts as a claim: a missing,
+// null or junk field reads as "did not happen", so a truncated or half-written result degrades to a
+// SMALLER claim ('unknown', 'tiled-no-group') and never to a larger one. An unrecognised shape — no
+// per-window objects, or a non-boolean `found` — is not a result at all and reports 'unknown'.
+function tileOutcome(r) {
+  const side = (k) => (r && r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) ? r[k] : null;
+  const t = side('terminal'), c = side('vscode');
+  const focus = (r && r.foreground === 'terminal') ? 'terminal' : 'other';
+  if (!t || !c || typeof t.found !== 'boolean' || typeof c.found !== 'boolean') return { tile: 'unknown', focus: 'other' };
+  if (!t.found) return { tile: 'no-terminal-window', focus };
+  if (!c.found) return { tile: 'no-vscode-window', focus };
+  if (t.placed !== true || c.placed !== true) return { tile: 'unknown', focus };
+  return { tile: (t.snapped === true && c.snapped === true) ? 'tiled' : 'tiled-no-group', focus };
+}
+
 // Inline-PowerShell plumbing: encode as base64(UTF-16LE) and run via -EncodedCommand — sidesteps all
 // quoting of the HWND / name@branch title, and is ExecutionPolicy-proof.
 // NOTE: NO `detached: true`. DETACHED_PROCESS gives powershell.exe no console at all, and the console
@@ -436,7 +470,7 @@ function mainWindowHwnd(pid) {
   return /^-?\d+$/.test(out) && out !== '0' ? out : null;
 }
 let terminalPid = null;
-if (pair) {
+if (pair && !fakeTileResult) {          // the seam replaces the whole tiler path, the walk included
   const table = processTable();
   const startPid = (dryRun && process.env.CC_LAUNCH_PROCPID) ? Number(process.env.CC_LAUNCH_PROCPID) : process.pid;
   if (table) terminalPid = terminalPidFor(startPid, table);
@@ -458,9 +492,10 @@ const tilePlan = {
 // token), then restores + SetWindowPos the terminal↔VS Code to the two halves of the terminal's
 // monitor. All-or-nothing: moves nothing unless BOTH windows resolve. SWP_NOACTIVATE keeps focus.
 function spawnTiler(hwnd, plan) {
-  spawn('powershell.exe', psArgs(tilerScript(hwnd, plan)), TILE_SPAWN_OPTS).unref();
+  spawn('powershell.exe', psArgs(tilerScript(hwnd, plan, '')), TILE_SPAWN_OPTS).unref();
 }
-function tilerScript(hwnd, plan) {
+// `resultPath`: where the tiler writes its account of what happened. '' → it writes none (launch mode).
+function tilerScript(hwnd, plan, resultPath) {
   return `$ErrorActionPreference='SilentlyContinue'
 try {
 Add-Type @'
@@ -475,6 +510,7 @@ public class CCW{
  [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m,ref MONITORINFO mi);
  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -495,8 +531,24 @@ $termHwnd=[IntPtr][long]${hwnd}
 $ratio=${plan.ratio}; $pollMs=${plan.pollMs}; $stepMs=${plan.pollStepMs}
 $dbg=${tileDbg ? 1 : 0}
 $log=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64utf8(TILE_LOG)}'))
-function Dbg($m){if($dbg){try{Add-Content -LiteralPath $log -Value ("[tiler {0}] {1}" -f (Get-Date -Format o),$m)}catch{}}}
+$resultPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64utf8(resultPath || '')}'))
+# The trace is written through a BOM-less UTF-8 encoder, matching what the launcher appends to the
+# same file. Windows PowerShell 5.1's Add-Content defaults to the ANSI code page, which turns a
+# session title's identity glyph into '?'; its -Encoding utf8 writes a BOM, mid-file, in a shared log.
+function Dbg($m){if($dbg){try{[IO.File]::AppendAllText($log,("[tiler {0}] {1}" -f (Get-Date -Format o),$m)+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))}catch{}}}
 function Title([IntPtr]$h){$sb=New-Object Text.StringBuilder 512;[void][CCW]::GetWindowText($h,$sb,512);$sb.ToString()}
+function Rect([IntPtr]$h){$r=New-Object CCW+RECT;[void][CCW]::GetWindowRect($h,[ref]$r);"$($r.left),$($r.top),$($r.right),$($r.bottom)"}
+# Which window holds the keyboard right now. Reported so the caller never has to guess, and so a
+# focus that ended on a Windows picker is visible instead of invisible.
+function FgName(){$f=[CCW]::GetForegroundWindow();if($f -eq $term){'terminal'}elseif($f -eq $code){'vscode'}else{'other'}}
+# The tiler's account of what happened, one JSON object, written at EVERY exit path this script has.
+# Nothing written = the tiler died or timed out, which the launcher reports as 'unknown'.
+function Emit($tf,$tp,$ts,$cf,$cp,$cs,$fg){
+ $o=[pscustomobject]@{v=1;terminal=[pscustomobject]@{found=[bool]$tf;placed=[bool]$tp;snapped=[bool]$ts};vscode=[pscustomobject]@{found=[bool]$cf;placed=[bool]$cp;snapped=[bool]$cs};foreground=[string]$fg}
+ $j=ConvertTo-Json -Compress -Depth 5 -InputObject $o
+ Dbg "result $j"
+ if($resultPath -ne ''){try{[IO.File]::WriteAllText($resultPath,$j,[Text.UTF8Encoding]::new($false))}catch{Dbg "result write failed $_"}}
+}
 function Cands(){
  $l=New-Object Collections.ArrayList
  $cb=[CCW+EnumProc]{param($h,$x) if([CCW]::IsWindowVisible($h)){$t=Title $h;if($t.Length -gt 0){[void]$l.Add([pscustomobject]@{h=$h;t=$t})}};return $true}
@@ -508,7 +560,7 @@ Dbg "start termHwnd=${hwnd} titleMatch=[$titleMatch] projectMatch=[$projectMatch
 $term=[IntPtr]::Zero
 if($termHwnd -ne [IntPtr]::Zero -and [CCW]::IsWindow($termHwnd)){$term=$termHwnd;Dbg "term=captured $termHwnd title=[$(Title $termHwnd)]"}
 if($term -eq [IntPtr]::Zero){$m=@(Cands|Where-Object{$_.t.ToLowerInvariant().Contains($titleMatch)});if($m.Count -ge 1){$term=$m[0].h;Dbg "term=title-enum $($m[0].h)"}}
-if($term -eq [IntPtr]::Zero){Dbg "term UNRESOLVED -> no-op";return}
+if($term -eq [IntPtr]::Zero){Dbg "term UNRESOLVED -> no-op";Emit $false $false $false $false $false $false (FgName);return}
 $code=[IntPtr]::Zero
 $deadline=(Get-Date).AddMilliseconds($pollMs);$tries=0
 while((Get-Date) -lt $deadline -and $code -eq [IntPtr]::Zero){
@@ -516,7 +568,7 @@ while((Get-Date) -lt $deadline -and $code -eq [IntPtr]::Zero){
  $cm=@(Cands|Where-Object{$_.h -ne $term -and $_.t.ToLowerInvariant().Contains('visual studio code') -and $_.t.ToLowerInvariant().Contains($projectMatch)})
  if($cm.Count -ge 1){$code=$cm[0].h;Dbg "code=$($cm[0].h) title=[$($cm[0].t)] tries=$tries"}else{Start-Sleep -Milliseconds $stepMs}
 }
-if($code -eq [IntPtr]::Zero){Dbg "code UNRESOLVED tries=$tries; VSCode windows seen: $((Cands|Where-Object{$_.t.ToLowerInvariant().Contains('visual studio code')}|ForEach-Object{$_.t}) -join ' || ')";return}
+if($code -eq [IntPtr]::Zero){Dbg "code UNRESOLVED tries=$tries; VSCode windows seen: $((Cands|Where-Object{$_.t.ToLowerInvariant().Contains('visual studio code')}|ForEach-Object{$_.t}) -join ' || ')";Emit $true $false $false $false $false $false (FgName);return}
 $mon=[CCW]::MonitorFromWindow($term,2)
 $mi=New-Object CCW+MONITORINFO;$mi.cbSize=[Runtime.InteropServices.Marshal]::SizeOf($mi)
 $gm=[CCW]::GetMonitorInfo($mon,[ref]$mi)
@@ -545,11 +597,38 @@ function SnapKey([byte]$arrow){  # tap Win+<arrow>: LWin=0x5B down, arrow down/u
  [CCW]::keybd_event(0x5B,0,0,[UIntPtr]::Zero);[CCW]::keybd_event($arrow,0,0,[UIntPtr]::Zero)
  [CCW]::keybd_event($arrow,0,2,[UIntPtr]::Zero);[CCW]::keybd_event(0x5B,0,2,[UIntPtr]::Zero)
 }
+# Snapping one window raises the Snap Assist picker over the empty half, and that picker TAKES THE
+# KEYBOARD — it survives with no input for minutes, it eats the arrow keys and Enter, and while it
+# holds the foreground the second snap gesture goes to it instead of to our window, so no snap group
+# ever forms. Esc closes it. This is the ONLY Esc this script sends, and it is guarded: the left half
+# hosts a live Claude Code session, so an Esc that reached the terminal would interrupt whatever the
+# user is typing. It is sent only when the foreground window is neither of our two windows.
+function DismissPicker($at){
+ $fgNow=[CCW]::GetForegroundWindow()
+ if($fgNow -ne $term -and $fgNow -ne $code){
+  $esc=[byte]0x1B  # VK_ESCAPE — down, then up
+  [CCW]::keybd_event($esc,0,0,[UIntPtr]::Zero);[CCW]::keybd_event($esc,0,2,[UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 150
+  Dbg "dismiss/$at fg=$fgNow is neither terminal nor VS Code -> Esc sent; fg now=$([CCW]::GetForegroundWindow())"
+ }else{Dbg "dismiss/$at fg=$fgNow is one of ours -> no Esc"}
+}
+# The rectangles SetWindowPos gave the two windows. A window that really snapped carries the snap
+# border adjustment afterwards, so a rectangle unchanged by the gesture means the snap never landed.
+$t0=Rect $term;$c0=Rect $code
+Dbg "rects after SetWindowPos: term=[$t0] code=[$c0]"
 # VS Code RIGHT first (0x27), terminal LEFT second (0x25) -> focus ends on the terminal.
 $f1=Focus $code;Start-Sleep -Milliseconds 150;SnapKey 0x27
-Start-Sleep -Milliseconds 400   # let Snap Assist settle before the second snap pairs the group
+Start-Sleep -Milliseconds 400   # let the snap settle before dismissing the picker it raises
+DismissPicker 'after-right'
 $f2=Focus $term;Start-Sleep -Milliseconds 150;SnapKey 0x25
-Dbg "snap: focusCode=$f1 winRight; focusTerm=$f2 winLeft DONE"
+Start-Sleep -Milliseconds 400
+DismissPicker 'after-left'
+# The terminal is where the command was typed, so it is where the next keystroke must go.
+$f3=Focus $term;Start-Sleep -Milliseconds 120
+$t1=Rect $term;$c1=Rect $code
+$fgEnd=FgName
+Dbg "snap: focusCode=$f1 winRight; focusTerm=$f2 winLeft; refocus=$f3; rects term=[$t1] code=[$c1] fg=$fgEnd DONE"
+Emit $true $r1 ($t1 -ne $t0) $true $r2 ($c1 -ne $c0) $fgEnd
 }catch{Dbg "EXCEPTION $_"}`;
 }
 
@@ -589,7 +668,7 @@ if (pair && vsPlan.action === 'skip-no-cli') {
 // silently skipped; the claude launch is untouched.
 let termHwnd = null;
 let captureUsed = 'foreground-sync';   // the method that actually produced termHwnd (the plan's is the intent)
-if (tilePlan.enabled) {
+if (tilePlan.enabled && !fakeTileResult) {
   tlog(`plan=${JSON.stringify(tilePlan)}`);
   try {
     if (pair && terminalPid) { termHwnd = mainWindowHwnd(terminalPid); if (termHwnd) captureUsed = 'parent-walk'; }
@@ -610,18 +689,36 @@ if (vsPlan.exe) {
 // Same spawn opts as the launch path (no `detached`: DETACHED_PROCESS starves powershell.exe of a
 // console and the script never runs — `windowsHide` is the working alternative).
 if (pair) {
-  if (tilePlan.enabled && termHwnd) {
+  let outcome;
+  if (fakeTileResult) {                      // the test seam: no tiler, no windows touched
+    outcome = tileOutcome(readTileResult(fakeTileResult));
+    tlog(`fake result seam ${fakeTileResult} -> ${JSON.stringify(outcome)}`);
+  } else if (!tilePlan.enabled) {
+    outcome = { tile: tilePlan.reason, focus: 'other' };   // tiling never ran; the reason says why
+  } else if (!termHwnd) {
+    outcome = { tile: 'no-terminal-window', focus: 'other' };
+    tlog(`tiler NOT run (termHwnd=${termHwnd})`);
+  } else {
+    const resultPath = join(tmpdir(), `cc-tile-result-${process.pid}.json`);
     try {
-      spawnSync('powershell.exe', psArgs(tilerScript(termHwnd, tilePlan)), { ...TILE_SPAWN_OPTS, timeout: tilePlan.pollMs + 5000 });
+      // Slack over the poll deadline: Add-Type, the two snaps, the two guarded dismissals and the
+      // final refocus. A tiler killed here writes no result, which reports as 'unknown' — never as a
+      // tiling that succeeded.
+      spawnSync('powershell.exe', psArgs(tilerScript(termHwnd, tilePlan, resultPath)), { ...TILE_SPAWN_OPTS, timeout: tilePlan.pollMs + 7000 });
       tlog(`tiler finished termHwnd=${termHwnd}`);
     } catch (e) { tlog(`tiler threw ${e}`); }
-  } else if (tilePlan.enabled) { tlog(`tiler NOT run (termHwnd=${termHwnd})`); }
-  // One summary line for the caller (/vscode words its report from this): what happened, not what
-  // was planned — `tile` is 'on' only when the tiler actually ran, and `terminal` is the capture
-  // method that produced the window, so a walk that resolved a pid but no window reads as the fallback.
+    outcome = tileOutcome(readTileResult(resultPath));      // no result (timeout, crash) → 'unknown'
+    try { rmSync(resultPath, { force: true }); } catch {}
+    tlog(`tiler result ${JSON.stringify(outcome)}`);
+  }
+  // One summary line for the caller (/vscode words its report from this): what the arrangement
+  // BECAME, read back from the tiler's own result — not the fact that the tiler was started, which
+  // is what used to be reported and was true of a run whose second snap never landed. `terminal` is
+  // the capture method that produced the window, so a walk that resolved a pid but no window reads
+  // as the fallback.
   process.stdout.write(JSON.stringify({
     mode: 'pair', vscode: vsPlan.action,
-    tile: tilePlan.enabled ? (termHwnd ? 'on' : 'no-terminal-window') : tilePlan.reason,
+    tile: outcome.tile, focus: outcome.focus,
     terminal: captureUsed,
   }) + '\n');
   process.exit(0);

@@ -70,8 +70,25 @@ function runLauncher({
     const plan = (dryRun && res.stdout.trim()) ? JSON.parse(res.stdout.trim().split('\n').pop()) : null;
     return { res, plan, proj };
   } finally {
-    rmSync(proj, { recursive: true, force: true });
-    rmSync(shims, { recursive: true, force: true });
+    rmTree(proj);
+    rmTree(shims);
+  }
+}
+
+// A cleanup that survives a detached shim still holding the directory. On a LIVE (non-dry-run) pair
+// run the launcher spawns the `code` shim DETACHED and unrefs it, and that shim's own cmd.exe keeps
+// the project directory as its cwd for a moment after the launcher has exited — so a bare rmSync
+// throws EBUSY and fails a row over a Windows file-locking artifact of the harness rather than over
+// anything asserted. `rmSync`'s own maxRetries does not cover this case on Windows; a spin does.
+// It never masks a real failure: after the budget the last error is thrown.
+function rmTree(dir) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try { rmSync(dir, { recursive: true, force: true }); return; } catch (e) {
+      if (Date.now() > deadline) throw e;
+      const until = Date.now() + 50;
+      while (Date.now() < until) { /* the harness has no async seam here — a short spin */ }
+    }
   }
 }
 
@@ -190,6 +207,15 @@ test('T6 — the tiler forms a snap group VS-Code-right-first then terminal-left
   const left = src.indexOf('SnapKey 0x25');
   assert.ok(right > 0 && left > 0, 'both snap directions present');
   assert.ok(right < left, 'VS Code snaps right first, terminal snaps left second');
+  // ONE SITE EACH, counted — added 2026-09-09. Order alone is not enough: the pair-mode work inserts
+  // a guarded Esc between and after the two snaps, and the obvious wrong way to make a snap "take"
+  // is to send the gesture twice. A second `SnapKey 0x27` after the terminal's snap re-raises the
+  // picker over the half that was just filled and leaves focus on VS Code, which is the arrangement
+  // acceptance example A1 forbids — and the old index comparison was still green against it.
+  assert.equal((src.match(/SnapKey 0x27/g) || []).length, 1,
+    'exactly one SnapKey 0x27 site — the gesture is driven once per window, and a pair-only second one is a different arrangement, not a retry');
+  assert.equal((src.match(/SnapKey 0x25/g) || []).length, 1,
+    'exactly one SnapKey 0x25 site, for the same reason');
   // Foreground lock must be lifted for a background process to focus each window before snapping.
   assert.match(src, /SPI_SETFOREGROUNDLOCKTIMEOUT|0x2001/, 'zeroes the foreground lock timeout');
   assert.match(src, /AttachThreadInput/, 'attaches to the foreground input queue to steal focus');
@@ -766,4 +792,149 @@ test('P14 — the flag and the command are documented in docs/cc-launcher.md, in
   const sections = doc.split(/^## /m);
   assert.ok(sections.some((s) => s.includes('--pair-vscode') && s.includes('/vscode')),
     'one ## section mentions both the flag and the command');
+});
+
+// The inline PowerShell the launcher emits, bounded by `tilerScript`'s own body. Several rows below
+// count keystrokes inside it, and counting them over the whole module would fold in the launcher's
+// own ANSI constants and its prose.
+function tilerSource(src) {
+  const at = src.indexOf('function tilerScript(');
+  assert.ok(at > 0, 'home/claude-launch.mjs must declare tilerScript() — it is the script whose keystrokes these rows count');
+  const open = src.indexOf('{', at);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(open, i + 1);
+  }
+  throw new Error('tilerScript body is unbalanced');
+}
+
+// --- P15–P18: the guarded Esc, the result readback, and the trace encoding -------------------------
+// 2026-09-09 suite-integrity sprint §6. Three findings from the pair-mode G2.5 pass land here:
+// the tiler's Snap Assist dismissal must be guarded, the reported `tile` value must be the tiler's
+// own account of what happened rather than the fact it was spawned, and the tiler's trace must
+// round-trip the session's identity emoji.
+
+test('P15 — the tiler sends exactly ONE Esc, and only after finding the foreground is neither window', () => {
+  // WHY THE GUARD IS NOT OPTIONAL, AND WHY THIS IS A ROW RATHER THAN A COMMENT. The left half hosts a
+  // LIVE CLAUDE CODE SESSION. An Esc delivered there interrupts whatever the user was typing — so an
+  // unguarded second Esc, added later by someone reasoning only about Snap Assist, is a defect that
+  // no window-free test can otherwise see. The Esc exists at all because the first snap raises the
+  // Snap Assist picker, which then holds the keyboard: without the dismissal the terminal's own snap
+  // never lands and the next keystroke goes to a window picker for up to about two minutes.
+  const src = readFileSync(launcher, 'utf8');
+  const tiler = tilerSource(src);
+
+  // VK_ESCAPE IS COUNTED BY ITS BYTE, ANYWHERE IN THE TILER — not by the variable the current build
+  // happens to hold it in, and not by the word "Esc", which appears in prose and in the launcher's
+  // own ANSI `ESC` constant. `$esc2 = [byte]0x1B` beside the first one is the shape a second,
+  // unguarded dismissal actually takes, and a needle keyed on `$esc` would not see it.
+  const escBytes = [...tiler.matchAll(/0x1B\b/gi)];
+  assert.equal(escBytes.length, 1,
+    `VK_ESCAPE (0x1B) appears ${escBytes.length} times in the tiler script — exactly one Esc site may exist, because a second one is a second chance to interrupt the live Claude session in the left half`);
+
+  // And that one site is reached only from a foreground read that found NEITHER window. The guard is
+  // read as a span: the `GetForegroundWindow()` call, both comparands, and the keystroke, in order,
+  // inside one enclosing block.
+  const guard = src.match(/\$fgNow\s*=\s*\[CCW\]::GetForegroundWindow\(\)[\s\S]{0,400}?keybd_event\(\s*\$esc/);
+  assert.ok(guard, 'the Esc must be preceded by a GetForegroundWindow() read in the same block — an unconditional Esc lands in the live Claude session');
+  assert.match(guard[0], /\$term/, '…and the read must be compared against the TERMINAL handle');
+  assert.match(guard[0], /\$code/, '…and against the VS CODE handle — the Esc fires only when the foreground is neither');
+});
+
+// The six result fixtures of the test plan, plus the four degradation cases the developer drove
+// through the real launcher. The key names are the seam's, read from home/claude-launch.mjs and not
+// invented here: `terminal` / `vscode`, each { found, placed, snapped }, plus `foreground`.
+const TILE_FIXTURES = [
+  ['R-tiled', { v: 1, terminal: { found: true, placed: true, snapped: true }, vscode: { found: true, placed: true, snapped: true }, foreground: 'terminal' }, 'tiled', 'terminal'],
+  ['R-nogroup', { v: 1, terminal: { found: true, placed: true, snapped: false }, vscode: { found: true, placed: true, snapped: true }, foreground: 'terminal' }, 'tiled-no-group', 'terminal'],
+  ['R-novs', { v: 1, terminal: { found: true, placed: true, snapped: true }, vscode: { found: false, placed: false, snapped: false }, foreground: 'terminal' }, 'no-vscode-window', 'terminal'],
+  ['R-noterm', { v: 1, terminal: { found: false, placed: false, snapped: false }, vscode: { found: true, placed: true, snapped: true }, foreground: 'other' }, 'no-terminal-window', 'other'],
+  ['R-focus', { v: 1, terminal: { found: true, placed: true, snapped: true }, vscode: { found: true, placed: true, snapped: true }, foreground: 'vscode' }, 'tiled', 'other'],
+  ['R-notplaced', { v: 1, terminal: { found: true, placed: false, snapped: false }, vscode: { found: true, placed: true, snapped: true }, foreground: 'terminal' }, 'unknown', 'terminal'],
+];
+
+// The degradation set: nothing here is a result, and every one of them must report `unknown` rather
+// than the `tiled` the old `tile:"on"` reported for a tiler that timed out or died.
+const TILE_DEGRADED = [
+  ['R-missing (no file at the named path)', null],
+  ['unparsable bytes', '{"terminal":'],
+  ['an empty file', ''],
+  ['a JSON array', '[]'],
+  ['an object with `found` but no per-window objects', '{"v":1,"found":true}'],
+  ['a per-window object whose `found` is not a boolean', '{"v":1,"terminal":{"found":"yes"},"vscode":{"found":true}}'],
+];
+
+function pairSummary(fakePath) {
+  const { res } = runLauncher({
+    workspaces: [], identity: IDENT, dryRun: false, args: PAIR,
+    env: { CC_TILE_FAKE_RESULT: fakePath },
+  });
+  assert.equal(res.status, 0, `pair run exited ${res.status}: ${res.stderr}`);
+  assert.ok(oneLine(res.stdout), `the pair summary is exactly one line of JSON (got: ${JSON.stringify(res.stdout)})`);
+  return JSON.parse(res.stdout.trim());
+}
+
+test('P16 — the reported `tile` is the TILER\'S OWN ACCOUNT of what happened, driven through CC_TILE_FAKE_RESULT', () => {
+  // WHAT THIS REPLACES. `tile:"on"` meant "the tiler was spawned". The tiler's no-op returns (no VS
+  // Code window, no terminal window) and a spawnSync timeout were all invisible in it, and
+  // home/commands/vscode.md turned that value into the word "tiled" — so a run whose terminal snap
+  // had failed reported a snap group that was not there. The seam is the only way to cover the
+  // mapping offline: it needs no window, no platform and no keystroke.
+  const dir = mkdtempSync(join(tmpdir(), 'ccl-tile-'));
+  try {
+    for (const [name, payload, tile, focus] of TILE_FIXTURES) {
+      const p = join(dir, `${name}.json`);
+      writeFileSync(p, JSON.stringify(payload), 'utf8');
+      const s = pairSummary(p);
+      assert.equal(s.tile, tile, `${name}: tile`);
+      assert.equal(s.focus, focus, `${name}: focus — the OS's answer to "who gets the next keystroke", which is what acceptance example A1 promises`);
+      assert.equal(s.mode, 'pair', `${name}: still a pair summary`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('P17 — a result that is absent, truncated or malformed reports `unknown` — never a tiling that succeeded', () => {
+  // THE FIXTURE THAT MATTERS MOST is the missing file: that is the timed-out or dead tiler, which is
+  // exactly the case that reported `tiled` before this sprint. The rest pin the DIRECTION of the
+  // degradation: only a literal `true` counts as a claim, so a half-written result can make a
+  // SMALLER claim and never a larger one.
+  const dir = mkdtempSync(join(tmpdir(), 'ccl-degr-'));
+  try {
+    for (const [what, bytes] of TILE_DEGRADED) {
+      const p = join(dir, 'result.json');
+      rmSync(p, { force: true });
+      if (bytes !== null) writeFileSync(p, bytes, 'utf8');
+      const s = pairSummary(p);
+      assert.equal(s.tile, 'unknown', `${what}: reports unknown`);
+      assert.equal(s.focus, 'other', `${what}: and claims nothing about focus either`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('P18 — no `on` literal survives in the pair summary, and the trace is written BOM-less UTF-8', () => {
+  const src = readFileSync(launcher, 'utf8');
+
+  // (a) THE RETIRED VALUE. `tile: 'on'` is what "the tiling code ran" was spelled as; the vocabulary
+  //     is now what the arrangement became. A literal `'on'` in a tile position would mean the old
+  //     report survived somewhere alongside the new one.
+  assert.ok(!/tile\s*:\s*['"]on['"]/.test(src),
+    "home/claude-launch.mjs still writes `tile: 'on'` somewhere — the summary reports what the arrangement BECAME, not that the tiler was started");
+
+  // (b) THE TRACE ENCODING. The tiler runs under powershell.exe — Windows PowerShell 5.1 — whose
+  //     Add-Content default is the ANSI code page. A session title carries a colour emoji and a
+  //     separator glyph, and every non-ASCII character in it reached the trace file as a question
+  //     mark or a replacement character — which makes the trace useless for identifying WHICH
+  //     session a line came from, and identifying the session is what the trace is read for. The
+  //     launcher's own appendFileSync writes BOM-less UTF-8 to the SAME file, so the tiler has to
+  //     match it. `-Encoding utf8` is not the fix: PowerShell 5.1 writes a BOM with it, mid-file, in
+  //     a log two processes append to.
+  const dbg = src.match(/function Dbg\(\$m\)\{[\s\S]{0,400}?\n/);
+  assert.ok(dbg, 'the tiler defines a Dbg trace function');
+  assert.match(dbg[0], /\[IO\.File\]::AppendAllText\(/,
+    'the tiler\'s Dbg must write through [IO.File]::AppendAllText — a bare Add-Content writes the ANSI code page and mangles the identity emoji the trace is read for');
+  assert.match(dbg[0], /\[Text\.UTF8Encoding\]::new\(\$false\)/,
+    '…with a BOM-LESS UTF8Encoding, matching what the launcher\'s own appendFileSync writes to the same file');
+  assert.ok(!/-Encoding\s+utf8/i.test(dbg[0]),
+    "…and never `-Encoding utf8`, which on PowerShell 5.1 writes a BOM in the middle of a file two processes append to");
 });

@@ -24,6 +24,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..');
 const launcher = join(ROOT, 'home', 'claude-launch.mjs');
 const HELP_FIXTURE = join(here, 'fixtures', 'claude-help-2.1.251.txt');
+// The public-kit marker. This file ships in the kit, and the kit has neither the exporter nor the
+// private docs — so the exporter's absence says "this checkout is the public kit". A bare existsSync
+// on `docs/cc-launcher.md` cannot tell the kit from a deletion; this can, and the deletion is what
+// the doc rows below exist to catch (docs/260908-suite-skip-guards-spec.md §2).
+const IN_PUBLIC_KIT = !existsSync(join(ROOT, 'tools', 'export-public.mjs'));
 
 function makeShims() {
   const d = mkdtempSync(join(tmpdir(), 's1l-shim-'));
@@ -122,12 +127,27 @@ test('N14 source — the deletion is unconditional, a real `delete`, keyed on th
   assert.ok(!/CLAUDE_CONFIG_DIR\s*=\s*''/.test(s), 'never written as an empty string');
   assert.ok(!/process\.env\.CLAUDE_CONFIG_DIR/.test(s), 'the launcher never reads the ambient value');
   // Doc rot in scope: the unverified new-tab-spawner claim is deleted, not kept (spec fork 14).
-  // The doc is private-repo only — the public kit does not ship it, so this row self-skips there
-  // (the same pattern as source-invariants D4).
+  // The doc half runs in the PRIVATE REPO ONLY, gated on the kit marker — the same shape as
+  // source-invariants D4. Gated on the document itself, as it was until 2026-09-09, deleting
+  // `docs/cc-launcher.md` made the ban disappear instead of fail (suite-integrity sprint §4.2 site 6).
   const docPath = join(ROOT, 'docs', 'cc-launcher.md');
-  if (existsSync(docPath)) {
+  if (!IN_PUBLIC_KIT) {
+    assert.ok(existsSync(docPath),
+      'docs/cc-launcher.md is missing — it is the living reference for the launcher this row guards; in the private repo its absence is a build gap');
     const doc = readFileSync(docPath, 'utf8');
     assert.ok(!/spawner scrubs/.test(doc), 'the "spawner scrubs CLAUDE_CONFIG_DIR" claim is gone from cc-launcher.md');
+
+    // THE DRY-RUN CAVEAT, PINNED (2026-09-09 suite-integrity sprint §6.3). A rehearsal without the
+    // process-table seams reports `captureMethod: 'foreground-sync'` and `terminalPid: null` although
+    // the live run parent-walks. That is not a defect — which capture method the launcher WOULD use is
+    // not part of what acceptance example A4 promises the rehearsal names (the side, the ratio and the
+    // snap group are, and it reports all three correctly). What it is, is a trap for the next person
+    // who reads a rehearsal and files the discrepancy as a bug. The sentence that heads that off is one
+    // clause at the end of a long paragraph, which is exactly the kind of sentence a later trim
+    // removes, so it is pinned here in the house shape the source-invariants `as of` row uses.
+    assert.match(doc, /dry-run never queries the live process table[^.]*so without those seams it reports `foreground-sync` even where the live run would parent-walk/i,
+      'docs/cc-launcher.md must state that a dry-run without the process-table seams reports `foreground-sync` even where a live run would parent-walk — '
+      + 'without it, every rehearsal looks like it has lost the parent-walk');
   }
   assert.ok(!/scrubs its own vars/.test(s), 'and gone from the launcher comment');
   // …and gone from the tests too. The claim outlived its deletion once already, in a test-file comment

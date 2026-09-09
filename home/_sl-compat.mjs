@@ -130,6 +130,21 @@ export function fmtN(x, d = 0) {
 }
 
 // ---------------------------------------------------------------------------
+// FmtDurShort(sec) — a duration at MINUTE granularity with zero sub-units suppressed: `2d`, `2d2h`,
+// `2h`, `2h5m`, `35m`. The quota ladder's `resets` countdown and its runway sentence are its only
+// callers, and it lives here rather than beside them because the fleet tray keeps a PowerShell
+// mirror of it (Format-CCFTDurShort) and the two surfaces must print the same string for the same
+// number of seconds. A formatter with two homes is exactly the drift this module exists to prevent.
+export function FmtDurShort(sec) {
+  if (sec === null || sec === undefined) return '--';
+  sec = Math.floor(Number(sec));
+  if (sec < 0) sec = 0;
+  if (sec >= 86400) { const dd = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600); return h === 0 ? `${dd}d` : `${dd}d${h}h`; }
+  if (sec >= 3600) { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60); return m === 0 ? `${h}h` : `${h}h${m}m`; }
+  return `${psRound(sec / 60)}m`;
+}
+
+// ---------------------------------------------------------------------------
 // parseUtcEpoch(s) — epoch SECONDS (floored) from an ISO-8601 timestamp string, treating a
 // bare offset-less datetime as UTC (mirrors .NET AssumeUniversal). Returns null on failure.
 // Matches the leg-scan path: [DateTimeOffset]::Parse(..., AssumeUniversal|AdjustToUniversal).ToUnixTimeSeconds().

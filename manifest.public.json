@@ -10,6 +10,7 @@
     { "source": "home/sidecar-path.mjs", "dest": "sidecar-path.mjs" },
     { "source": "home/sanitize-name.mjs", "dest": "sanitize-name.mjs" },
     { "source": "home/quota-file.mjs", "dest": "quota-file.mjs" },
+    { "source": "home/quota-ladder.mjs", "dest": "quota-ladder.mjs" },
     { "source": "home/render-legspark.mjs", "dest": "render-legspark.mjs" },
     { "source": "home/render-spikes.mjs", "dest": "render-spikes.mjs" },
     { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },

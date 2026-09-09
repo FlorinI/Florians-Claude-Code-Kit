@@ -12,9 +12,10 @@
 // session's identity, or the render clock.
 //
 // THE MERGE STAMPS NOTHING, AND TAKES NO CLOCK. Each stored reading carries its own `reportedAt` —
-// the moment it was taken, written once by the status line that produced it (see QuotaWindow in
-// statusline.mjs) — so the age travels INSIDE the reading. The merge's only job is choosing which of
-// two readings to keep, which is all it should ever have been.
+// THE MOMENT THE READING WAS OBSERVED, which is the session's own last banked leg (its last API
+// call), clamped at the render clock and at the window's end. It is written once by the status line
+// that produced it (see QuotaWindow in statusline.mjs), so the age travels INSIDE the reading. The
+// merge's only job is choosing which of two readings to keep, which is all it should ever have been.
 //
 // Two functions, and the split is deliberate: MergeQuotaWindow is pure and holds the whole ordering
 // rule, so every branch of it is reachable offline without a render; WriteQuotaFile does the I/O
@@ -64,11 +65,16 @@ const numOrNull = (x) => (isNum(x) ? x : null);
 //                                    -> STORED, so the bytes do not move and the unchanged write
 //                                    below is skipped.
 //
-// WHY THE LATER REPORT WINS A TIE. A render that re-reports an unchanged percentage is independent
-// evidence that the percentage was still that value at the moment it reported. Discarding it dated
-// the row by THE LAST TIME THE NUMBER MOVED rather than by the last time it was reported, and on the
-// `7d` row — where a whole percentage point takes tens of minutes to turn over — the tray drew
-// `as of 120m` on a value re-confirmed seconds earlier.
+// WHY THE LATER OBSERVATION WINS A TIE. A reading that re-observes an unchanged percentage is
+// independent evidence that the percentage was still that value at the moment it was observed.
+// Discarding it dated the row by THE LAST TIME THE NUMBER MOVED rather than by the last time it was
+// seen, and on the `7d` row — where a whole percentage point takes tens of minutes to turn over —
+// the tray drew `as of 120m` on a value re-confirmed seconds earlier.
+//
+// THE RULE NOW FIRES ON RE-OBSERVATIONS ONLY, AND THAT IS THE POINT. Since the stamp is the
+// observation moment, an ECHO — an idle session re-rendering the payload of an API call it already
+// reported — carries the OLDER stamp and loses this tie, leaving the bytes exactly where they were.
+// A genuine re-observation at an unchanged percentage still wins it and still moves the bytes.
 //
 // WHY IT TAKES THE WHOLE OBJECT rather than only the stamp. The elapsed half of a reading is
 // computed from the RENDER CLOCK, not from the payload: at equal consumption a later render produces
@@ -77,11 +83,12 @@ const numOrNull = (x) => (isNum(x) ? x : null);
 // of the later object is at least as current as the stored one and none is worse, so it is taken
 // entire.
 //
-// THE ANTI-ZOMBIE PROPERTY SURVIVES THIS RELAXATION, and the clamp is what holds it — not this rule.
-// A session re-rendering a stale payload either names an older window (rule 2 refuses it) or names
-// the same window; and if that window has already reset, QuotaWindow's clamp makes both stamps
-// exactly `resetsAt`, so the tie is TOTAL, stored wins, and the bytes do not move. No number of
-// re-renders can freshen the date on a dead window.
+// THE ANTI-ZOMBIE PROPERTY SURVIVES THIS RELAXATION, and this rule is not what holds it. A session
+// re-rendering a stale payload either names an older window (rule 2 refuses it) or names the same
+// window, where two things stop it. Its stamp is the old observation's moment, so it does not beat a
+// later reading on rule 4 at all; and if that window has already reset, QuotaWindow's clamp makes
+// both stamps exactly `resetsAt`, so the tie is TOTAL, stored wins, and the bytes do not move. No
+// number of re-renders can freshen the date on a dead window.
 //
 // RULE 4 READS A STAMP; IT DOES NOT WRITE ONE. This function still takes two parameters and no clock.
 //
@@ -133,14 +140,15 @@ export function MergeQuotaWindow(stored, incoming) {
 // defeating the cache the poll thread depends on. The test is a BYTE COMPARISON against the text
 // just read — normative because it needs no field list to stay in sync with the schema.
 //
-// IT FIRES LESS OFTEN THAN IT USED TO, AND THAT IS ACCEPTED RATHER THAN WORKED AROUND. Merge rule 4
-// advances `reportedAt` on a tie, so a home whose sessions keep rendering now writes on every render
-// and the tray re-parses it on the following poll. That cost lands on the tray's TWO-SECOND POLL
-// THREAD, which already enumerates the whole session tree on every tick — one small JSON file per
-// config home is not that thread's cost centre, and the PAINT thread still opens nothing, which is
-// the property the tray's responsiveness actually rests on. A home whose window has reset writes
-// nothing at all (the clamp makes every one of those renders a total tie) and a home nobody is
-// rendering in writes nothing because it does not render.
+// WHICH RENDERS IT SKIPS. Merge rule 4 advances `reportedAt` on a tie, but the stamp is now the
+// OBSERVATION moment, so only a render carrying a NEW observation can advance it: an idle session's
+// re-render produces the stamp it produced last time, the merge is a total tie, and no bytes move.
+// A home whose window has reset writes nothing either (the clamp makes every one of those renders a
+// total tie), and a home nobody is rendering in writes nothing because it does not render. What is
+// left is one write per genuine new reading, and each of those costs the tray's TWO-SECOND POLL
+// THREAD one re-parse — a thread that already enumerates the whole session tree on every tick, so
+// one small JSON file per config home is not its cost centre. The PAINT thread still opens nothing,
+// which is the property the tray's responsiveness actually rests on.
 //
 // THE RACE, stated plainly: two renders whose read->rename windows overlap can lose the later
 // update. The file is never torn (the rename is atomic) and never holds garbage; what it can hold,

@@ -106,11 +106,31 @@ test('S2 — handover-facts.mjs prose + the leg-driver export surface after the 
 // independent of froz5 and stays: those files are the public kit's own surface, and a new import
 // there is exactly what this row exists to catch.
 test('S3 — import surface: home/ imports only node: built-ins and its own siblings', () => {
-  for (const f of ['home/statusline.mjs', 'home/leg-driver.mjs', 'home/handover-facts.mjs']) {
+  // THE LIST IS HARD-CODED, so a new module is unswept until it is added here — which is why
+  // `home/quota-ladder.mjs` joins it in the sprint that creates it. `home/quota-probe.mjs` is
+  // deliberately NOT here: it is private and does not exist in a public-kit checkout, where this
+  // file also runs. Its counterpart is `P11` in tests/quota-probe.test.mjs.
+  for (const f of ['home/statusline.mjs', 'home/leg-driver.mjs', 'home/handover-facts.mjs', 'home/quota-ladder.mjs']) {
     for (const spec of importSpecifiers(src(f))) {
       assert.ok(spec.startsWith('node:') || /^\.\/[\w-]+\.mjs$/.test(spec), `${f} imports ${spec}`);
     }
   }
+});
+
+test('S5-ladder — home/quota-ladder.mjs is PURE: no clock, no environment, no file I/O', () => {
+  // The ladder is what makes the probe's window objects provable offline, and that property rests on
+  // both moments arriving as ARGUMENTS. The same rule MergeQuotaWindow already lives by: a module that
+  // takes its own clock cannot be pinned by a test, and the eight drawn cells would then only be
+  // checkable through a render.
+  const s = src('home/quota-ladder.mjs');
+  const code = s.split('\n').map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  for (const banned of ['Date.now', 'new Date', 'hrtime', 'nowEpoch', 'node:fs', 'node:os', 'node:child_process', 'process.env', 'readFileSync', 'writeFileSync']) {
+    assert.ok(!code.includes(banned), `home/quota-ladder.mjs must not name ${banned} — both moments are parameters and it opens nothing`);
+  }
+  // Positive half, so "pure" cannot be satisfied by an empty file: the two functions the probe and
+  // the status line both import are here and both take their moments.
+  assert.match(s, /export function QuotaCells\(rl, winSec, now\)/, 'QuotaCells takes `now` as a parameter');
+  assert.match(s, /export function QuotaWindow\(c, rl, observedAt, now\)/, 'QuotaWindow takes both moments as parameters');
 });
 
 test('S2b — isColdStartLeg survives un-exported and is still called by getDriver (D5)', () => {
@@ -163,7 +183,13 @@ test('S4 — completeness guard: no froz5 / fresh-baseline identifier survives a
 
   for (const f of FILES) {
     const p = join(repo, 'home', f);
-    if (!existsSync(p)) continue;
+    // A COMPLETENESS GUARD THAT SKIPS A FILE IS NOT A COMPLETENESS GUARD. All eight are in
+    // manifest.public.json, so they are in every checkout that exists — private repo and public kit
+    // alike — and the only way this path is ever reached is a deletion. The `continue` that used to
+    // sit here silently narrowed the sweep by one file per deletion and left the row green
+    // (2026-09-09 suite-integrity sprint §4.2 site 5).
+    assert.ok(existsSync(p),
+      `home/${f} is missing — it ships in manifest.public.json, so its absence is a build gap, and letting the sweep skip it would shrink this completeness guard without anything going red`);
     const isEngine = f === 'statusline.mjs';
     const hits = readFileSync(p, 'utf8').split('\n')
       .map((l, i) => [i + 1, l])
@@ -189,11 +215,17 @@ test('S15 — the relay never invents WHERE the expensive legs are (spec §A9.2)
   // handover-facts.mjs comment). Same family as S13.
   // `home/commands/handover-check.md` ships in the public kit (manifest.public.json:19) and this test
   // file is exported too, so its half runs everywhere. `.claude/commands/interpret-statusline.md` is
-  // private-repo only — assert it where it exists, skip it where it cannot. It is NEVER skipped on
-  // Florian's checkout, which is where it is read.
+  // private-repo only: it is asserted in the private repo, where its absence is a build gap, and not
+  // read in the kit, which does not ship it. The gate is the KIT MARKER, not the file — a bare
+  // `existsSync` on the relay could not tell the kit from a deletion, and the deletion is what this
+  // row exists to catch (2026-09-09 suite-integrity sprint §4.2 site 1).
   const isPath = join(repo, '.claude', 'commands', 'interpret-statusline.md');
   const RELAYS = { 'home/commands/handover-check.md': src('home/commands/handover-check.md') };
-  if (existsSync(isPath)) RELAYS['.claude/commands/interpret-statusline.md'] = readFileSync(isPath, 'utf8');
+  if (!IN_PUBLIC_KIT) {
+    assert.ok(existsSync(isPath),
+      '.claude/commands/interpret-statusline.md is missing — it is the SECOND relay §A9.2 rewrote, and the banned phrases below run over the union of both; in the private repo its absence is a build gap');
+    RELAYS['.claude/commands/interpret-statusline.md'] = readFileSync(isPath, 'utf8');
+  }
 
   // NEGATIVE — the union of the banned phrases runs over BOTH files, not one each. §A9.2 rewrote the
   // same error class in two places; a phrase migrating from one file to the other is the likely way
@@ -316,24 +348,31 @@ test('AV-2 — handover-facts.mjs contains no form of "averag" at all, comments 
   assert.deepEqual(hits.map(([n, l]) => `:${n} ${l.trim().slice(0, 90)}`), []);
 });
 
-test('AV-3 — the chip\'s retired names appear nowhere on the live surface', () => {
-  // Scope: the surface a reader or a future editor actually meets. Excluded: superseded docs, the
-  // sprint machinery (plans / sprints / handovers / chain / inbox — working notes, not the product),
-  // the parity fixtures (committed goldens, blessed from the code) and build output.
-  const ROOTS = ['home', 'docs', 'tests', 'tools', 'SPEC.md', 'CLAUDE.md', '.claude/commands', '.claude/skills'];
-  const EXCLUDED = [
-    /^docs[\\/]_superseded/, /^\.claude[\\/](plans|sprints)/, /^\.desk[\\/]handovers/, /^\.sprint-chain/,
-    /^\.inbox/, /^tools[\\/]parity[\\/]fixtures/, /^build/, /^node_modules/,
-  ];
+// THE LIVE SURFACE — the tree a reader or a future editor actually meets, walked once here for
+// every row that sweeps it (AV-3, AV-QP). Excluded: superseded docs, the sprint machinery (plans /
+// sprints / handovers / chain / inbox — working notes, not the product), the parity fixtures
+// (committed goldens, blessed from the code) and build output.
+const LIVE_ROOTS = ['home', 'docs', 'tests', 'tools', 'SPEC.md', 'CLAUDE.md', '.claude/commands', '.claude/skills'];
+const LIVE_EXCLUDED = [
+  /^docs[\\/]_superseded/, /^\.claude[\\/](plans|sprints)/, /^\.desk[\\/]handovers/, /^\.sprint-chain/,
+  /^\.inbox/, /^tools[\\/]parity[\\/]fixtures/, /^build/, /^node_modules/,
+];
+function liveSurfaceFiles(roots = LIVE_ROOTS) {
   const files = [];
   const walk = (rel) => {
-    if (EXCLUDED.some((r) => r.test(rel))) return;
+    if (LIVE_EXCLUDED.some((r) => r.test(rel))) return;
     const abs = join(repo, rel);
+    // skip-guards: a tree walk over ROOTS that legitimately differ between the kit and the private repo (SPEC.md, .claude/) — each caller's vacuity guard names a file that must be in every checkout, so a broken walk is caught there and not by this line.
     if (!existsSync(abs)) return;
     if (statSync(abs).isDirectory()) { for (const n of readdirSync(abs)) walk(join(rel, n)); return; }
     files.push(rel);
   };
-  for (const r of ROOTS) walk(r);
+  for (const r of roots) walk(r);
+  return files;
+}
+
+test('AV-3 — the chip\'s retired names appear nowhere on the live surface', () => {
+  const files = liveSurfaceFiles();
   // Vacuity guard. NOT a file count: this row ships in the public kit, whose tree is a fraction of
   // the private one (33 files against ~190), so a count floor calibrated here goes red there. Name
   // the two files that must be in EVERY checkout instead.
@@ -353,6 +392,71 @@ test('AV-3 — the chip\'s retired names appear nowhere on the live surface', ()
   assert.deepEqual(hits, [], `the chip is a median; these lines still call it an average:\n  ${hits.join('\n  ')}`);
 });
 
+// ---- AV-QP (2026-09-09): the retired quota-probe LAUNCH mechanism leaves no trace ---------------
+// The probe used to start a bare `claude` and wait for its status line to write the quota file. That
+// mechanism is deleted: there is no launched session, no pid file, no orphan sweep, no launcher rung.
+// This row is what keeps its vocabulary from surviving in prose or in a test, which is how a reader
+// ends up implementing against a mechanism that does not run (acceptance example QH-16).
+//
+// ASSEMBLED FROM FRAGMENTS, like AV3_PATTERNS, because the sweep includes tests/ — a whole literal
+// written here would fail the guard this row defines.
+//
+// `moved`, `timeout` and `died` are DELIBERATELY ABSENT from the pattern. They are ordinary English
+// words and would fire on unrelated prose, which is how a sweep gets loosened until it proves
+// nothing. The outcome vocabulary is closed by the probe's own suite instead.
+const AVQP_NAMES = [
+  'Get-CCQP' + 'KillOrder', 'Select-CCQP' + 'Orphans', 'Select-CCQP' + 'Cycle',
+  'Get-CCQP' + 'LaunchCommand', 'Write-CCQP' + 'Log', 'Format-CCQP' + 'LogLine', 'CCQP' + '_LAUNCHER',
+  'home-' + 'fresh', 'orphans-' + 'swept',
+];
+// The retired FILE names are swept with one narrow exemption: a line that PRUNES or MIGRATES a dead
+// file has to be able to name it (install.mjs's RETIRED_LIVE entries, the harness's legacy-drift task
+// action, the installer row that seeds a home with residue). The exemption is a marker on the line
+// itself rather than a file allow-list, so it cannot quietly grow into "tests may say anything".
+// ANCHORED, and the reason is the defect SM1 exists for one level up: a needle for the retired
+// script's name is a SUBSTRING test, and the LIVE setup script — named all over the docs and the
+// harness — ends with that same name. A bare needle fires on every mention of a file that is very
+// much still in service, and it was doing exactly that. The lookbehind requires the retired name to
+// start a path segment, so a `setup-` prefix no longer satisfies it.
+const AVQP_FILES = [
+  new RegExp('(?<![\\w-])quota-probe\\' + '.ps1'),
+  new RegExp('(?<![\\w-])quota-probe\\' + '.pid'),
+];
+const AVQP_PRUNE_MARKERS = [/RETIRED_LIVE/, /legacy/i, /retired/i, /prune/i, /C:\\old/];
+
+// THE SCOPE IS THE LIVING SURFACE, AND THE DATED ARTIFACTS ARE NOT PART OF IT. `docs/YYMMDD-*.md`
+// files are point-in-time records — specs and test plans, including this sprint's own, which name the
+// retired script precisely because they are the documents that RETIRE it. The project's rule is that
+// a record keeps its own claim and a living doc carries the current one; `docs/_superseded/` is the
+// same category one step later. So the sweep runs over the docs a reader consults for CURRENT
+// behaviour (fleet-tray.md, status-line.md, machine-onboarding.md, cc-launcher.md, SPEC.md,
+// CLAUDE.md), the shipped code, the suites and the harness.
+const AVQP_EXCLUDED = [/^docs[\\/]\d{6}-/];
+
+test('AV-QP — the retired launch mechanism\'s names appear nowhere on the live surface', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the probe and the fleet tray are private' : false }, () => {
+  const files = liveSurfaceFiles().filter((f) => !AVQP_EXCLUDED.some((r) => r.test(f)));
+  for (const must of ['home/statusline.mjs', 'tools/fleet-tray/test-fleet-tray.ps1']) {
+    assert.ok(files.some((f) => f.replace(/\\/g, '/') === must), `the walk missed ${must} — the sweep is not running`);
+  }
+  const hits = [];
+  for (const f of files) {
+    let text;
+    try { text = readFileSync(join(repo, f), 'utf8'); } catch { continue; }
+    text.split('\n').forEach((l, i) => {
+      for (const p of AVQP_NAMES) {
+        if (l.includes(p)) { hits.push(`${f}:${i + 1} [${p}] ${l.trim().slice(0, 80)}`); return; }
+      }
+      for (const p of AVQP_FILES) {
+        if (!p.test(l)) continue;
+        if (AVQP_PRUNE_MARKERS.some((m) => m.test(l))) return;   // a line that removes or migrates it
+        hits.push(`${f}:${i + 1} [${p.source}] ${l.trim().slice(0, 80)}`);
+        return;
+      }
+    });
+  }
+  assert.deepEqual(hits, [], `the launch probe is gone; these lines still describe it:\n  ${hits.join('\n  ')}`);
+});
+
 test('AV-4 — the PUBLIC-DOC GENERATOR, and the documents it generates, name the median', () => {
   // THE ROW THAT EARNS ITS KEEP. The other three read source files a developer is already editing.
   // This one reads the GENERATOR and its OUTPUT — the failure it exists to catch is
@@ -369,11 +473,13 @@ test('AV-4 — the PUBLIC-DOC GENERATOR, and the documents it generates, name th
     targets.push(['tools/export-public.mjs', readFileSync(genPath, 'utf8')]);
     for (const rel of ['build/public/README.md', 'build/public/docs/status-line.md']) {
       const p = join(repo, ...rel.split('/'));
+      // skip-guards: BUILD OUTPUT, not a repo artifact — build/ is gitignored and absent on a fresh clone, so its absence says "no export has been run here", never "a file was deleted".
       if (existsSync(p)) targets.push([rel, readFileSync(p, 'utf8')]);
     }
   } else {
     for (const rel of ['README.md', 'docs/status-line.md']) {
       const p = join(repo, ...rel.split('/'));
+      // skip-guards: the kit branch — these are the kit's OWN generated documents, guarded by the kit's own CI on 3 OS x 3 Node; the private repo reaches the branch above instead.
       if (existsSync(p)) targets.push([rel, readFileSync(p, 'utf8')]);
     }
   }
@@ -488,13 +594,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.9 (PATCH: the quota file forks to schema 2 and carries reportedAt)', () => {
+test('D4-5 — SL_VERSION is 6.1.11 (PATCH: the quota file gains a second writer, a header probe with no session)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.9',
-    'X.Y.Z is 6.1.9: the status-line cluster starts writing a DIFFERENT FILE SHAPE under a new schema — `<config-home>/statusline-quota.json` goes to schema 2, five keys are removed and `reportedAt` is added — and a config home still running an older build stops contributing rows to the fleet tray until it is installed. That is a behaviour change a person has to be able to name in a deployment note, so a hand-set Z with a recorded rationale, not the automatic B tick install.mjs applies to a re-deploy of an unchanged X.Y.Z. 6.1.8.x is the deployed tier-mix-chip build and cannot be reused. Not X (no displayed figure changes meaning, no threshold moved, and the rendered status line is byte-identical — spec §9.1), not Y (no new cluster or line); B resets to 0. Because X.Y.Z is hand-set, install.mjs will NOT auto-tick B on the first deploy: a trailing `.1` appearing later is an ordinary re-deploy tick, not a finding');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.11',
+    'X.Y.Z is 6.1.11: one behaviour-affecting change a deployment note can name — `<config-home>/statusline-quota.json` now has a SECOND WRITER, a header probe with no session (`home/quota-probe.mjs`), which reads the rate-limit response headers of its own minimal API request every quarter hour and writes them through the same merge; the cluster changes with it, since `statusline.mjs` loses the quota ladder to the new `home/quota-ladder.mjs` and `_sl-compat.mjs` gains `FmtDurShort`. Not X: no displayed figure changes meaning, no threshold moves, the rendered line is byte-identical (npm run parity, no golden blessed) and the calibration samples stay comparable. Not Y: no new cluster or line appears on the status line — the new module is a MOVE, not a display. Where the call is close the project\'s rule is to prefer Z. 6.1.10.x is the deployed build and cannot be reused; B resets to 0 and install.mjs ticks it from there, so a trailing `.1` appearing later is an ordinary re-deploy tick, not a finding');
 });
 
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
@@ -511,7 +617,7 @@ test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // interpret-statusline.md has its own row below (D4-7) — it needs more than a three-string check.
 });
 
-test('D4-8 — docs/fleet-tray.md carries BOTH halves of what `as of` can and cannot tell you', () => {
+test('D4-8 — docs/fleet-tray.md carries BOTH halves of what `as of` can and cannot tell you', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the fleet tray and its documentation do not ship' : false }, () => {
   // WHY A DOC SENTENCE IS PINNED BY A TEST, AND WHY THIS ONE.
   //
   // Spec §4.3 case 3 is the one place the quota block can show a fresh date on a materially stale
@@ -532,24 +638,28 @@ test('D4-8 — docs/fleet-tray.md carries BOTH halves of what `as of` can and ca
   // keeps the reassuring clause and drops the limit — leaving a doc that says what the field means
   // and no longer says what it cannot mean.
   //
-  // PRIVATE-REPO ONLY, AND THE GUARD IS NOT A BARE `existsSync` ON THE DOC. The fleet tray is private
-  // by construction, so the exported public kit ships this suite WITHOUT `docs/fleet-tray.md` — a
-  // row that simply read the file turns the kit's own suite red (its CI is the only CI this project
-  // has). The guard therefore keys on the TOOL: where `home/fleet-tray.ps1` is present, its
-  // documentation must be present too and must carry both halves. That keeps a deleted doc red here
-  // instead of silently skipped.
+  // PRIVATE-REPO ONLY, AND THE GUARD KEYS ON THE CHECKOUT, NOT ON EITHER FILE. The fleet tray is
+  // private by construction, so the exported public kit ships this suite WITHOUT `docs/fleet-tray.md`
+  // — a row that simply read the file turns the kit's own suite red (its CI is the only CI this
+  // project has). It used to key on the TOOL, which reads as "no tray, no doc" and is silent about
+  // the case that matters: a deleted tray in the private repo left the row green and unrun. Where
+  // this is the private repo, the tray and its documentation must BOTH be present, and a deleted tray
+  // is a build gap rather than a reason to stop checking (2026-09-09 suite-integrity sprint §4.2
+  // site 2, §4.4).
   const docPath = join(repo, 'docs', 'fleet-tray.md');
-  if (!existsSync(join(repo, 'home', 'fleet-tray.ps1'))) return;   // the exported kit: no tray, no doc
+  assert.ok(existsSync(join(repo, 'home', 'fleet-tray.ps1')),
+    'home/fleet-tray.ps1 is missing — the tray is what this documentation documents; in the private repo its absence is a build gap');
   assert.ok(existsSync(docPath),
-    'home/fleet-tray.ps1 is present, so docs/fleet-tray.md must be too — it is the only surface that can carry the limit of `as of`');
+    'docs/fleet-tray.md is missing — it is the only surface that can carry the limit of `as of`; in the private repo its absence is a build gap');
   const doc = readFileSync(docPath, 'utf8');
 
-  // HALF 1 — WHAT IT DOES SAY: how long ago a session IN THIS CONFIG HOME last reported the reading.
-  // "in this config home" is the load-bearing phrase, not decoration: it is what scopes the claim to
-  // one machine's own sessions.
-  assert.match(doc, /how long ago a session[^.]{0,60}in this config home[^.]{0,60}(last )?reported/i,
-    'docs/fleet-tray.md must say that `as of` is how long ago a session IN THIS CONFIG HOME last reported the reading (spec §4.3) '
-    + '— the scope of the claim is the half that makes it true');
+  // HALF 1 — WHAT IT DOES SAY, RE-PINNED 2026-09-09 TO THE OBSERVED WORDING. The stamp is no longer
+  // the moment a session REPORTED the reading; it is the moment the reading was OBSERVED — the API
+  // call, in this config home, that produced it. "in this config home" is the load-bearing phrase in
+  // both wordings, not decoration: it is what scopes the claim to one machine's own sessions.
+  assert.match(doc, /as of[^.]{0,40}how long ago this reading was \*?observed\*?[^.]{0,80}in this config home/i,
+    'docs/fleet-tray.md must say that `as of` is how long ago this reading was OBSERVED — the API call, IN THIS CONFIG HOME, that produced it '
+    + '(quota-semantics spec §2.5) — the scope of the claim is the half that makes it true');
 
   // HALF 2 — WHAT IT DOES NOT SAY: it is not a measure of how current the subscription's true
   // consumption is. This is the half a trim removes first, because it is the uncomfortable one.
@@ -558,7 +668,31 @@ test('D4-8 — docs/fleet-tray.md carries BOTH halves of what `as of` can and ca
     + '— the limit is the half that stops the first half being read as a freshness guarantee');
 });
 
-test('D4-7 — interpret-statusline.md reads the labels that actually ship', () => {
+test('D4-9 — docs/fleet-tray.md says the age can exceed the probe\'s interval, and why', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the fleet tray and its documentation do not ship' : false }, () => {
+  // WHY THIS SENTENCE IS PINNED. It is the answer to a ticket that was filed once already
+  // (`.inbox/2026-09-09-the-probe-bounds-the-age-of-the-newest-reading-not-the-displayed-one.md`):
+  // the refresh probe runs every quarter hour, so an `as of 41m` on a five-hour row looks like a dead
+  // probe. It is not — within one window the panel keeps the HIGHEST reading, because consumption
+  // only rises, and dates it by when THAT reading was observed. A later observation reporting a
+  // lower figure does not replace it, so the row can legitimately age past the probe's interval.
+  //
+  // An unguarded doc sentence rots, and this one exists precisely so the question is not re-filed.
+  // Same shape and same reason as D4-8 above, which is the precedent for pinning exactly this kind
+  // of sentence.
+  const docPath = join(repo, 'docs', 'fleet-tray.md');
+  assert.ok(existsSync(docPath),
+    'docs/fleet-tray.md is missing — in the private repo its absence is a build gap');
+  const doc = readFileSync(docPath, 'utf8');
+
+  assert.match(doc, /age can be older than[^.]{0,40}probe'?s interval/i,
+    'docs/fleet-tray.md must say the age can be OLDER than the refresh probe\'s interval (quota-semantics spec §2.5) — without it, an ageing row reads as a dead probe');
+  assert.match(doc, /keeps the \*?highest\*? reading/i,
+    'and it must say WHY: the panel keeps the HIGHEST reading it has seen within one window, because consumption only rises');
+  assert.match(doc, /quota-probe\.log/,
+    'and it must send the reader to `<home>\\quota-probe.log` for probe health — the whole point of the bullet is that the date on the row is not that signal');
+});
+
+test('D4-7 — interpret-statusline.md reads the labels that actually ship', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
   // WHY THIS ROW IS BIGGER THAN A SPOT CHECK. This file tells a reader (often a cheap model) which
   // fields to pull off a screenshot, and it then writes ONE ROW PER SCREENSHOT into
   // docs/statusline-calibration-samples.md. A misread here does not just confuse someone — it puts a
@@ -568,8 +702,14 @@ test('D4-7 — interpret-statusline.md reads the labels that actually ship', () 
   // Its previous guard tested exactly three strings, which is why it stayed green through the Dossier
   // IV re-layout while the file still sent readers hunting for `last 8`, for the window on row 1, and
   // for cold strings the line can no longer emit.
+  // Private-repo only, gated on the KIT MARKER and not on the file — the D4 shape exactly. Gating on
+  // the document meant a deletion silently retired the row, which is the one failure it exists to
+  // catch: this file is what tells a cheap model which fields to pull off a screenshot, and a wrong
+  // number here reaches the calibration dataset with nothing downstream able to tell it from a real
+  // one (2026-09-09 suite-integrity sprint §4.2 site 3).
   const isPath = join(repo, '.claude', 'commands', 'interpret-statusline.md');
-  if (!existsSync(isPath)) return;      // private-repo only, like the D4 row below
+  assert.ok(existsSync(isPath),
+    '.claude/commands/interpret-statusline.md is missing — it is what /interpret-statusline reads to parse a screenshot into a calibration row; in the private repo its absence is a build gap');
   const is = readFileSync(isPath, 'utf8');
 
   // POSITIVE — the vocabulary that actually ships. A rewrite can dodge any blacklist; it cannot dodge
@@ -692,13 +832,19 @@ test('D4 — samples table header + interpret-statusline row template carry a mo
 // comment or title. Banned needles are assembled by concatenation and positive needles use \s+
 // escapes, so this row's own source satisfies none of them — the pins bite on the S15 rationale.
 test('N11 — the lone-fat-leg absolutes are window-scoped in the two chip test files', () => {
-  // This file ships in the public kit; last8-chip.test.mjs does not — assert it where it exists,
-  // skip it where it cannot exist. Never skipped here.
+  // This file ships in the public kit; last8-chip.test.mjs does not — so it is asserted in the
+  // private repo, where its absence is a build gap, and not read in the kit. Gated on the KIT
+  // MARKER rather than on the file: keyed on the file, a deletion made this sweep cover one file
+  // instead of two and nothing went red (2026-09-09 suite-integrity sprint §4.2 site 4).
   const files = {
     'tests/source-invariants.test.mjs': readFileSync(join(here, 'source-invariants.test.mjs'), 'utf8'),
   };
   const l8 = join(here, 'last8-chip.test.mjs');
-  if (existsSync(l8)) files['tests/last8-chip.test.mjs'] = readFileSync(l8, 'utf8');
+  if (!IN_PUBLIC_KIT) {
+    assert.ok(existsSync(l8),
+      'tests/last8-chip.test.mjs is missing — it is the SECOND of the two chip test files this row sweeps; in the private repo its absence is a build gap');
+    files['tests/last8-chip.test.mjs'] = readFileSync(l8, 'utf8');
+  }
   const BANNED = ['cannot' + ' lift', 'does not' + ' lift', 'never' + ' lift',
     'at most one' + ' position', 'at most one' + ' rank'];
   const QUALIFIER = /8-leg|N=8|med8|full window/;

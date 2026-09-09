@@ -262,6 +262,7 @@ test('clean install adds the cc launcher shell function; uninstall removes it', 
     assert.ok(prov.launcher && prov.launcher.command === 'cc', 'launcher recorded in provenance');
 
     runUninstall(baseOpts(home));
+    // skip-guards: the profile is a MACHINE-side file the installer wrote into a sandbox home, and uninstall deleting it outright — when the launcher block was all it held — is one of the two correct outcomes this line reads.
     const after = existsSync(profile) ? readFileSync(profile, 'utf8') : '';
     assert.ok(!/claude-launch\.mjs/.test(after), 'launcher block removed on uninstall');
   });
@@ -429,6 +430,7 @@ test('V4 — POSIX form carries the fixed args ahead of "$@", and removeLauncher
     assert.ok(body.includes(`ccnovsc() { node "${fwd}/${LAUNCH_SCRIPT}" "--no-vscode" "$@"; }`));
     // The block is marker-bounded, so one removal takes the primary AND every variant with it.
     removeLauncher({ claudeHome: home, shellHome: home, platform: 'linux', log: quiet });
+    // skip-guards: the profile is a MACHINE-side file the installer wrote into a sandbox home, and uninstall deleting it outright — when the launcher block was all it held — is one of the two correct outcomes this line reads.
     const after = existsSync(profile) ? readFileSync(profile, 'utf8') : '';
     for (const cmd of ['cc()', 'ccalt()', 'ccnovsc()']) assert.ok(!after.includes(cmd), `${cmd} removed`);
     assert.ok(!after.includes(LAUNCH_SCRIPT), 'no launcher reference survives');

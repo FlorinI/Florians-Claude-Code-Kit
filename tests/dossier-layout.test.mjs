@@ -840,6 +840,7 @@ test('30 — every fixture is well-formed: parseable inputs, frozen clock, a mat
     assert.ok(meta.nowEpoch > 1_600_000_000, `${f}: nowEpoch looks wrong: ${meta.nowEpoch}`);
     // A seeded stats file is keyed by session id; a mismatch silently disables the incremental path.
     const seed = join(FIX, f, 'seed', 'statusline-stats');
+    // skip-guards: a per-fixture PROPERTY, not a guard — most fixtures render from a cold state and carry no seed at all, so its absence is what the fixture is, never a deletion.
     if (existsSync(seed)) {
       const stats = readdirSync(seed).filter((n) => n.endsWith('.json') && !n.endsWith('.agents.json'));
       for (const s of stats) {
@@ -860,7 +861,12 @@ test('31 — the quota fixtures\' resets_at match their stated elapsed fractions
     'quota-elapsed-edge': { five_hour: 0.09, seven_day: 0.11 },
   };
   for (const [f, wins] of Object.entries(EXPECT)) {
-    if (!existsSync(join(FIX, f))) continue;
+    // NAMED fixtures, not a sweep. The whole of tools/parity ships in the kit, so all three are in
+    // every checkout that exists and the only way past this line is a deletion — which would have
+    // silently narrowed the row from three fixtures to two. Same shape, same reason as
+    // source-invariants S4 (2026-09-09 suite-integrity sprint §4.2 site 5).
+    assert.ok(existsSync(join(FIX, f)),
+      `tools/parity/fixtures/${f} is missing — this row pins its resets_at against its stated elapsed fraction from both sides, and the fixture ships in every checkout, so its absence is a build gap`);
     const d = stdinOf(f), now = metaOf(f).nowEpoch;
     for (const [win, frac] of Object.entries(wins)) {
       const rl = d.rate_limits[win];

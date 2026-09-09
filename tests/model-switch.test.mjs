@@ -277,6 +277,7 @@ test('S12 — the fact sheet emits COST_TIER_NOTE exactly once, naming both the 
   for (const f of readdirSync(FIX)) {
     const sc = join(FIX, f, 'golden-sidecar.json');
     const fx = join(FIX, f, 'golden-facts.txt');
+    // skip-guards: a sweep over EVERY fixture directory, keeping the ones that carry both goldens — a fixture without them is one this pairing says nothing about, not a deleted artifact.
     if (!existsSync(sc) || !existsSync(fx)) continue;
     const hasKey = 'tierMismatch' in JSON.parse(readFileSync(sc, 'utf8'));
     const hasNote = readFileSync(fx, 'utf8').includes('COST_TIER_NOTE:');

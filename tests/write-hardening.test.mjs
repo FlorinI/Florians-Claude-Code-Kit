@@ -99,6 +99,7 @@ test('F1 — post-kill state (intact stats + orphaned temp): stats survive, rend
       `state carried forward, no reset: lastLegCost ${stats.lastLegCost} != 0.05`);
     assert.equal(stats.lastSeenCost, 0.3, 'render 2 latched its cost');
     // Tolerated: the orphan is dead weight, never promoted to state (swept by age later).
+    // skip-guards: the orphan is a temp file THIS test wrote a few lines above, in a throwaway home — the render is allowed to sweep it, and either outcome is a pass; no repo artifact is involved.
     if (existsSync(orphan)) {
       assert.equal(readFileSync(orphan, 'utf8'), '{"nLegs": 999, "TRUNCATED', 'orphan left as-is');
     }

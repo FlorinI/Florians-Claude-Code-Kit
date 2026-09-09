@@ -351,6 +351,7 @@ test('K4 — agents-progressive: streamed agent output counted in full (agents $
 
 // every fixture that renders agents: transcript/subagents/ on disk, or an agents cache in seed/
 const agentFixtures = () => allFixtures().filter((f) => {
+  // skip-guards: this classifies fixtures, it does not gate an assertion — "does this fixture render agents" is a property of each fixture, and K5's own `fx.length >= 16` floor is what catches a sweep that stopped finding them.
   if (existsSync(join(FIX, f, 'transcript', 'subagents'))) return true;
   const sd = join(FIX, f, 'seed', 'statusline-stats');
   return existsSync(sd) && readdirSync(sd).some((n) => n.endsWith('.agents.json'));

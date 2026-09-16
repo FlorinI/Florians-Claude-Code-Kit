@@ -8,6 +8,7 @@ COST_RECENT: `med6` (median of the last 6 legs) `$0.07`/leg; session mean `$0.29
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: the cold tax so far is `$0.69` of `$1.72` (`40%`) across `1` leg(s) that re-created an expired cache
 COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
 COLD: the 5-minute cache is starting to cool (`~4 min` of warmth left) — a send keeps it warm; cold tax so far: `$0.69` over `1` leg(s)
 WARM_REWRITE_TAX: `$0.69` over `1` leg(s) — big cache rewrites without an idle expiry, billed at write price instead of read; separate from (never double-counted with) the cold tax; expected — CC 2.1.201 dropped cache-preserving injection on Sonnet 5

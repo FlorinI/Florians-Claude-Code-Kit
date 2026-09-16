@@ -8,6 +8,7 @@ COST_RECENT: `med8` (median of the last 8 legs) `$0.04`/leg; session mean `$0.04
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COST_LEGPRICE_NOTE: leg $ suspect — session rate far below list price (resumed without local history?); per-leg $ are understated, the total is CC's own
 COLD: (omit)
 WARM_REWRITE_TAX: (none)

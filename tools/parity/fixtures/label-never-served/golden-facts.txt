@@ -8,6 +8,7 @@ COST_RECENT: `med8` (median of the last 8 legs) `$0.10`/leg; session mean `$0.18
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COST_TIER_NOTE: the model label reads `Fable 5 (1M context)`, but no leg in this run was served by that model — `opus` served the most legs — a label fact only: the $ in this sheet does not depend on which label is shown
 COLD: calm — idling past the cache lifetime would add `$5.70` to resume; no urgency
 WARM_REWRITE_TAX: (none)

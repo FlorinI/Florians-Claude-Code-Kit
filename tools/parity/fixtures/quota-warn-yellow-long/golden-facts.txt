@@ -1,4 +1,4 @@
-IDENTITY: **Reading** `(no repo)` · `quota-el` · Sonnet 4.6 · `13k` ctx · rendered `0s` ago
+IDENTITY: **Reading** `(no repo)` · `quota-wa` · Sonnet 4.6 · `13k` ctx · rendered `0s` ago
 STALE: no
 HEADLINE_DIFF: + Plenty of room
 HEADLINE_BASIS: driver=both; quality=pristine (lvl 0); cost=next 0.04247349823321555 (lvl 0)

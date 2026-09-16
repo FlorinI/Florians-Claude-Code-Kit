@@ -8,6 +8,7 @@ COST_RECENT: (none)
 COST_DETAIL: main `$0.50` · agents `$0.25` over `1` legs
 COST_AGENTS_TIER: minor
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: re-creating the expired cache is a one-time cold tax of `$0.59`
 COLD: your recent resume re-cached the context for `$0.59` — already paid; you are warm again now
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `51k`, green band — sharp

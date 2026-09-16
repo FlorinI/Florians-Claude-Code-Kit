@@ -8,6 +8,7 @@ COST_RECENT: `med4` (median of the last 4 legs) `$0.01`/leg; session mean `$0.02
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COST_GATES_NOTE: $ thresholds calibrated for Fable/Opus pricing
 COLD: (omit)
 WARM_REWRITE_TAX: (none)

@@ -8,7 +8,7 @@
 //   • Imported as a module by the private repo's wrapper, which calls runInstall() once with the
 //     public manifest and again with a private manifest, then layers on Windows-only steps.
 //
-// Design contract (docs/roadmap.md → "Phase 2 design"):
+// Design contract:
 //   • Deploy files verbatim per the manifest.
 //   • MERGE into settings.json — only the keys we own (statusLine + a SessionStart handover hook).
 //   • MERGE a sentinel-bounded block into CLAUDE.md — never overwrite the user's instructions.

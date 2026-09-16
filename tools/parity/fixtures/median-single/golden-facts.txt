@@ -8,6 +8,7 @@ COST_RECENT: `med6` (median of the last 6 legs) `$6.65`/leg; session mean `$6.65
 COST_DETAIL: main `$39.87` · agents `$0.13` over `1` legs
 COST_AGENTS_TIER: minor
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: re-creating the expired cache is a one-time cold tax of `$0.78`
 COLD: your recent resume re-cached the context for `$0.78` — already paid; you are warm again now
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `51k`, green band — sharp

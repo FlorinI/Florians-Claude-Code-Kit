@@ -8,6 +8,7 @@ COST_RECENT: `med3` (median of the last 3 legs) `$1.25`/leg; session mean `$1.15
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: the cold tax so far is `$1.90` of `$3.46` (`55%`) across `1` leg(s) that re-created an expired cache
 COST_MODELSWITCH_NOTE: the model switched mid-session (claude-fable-5 → claude-opus-5 at leg 3) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COLD: calm — idling past the cache lifetime would add `$1.57` to resume; no urgency; cold tax so far: `$1.90` over `1` leg(s)
 WARM_REWRITE_TAX: (none)

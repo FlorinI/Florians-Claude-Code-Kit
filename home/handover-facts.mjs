@@ -16,7 +16,7 @@
 import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, tierWeight, median, M_CACHE_READ } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, tierWeight, median, M_CACHE_READ, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
 
@@ -114,12 +114,16 @@ try { copyFileSync(sidecar, join(configHome, 'handover-frozen.json')); } catch {
 // change. Full-scanning here makes the fact sheet and the panel agree by construction. The PROSPECTIVE cold
 // fields (stake/band/clock) still come from the sidecar below.
 const scanLegs = getScannedLegs(s.transcriptPath);
-const coldLegs = scanLegs.filter(testColdLeg);
-const nColdScan = coldLegs.length;
 // Each leg's avoidable units are tier-weighted (tierWeight vs the main tier — the status line's own
 // per-leg weight), so a cold leg paid under another tier carries that tier's price, not the main's.
 const mainTierScan = ModelTier(s.model);
 const avoidableEff = (l) => (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTierScan);
+// The cold tax COUNTS a cold-shaped leg only when its own avoidable premium clears the ONE dollar gate
+// (COLD_PREMIUM_MIN_USD, leg-driver.mjs) — the status line's gate, so the COLD line and `cold $x`
+// agree. With no cost basis there is nothing to price the gate with, so every cold-shaped leg counts.
+const coldLegs = scanLegs.filter((l) => testColdLeg(l)
+  && (s.base == null || avoidableEff(l) * Number(s.base) >= COLD_PREMIUM_MIN_USD));
+const nColdScan = coldLegs.length;
 // null (never 0) when legs were counted but the run has no cost basis yet (s.base null — the state
 // between a detected resume and the first new leg): the emit site then states the count and says
 // "not priced yet" instead of formatting a fabricated $0.00.
@@ -150,6 +154,9 @@ const warmTaxUsdScan = nWarmScan > 0
 const COST_FLOOR_FINE = 0.28;
 const COST_FLOOR_STEEP = 0.45;
 const WINDOW_1M = 700000;       // windowSize at/above this is the 1M regime (token-count leads quality)
+// The share of session spend at which the cold tax LEADS the Cost section (COST_COLD_LEAD). A
+// judgement call, not a measurement — tune it here; no doc quotes its value.
+const COLD_LEAD_SHARE = 1 / 3;
 
 // ---- number formatters (backticks ON — these fragments are FINAL; downstream must not reformat) ----
 function FmtUsd(v) { if (v == null) return `${BT}$?${BT}`; const d = Number(v); if (d >= 0 && d < 0.005) return `${BT}<$0.01${BT}`; return `${BT}$` + fmtN(d, 2) + BT; }
@@ -264,6 +271,24 @@ if (agentTier === 'lead') {
   costAgentsLead = 'most of the spend is sub-agents — ' + FmtUsd(s.agentsUsd) + ' of ' + FmtUsd(sessionCostVal)
     + ' (' + BT + agentPct + '%' + BT + ') across ' + BT + Math.trunc(Number(s.agentLegs)) + BT + ' legs from '
     + BT + Math.trunc(Number(s.nAgents)) + BT + ' agents';
+}
+// The cold tax is the story → a lead fragment built like COST_AGENTS_LEAD, which keeps precedence in
+// the compose prompt. Two triggers: the tax already paid is at least COLD_LEAD_SHARE of session spend
+// (the share is DERIVED HERE from this file's own scan — no share key reaches the sidecar), or the
+// prospective stake is live (the `expired` band: the session idled past its cache lifetime, and the
+// stake cleared the dollar gate or the band would not be set). `(none)` otherwise, and ALWAYS `(none)`
+// without a cost basis — the sentence is never emitted over an unpriced tax or a zero spend.
+let costColdLead = '(none)';
+if (s.base != null && sessionCostVal > 0 && coldWastedUsdScan != null) {
+  const shareLead = nColdScan >= 1 && (coldWastedUsdScan / sessionCostVal) >= COLD_LEAD_SHARE;
+  const stakeLive = String(s.coldBand) === 'expired' && s.coldStakeUsd != null;
+  if (shareLead || stakeLive) {
+    const stake = 're-creating the expired cache is a one-time cold tax of ' + FmtUsd(s.coldStakeUsd);
+    const paid = 'the cold tax so far is ' + FmtUsd(coldWastedUsdScan) + ' of ' + FmtUsd(sessionCostVal)
+      + ' (' + BT + psRound((coldWastedUsdScan / sessionCostVal) * 100) + '%' + BT + ') across '
+      + BT + nColdScan + BT + ' leg(s) that re-created an expired cache';
+    costColdLead = [stakeLive ? stake : null, nColdScan >= 1 ? paid : null].filter(Boolean).join('; ');
+  }
 }
 
 // ---- COLD ----
@@ -388,6 +413,7 @@ emit(`COST_RECENT: ${costRecent}`);
 emit(`COST_DETAIL: ${costDetail}`);
 emit(`COST_AGENTS_TIER: ${agentTier}`);
 emit(`COST_AGENTS_LEAD: ${costAgentsLead}`);
+emit(`COST_COLD_LEAD: ${costColdLead}`);
 // Run-window caveats. ONE LABEL PER CAVEAT — these three can co-occur in a single sheet, and the
 // sheet is a `KEY: value` contract: a key that appears twice with different content is unparseable
 // (the reader cannot tell a second value from a corrected one). Every label here must also be

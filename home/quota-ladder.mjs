@@ -105,6 +105,10 @@ export function QuotaCells(rl, winSec, now) {
   // set on exactly the branch that produced the sentence, so a figure the row did not state is null
   // rather than recomputed behind it.
   let actSec = null, darkSec = null, note = null;
+  // `runway` is the rung-1/2 detail WITHOUT its projected end — the fallback QuotaDetailValue draws
+  // when the full sentence alone would overflow its value field, so the row's worst case is the bare
+  // runway rather than a clipped sentence. Null everywhere the detail carries no projection.
+  let runway = null;
   if (exhausted) {
     col = '38;5;208';
     // The verdict drops the window label: the label field already carries 5h / 7d, and dropping the
@@ -121,6 +125,13 @@ export function QuotaCells(rl, winSec, now) {
       detail = FmtDurShort(S) + ' to act ' + '→' + ' ' + FmtDurShort(B) + ' dark';
       actSec = psRound(S);
       darkSec = psRound(B);
+      // Yellow and orange also say where the window is heading. Only `ends ~N%`, never the `spare`
+      // half: here beta > 0, so t < q and rho > 1, and the spare term would be negative by
+      // construction. Red keeps the bare runway.
+      if (rung === 1 || rung === 2) {
+        runway = detail;
+        detail = runway + ' ' + '·' + ` ends ~${psRound((q / t) * 100)}%`;
+      }
     } else {
       detail = null;
     }
@@ -129,7 +140,7 @@ export function QuotaCells(rl, winSec, now) {
   // rung 0's `ends ~N% · M% spare` is chrome — the green names the gauge and the verdict only.
   const detailCol = rung === 0 ? null : col;
   return {
-    col, detailCol, mid, core, verdict, detail, resets,
+    col, detailCol, mid, core, verdict, detail, runway, resets,
     rung, exhausted, belowFloor: false,
     actSec, darkSec, note,
   };
@@ -151,8 +162,10 @@ export function QuotaCells(rl, winSec, now) {
 // window, which is the honest outcome.
 //
 // `reportedAt` — WHEN THIS READING WAS OBSERVED, and the mechanism the tray's `as of` rests on. It
-// is stamped here, once, and TRAVELS INSIDE THE READING: the merge never restamps it, so a session
-// re-rendering a nine-day-old payload carries the old stamp forward unchanged. That is what makes
+// is stamped here, once, and TRAVELS INSIDE THE READING: the merge takes no clock and never stamps it
+// forward from one (its only adjustment is merge rule 3's clamp up to a stored stamp, which a stale
+// payload — never the higher reading in its window — cannot trigger), so a session re-rendering a
+// nine-day-old payload carries the old stamp forward unchanged. That is what makes
 // the anti-zombie property structural rather than a rule some merge branch has to defend.
 //
 // THE OBSERVATION MOMENT IS THE CALLER'S TO RESOLVE, because the two callers observe differently and

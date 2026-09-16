@@ -8,6 +8,7 @@ COST_RECENT: `med8` (median of the last 8 legs) `$0.10`/leg; session mean `$0.25
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: the cold tax so far is `$1.02` of `$2.50` (`41%`) across `1` leg(s) that re-created an expired cache
 COST_MODELSWITCH_NOTE: the model switched mid-session (claude-opus-5 → claude-fable-5 at leg 5) — legs before and after were priced on different models, so comparing per-leg $ across the switch is not like-for-like
 COLD: the 5-minute cache is about to expire (`~1 min` left) — a send now keeps it warm; otherwise your next resume adds a one-time `$2.55` (a `$0.22` keep-warm API refresh — max_tokens:0 — buys the same warmth without a real send); cold tax so far: `$1.02` over `1` leg(s)
 WARM_REWRITE_TAX: (none)

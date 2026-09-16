@@ -11,11 +11,12 @@
 // two — the later `reportedAt`. Nothing here consults a file's modification time, the writing
 // session's identity, or the render clock.
 //
-// THE MERGE STAMPS NOTHING, AND TAKES NO CLOCK. Each stored reading carries its own `reportedAt` —
-// THE MOMENT THE READING WAS OBSERVED, which is the session's own last banked leg (its last API
-// call), clamped at the render clock and at the window's end. It is written once by the status line
-// that produced it (see QuotaWindow in statusline.mjs), so the age travels INSIDE the reading. The
-// merge's only job is choosing which of two readings to keep, which is all it should ever have been.
+// THE MERGE TAKES NO CLOCK. Each stored reading carries its own `reportedAt` — THE MOMENT THE
+// READING WAS OBSERVED, which is the session's own last banked leg (its last API call), clamped at
+// the render clock and at the window's end. It is written by the status line that produced it (see
+// QuotaWindow in statusline.mjs), so the age travels INSIDE the reading. The merge's job is choosing
+// which of two readings to keep; the one stamp it ever adjusts is a clamp UP to the stored stamp at
+// rule 3 (below), never a clock reading.
 //
 // Two functions, and the split is deliberate: MergeQuotaWindow is pure and holds the whole ordering
 // rule, so every branch of it is reachable offline without a render; WriteQuotaFile does the I/O
@@ -60,6 +61,9 @@ const numOrNull = (x) => (isNum(x) ? x : null);
 //                                    earlier one has ended.
 //   3. equal `resetsAt`           -> the same window, so the tie-break is consumption: the HIGHER
 //                                    `usedPercentage`, because within a window it only rises.
+//                                    The incoming reading wins entire EXCEPT for a stamp that would
+//                                    move the row's date backwards: that stamp is clamped up to the
+//                                    stored one.
 //   4. equal `resetsAt` AND equal `usedPercentage`
 //                                 -> the LATER `reportedAt`, and it wins WHOLE. Equal on all three
 //                                    -> STORED, so the bytes do not move and the unchanged write
@@ -92,6 +96,14 @@ const numOrNull = (x) => (isNum(x) ? x : null);
 //
 // RULE 4 READS A STAMP; IT DOES NOT WRITE ONE. This function still takes two parameters and no clock.
 //
+// WHY RULE 3 CLAMPS THE STAMP, AND WHY THAT IS NOT A FABRICATION. A session's stamp is its own last
+// banked API call, which can predate a reading another session already delivered — so a higher
+// percentage could arrive carrying an older date and drag the row's `as of` backwards. Within one
+// window consumption only rises, so a reading reporting a higher figure cannot have been observed
+// BEFORE one reporting a lower figure: the stored stamp is a true lower bound on the incoming
+// observation's moment, and taking it is a clamp, not a guess. The clamp builds a COPY of the
+// incoming object; neither argument is mutated, and a copy is allocated only when the clamp fires.
+//
 // A window with no numeric `resetsAt` is not a shape our own writer can produce: QuotaWindow refuses
 // to build one, because a reading with no reset moment has no age and no countdown. It is handled
 // here only as "no stored reading", never carried forward. A window with no numeric `reportedAt` is
@@ -99,7 +111,8 @@ const numOrNull = (x) => (isNum(x) ? x : null);
 // 3 take for a missing field.
 //
 // The stored object is returned BY REFERENCE when it wins — same object, same bytes, same
-// `reportedAt`. Nothing in this function writes a field.
+// `reportedAt`. Every branch except the rule-3 clamp returns one of its arguments, and nothing in
+// this function writes a field of either.
 export function MergeQuotaWindow(stored, incoming) {
   if (!stored || typeof stored !== 'object') return incoming;
   const sr = numOrNull(stored.resetsAt);
@@ -111,9 +124,12 @@ export function MergeQuotaWindow(stored, incoming) {
   const iu = numOrNull(incoming.usedPercentage);
   if (su === null) return incoming;
   if (iu === null) return stored;
-  if (iu !== su) return iu > su ? incoming : stored;
   const sp = numOrNull(stored.reportedAt);
   const ip = numOrNull(incoming.reportedAt);
+  if (iu !== su) {
+    if (iu < su) return stored;
+    return (sp !== null && ip !== null && ip < sp) ? { ...incoming, reportedAt: sp } : incoming;
+  }
   if (sp === null) return incoming;
   if (ip === null) return stored;
   return ip > sp ? incoming : stored;
@@ -157,11 +173,15 @@ export function MergeQuotaWindow(stored, incoming) {
 // stale reading can never win at all. The pathological case — a nine-day-old snapshot overwriting a
 // live one — is excluded by the rule regardless of timing.
 //
+// RETURNS ONE VERDICT PER WINDOW THE PAYLOAD CARRIED: `{ fiveHour?, sevenDay? }`, each `'written'`
+// or `'kept'`. The two windows merge independently, so one file-wide answer would be one answer to two
+// questions. Every path that decided nothing — no usable window, or the catch — returns `{}`.
+//
 // Never throws: a failure loses one render's update and nothing else.
 export function WriteQuotaFile(configHome, windows) {
   try {
     const incoming = windows && typeof windows === 'object' ? windows : {};
-    if (!WINDOW_KEYS.some((k) => incoming[k])) return;
+    if (!WINDOW_KEYS.some((k) => incoming[k])) return {};
     const path = join(configHome, QUOTA_FILE_NAME);
     let text = null;
     try { text = readFileSync(path, 'utf8'); } catch { text = null; }
@@ -175,13 +195,24 @@ export function WriteQuotaFile(configHome, windows) {
       } catch { cur = {}; }
     }
     const out = { schema: QUOTA_SCHEMA };
+    const verdicts = {};
     for (const k of WINDOW_KEYS) {
       const stored = (cur[k] && typeof cur[k] === 'object') ? cur[k] : null;
-      if (incoming[k]) out[k] = MergeQuotaWindow(stored, incoming[k]);
-      else if (stored) out[k] = stored;
+      if (incoming[k]) {
+        out[k] = MergeQuotaWindow(stored, incoming[k]);
+        // `written` vs `kept` is the MERGE's own answer, read off object identity: MergeQuotaWindow
+        // returns the stored object BY REFERENCE when it wins, so `out[k] === stored` is the whole
+        // test and it needs no second parse. `kept` means this window's submitted reading did not
+        // survive the merge.
+        verdicts[k] = (out[k] === stored) ? 'kept' : 'written';
+      } else if (stored) out[k] = stored;
     }
     const json = JSON.stringify(out, null, 2);
-    if (json === text) return;
+    // A skipped write cannot make a `written` verdict lie: every merge branch in which the incoming
+    // reading wins requires a field to differ (`resetsAt`, `usedPercentage` or `reportedAt`), so
+    // incoming winning implies different bytes, and the skip fires only when the bytes are equal.
+    if (json === text) return verdicts;
     atomicWriteFile(path, json);
-  } catch { /* one render's update, nothing else */ }
+    return verdicts;
+  } catch { return {}; /* one render's update, nothing else */ }
 }

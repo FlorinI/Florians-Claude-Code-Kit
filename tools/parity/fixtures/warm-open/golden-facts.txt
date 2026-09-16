@@ -8,6 +8,7 @@ COST_RECENT: `med6` (median of the last 6 legs) `$0.20`/leg; session mean `$0.33
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COLD: send within `~7 min` to keep the ~1-hour cache warm; let it cool and resuming adds a one-time `$6.38` (a `$0.34` keep-warm API refresh — max_tokens:0 — buys the same warmth without a real send)
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `170k`, yellow band — mild weakening on hard multi-fact recall

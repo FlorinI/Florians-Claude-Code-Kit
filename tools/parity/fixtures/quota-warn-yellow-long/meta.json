@@ -1,0 +1,4 @@
+{
+  "note": "R11 width (backlog-clear spec §9.2): the 7-day window at the YELLOW rung with multi-unit countdowns (2d16h to act, a reset 2d23h out) - the composed half must show the whole warning wording with its projected end, or drop resets then the projection, never clip. Its orange twin is the existing capped/mixed 7d half.",
+  "nowEpoch": 1781700000
+}

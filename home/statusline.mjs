@@ -3,7 +3,7 @@
 // Reads the Claude Code stdin JSON, renders the multi-cluster ANSI line to stdout, and writes the
 // sidecar snapshot + per-session/agent rollup caches. All numeric formatting / rounding / timestamp
 // parsing goes through _sl-compat.mjs. Rendering is guarded by the Node golden test
-// (tools/parity/run-parity.mjs) against committed fixtures. See docs/roadmap.md.
+// (tools/parity/run-parity.mjs) against committed fixtures.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { QuotaCells, QuotaWindow } from './quota-ladder.mjs';
 import {
   getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
-  isSyntheticLeg, servingTierReport, modelSwitchReport, median, DRIVER_VERBS,
+  isSyntheticLeg, servingTierReport, modelSwitchReport, median, DRIVER_VERBS, COLD_PREMIUM_MIN_USD,
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
@@ -24,7 +24,7 @@ import { WriteQuotaFile } from './quota-file.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.11.0';
+export const SL_VERSION = '6.1.13.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -476,13 +476,15 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
               if (legTs != null && r.lastLegTs != null) {
                 const gap = legTs - Number(r.lastLegTs);
                 const prevTtl = Number(r.lastLegTtlSec) > 0 ? Number(r.lastLegTtlSec) : 300;
-                const blBigRewrite = (cwTok >= 50000 && crTok < 0.5 * cwTok);
+                const blLowReadBack = (crTok < 0.5 * cwTok);
                 const blCollapsed = (prevWarm > 0 && crTok < prevWarm * 0.7);
-                // Twin of leg-driver.mjs testColdLeg — keep the thresholds (50000 / 0.5 / 0.7 / 8000)
-                // in lockstep. A collapse WITHOUT a TTL-exceeding gap is the `compacted` display class
-                // (getDriver) and deliberately does NOT count here: `gap > prevTtl` keeps the cold-tax
-                // counters clean of mid-session compactions.
-                if (gap > prevTtl && cwTok >= 8000 && (blBigRewrite || blCollapsed)) {
+                // Twin of leg-driver.mjs testColdLeg — the SHAPE test only (gap > TTL, and the 0.5
+                // read-back or 0.7 collapse ratio), kept in lockstep; no size floor. A collapse WITHOUT
+                // a TTL-exceeding gap is the `compacted` display class (getDriver) and deliberately does
+                // NOT count here: `gap > prevTtl` keeps the cold-tax counters clean of mid-session
+                // compactions. Every cold-SHAPED leg is banked; which of them the tax COUNTS is the
+                // read side's dollar gate (COLD_PREMIUM_MIN_USD), which needs a `base` this scan lacks.
+                if (gap > prevTtl && (blLowReadBack || blCollapsed)) {
                   const thisColdWaste = cwUnits - (cwTok * M_CACHE_READ);
                   r.nColdLegs = Number(r.nColdLegs) + 1;
                   r.coldWastedUnits = Number(r.coldWastedUnits) + thisColdWaste;
@@ -918,20 +920,30 @@ let coldValue = '';
 // uses, re-read per render, never frozen to scan time). Incomplete records (a session banked by an
 // older build, or a lagging home's projection dropped the key) fall back to the raw accumulators —
 // the prior behaviour: priced at the current label's rate.
+//
+// THE DOLLAR GATE. Every cold-SHAPED leg is banked; the tax COUNTS only a leg whose own avoidable
+// premium (tier-true units × baseTrue) clears COLD_PREMIUM_MIN_USD — the same gate the prospective
+// stake below uses, so a leg is counted after exactly when a leg its size would have been warned about
+// before. It is applied to the per-leg records; with no cost basis yet there is nothing to price the
+// gate with, so every record counts (and no dollar figure renders). The raw-accumulator fallback has no
+// per-leg figures and stays ungated.
 let coldUnitsEff = rollup ? Number(rollup.coldWastedUnits) : 0;
 let lastColdUnitsEff = rollup ? Number(rollup.lastColdWastedUnits) : 0;
+let nColdCounted = rollup ? Number(rollup.nColdLegs) : 0;
 if (rollup && Array.isArray(rollup.coldLegs) && rollup.coldLegs.length > 0
   && rollup.coldLegs.length === Number(rollup.nColdLegs)) {
-  coldUnitsEff = rollup.coldLegs.reduce((a, c) => a + Number(c.avoidableUnits) * tierWeight(c.model, mainTier), 0);
-  const lastRec = rollup.coldLegs[rollup.coldLegs.length - 1];
-  lastColdUnitsEff = Number(lastRec.avoidableUnits) * tierWeight(lastRec.model, mainTier);
+  const effs = rollup.coldLegs.map((c) => Number(c.avoidableUnits) * tierWeight(c.model, mainTier));
+  const counted = isNil(baseTrue) ? effs : effs.filter((u) => baseTrue * u >= COLD_PREMIUM_MIN_USD);
+  coldUnitsEff = counted.reduce((a, u) => a + u, 0);
+  lastColdUnitsEff = counted.length > 0 ? counted[counted.length - 1] : 0;
+  nColdCounted = counted.length;
 }
-if (rollup && Number(rollup.nColdLegs) >= 1 && totalUnits > 0 && sessionCost > 0) {
+if (rollup && nColdCounted >= 1 && totalUnits > 0 && sessionCost > 0) {
   const coldTax = baseTrue * coldUnitsEff;
   costColdPart = DarkGray('cold ') + ColorCost(coldTax, '$' + fmtN(coldTax, 2));
 }
 // Prospective: what a cold resume would cost from here — the only thing this row displays. Gates are
-// unchanged: the $0.25 stake floor, and the calm-band suppression (`wCol === '2'`), which leaves the
+// unchanged: the COLD_PREMIUM_MIN_USD stake floor (leg-driver.mjs), and the calm-band suppression (`wCol === '2'`), which leaves the
 // row EMPTY through the runway where every leg resets the clock and there is nothing to act on. The
 // snowflake marker is gone from the fixed rows — the label names the cluster and the countdown
 // carries the calm-to-cooling ramp — and survives as the spotlight cold-leg glyph.
@@ -939,7 +951,7 @@ if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0)
   const coldBase = baseTrue;
   const ttlSec = ('lastLegTtlSec' in rollup && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : 300;
   coldStakes = coldBase * Number(ctxTok) * (CacheWriteMult(ttlSec) - M_CACHE_READ);
-  if (coldStakes >= 0.25) {
+  if (coldStakes >= COLD_PREMIUM_MIN_USD) {
     const stakesStr = '+$' + fmtN(coldStakes, 2);
     if (!isNil(rollup.lastLegTs)) {
       coldRemain = ttlSec - (NOW - Number(rollup.lastLegTs));
@@ -1132,10 +1144,14 @@ function QuotaGaugeValue(c) {
 // fight the alarm. At rung 0 and below the floor detailCol is null and the sentence is chrome.
 // When the assembled half would overflow its value field, `resets` is the field that drops — the
 // least load-bearing figure on the row (the gauge's elapsed bar already says where in the window you
-// are), and the last one, so dropping it leaves no hole.
+// are), and the last one, so dropping it leaves no hole. If the detail STILL overflows on its own, a
+// yellow/orange detail drops its projected end and draws the bare runway (`c.runway`) — so the row
+// never clips, and its worst case is the wording those rungs carried before they gained the projection.
 function QuotaDetailValue(c, valueW) {
   if (!c) return '';
-  const detail = c.detail ? (c.detailCol ? `${ESC}[${c.detailCol}m${c.detail}${ESC}[0m` : DarkGray(c.detail)) : null;
+  const paint = (s) => (c.detailCol ? `${ESC}[${c.detailCol}m${s}${ESC}[0m` : DarkGray(s));
+  let detail = c.detail ? paint(c.detail) : null;
+  if (detail && c.runway && visLen(detail) > valueW) detail = paint(c.runway);
   const parts = [];
   if (detail) parts.push(detail);
   if (c.resets) parts.push(DarkGray(c.resets));
@@ -1316,7 +1332,7 @@ try {
   const toCompactTok = (!AC_OFF && !isNil(ctxUsed) && !isNil(ctxSize)) ? CompactAt(ctxSize) - ctxUsed : null;
   const activityPct = (aliveSec && Number(aliveSec) > 0 && !isNil(apiSec)) ? mathRoundD(100.0 * apiSec / aliveSec, 1) : null;
   let coldStakeUsd = null, coldState = null, coldCoolRemainSec = null;
-  if (!isNil(coldStakes) && coldStakes >= 0.25) {
+  if (!isNil(coldStakes) && coldStakes >= COLD_PREMIUM_MIN_USD) {
     coldStakeUsd = mathRoundD(Number(coldStakes), 2);
     if (rollup && !isNil(rollup.lastLegTs)) {
       if (!isNil(coldRemain) && coldRemain > 0) { coldState = 'cooling'; coldCoolRemainSec = psRound(coldRemain); }
@@ -1364,7 +1380,7 @@ try {
     // Present ONLY when the payload carries a session_name: the snapshot owner's name, persisted at
     // write time so the fact sheet's FOREIGN guard can name that side in words.
     ...(sessionName ? { sessionName } : {}),
-    nColdLegs: rollup ? Number(rollup.nColdLegs) : null,
+    nColdLegs: rollup ? nColdCounted : null,
     coldWastedUsd: (rollup && totalUnits > 0 && sessionCost > 0) ? mathRoundD(baseTrue * coldUnitsEff, 2) : null,
     lastColdTaxUsd: (rollup && totalUnits > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * lastColdUnitsEff, 2) : null,
     lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
@@ -1405,6 +1421,7 @@ WriteQuotaFile(ConfigHome, quotaWindows);
 // row assembly at the end of the file — the two-phase sidecar write must not wait on git.
 let gitSync = null;
 let repo = null;
+let gitOwner = '', gitName = '', gitBranch = '';
 if (cwd) {
   let porcelain = null;
   try {
@@ -1434,9 +1451,10 @@ if (cwd) {
     if (remoteUrl) {
       const u = remoteUrl.replace(/\.git$/, '');
       const m = u.match(/[:/]([^:/]+)\/([^:/]+)$/);
-      if (m) remote = `${m[1]}/${m[2]}`;
+      if (m) { remote = `${m[1]}/${m[2]}`; gitOwner = m[1]; gitName = m[2]; }
     }
     repo = remote ? `${remote}@${branch}` : branch;
+    gitBranch = branch;
     gitSync = sync;
   }
 }
@@ -1491,7 +1509,27 @@ const flagsValue = flagChips.join('  ');
 // `no repo` is two words, not the label alone: the label alone would leave the version badges
 // sitting directly after `repo` and reading as the repo's own name.
 const versionBadges = (version ? DarkGray('v' + version) + '  ' : '') + DarkGray('bsl' + SL_VERSION);
-const repoValue = (repo ? repo + ' ' + gitSync : DarkGray('no repo')) + '  ' + versionBadges;
+// The right column never truncates its own driver (see the note on SpotlightValue above), but a
+// long owner/repo name can still overrun the terminal — and an external cut lands wherever the
+// line happens to end, which is the sync glyph and version badges: the two most actionable bits
+// (dirty/ahead-behind, which build produced this line). So the repo identity is clipped in-code,
+// most-interesting-first: sync glyph and version badges are reserved and never touched; within
+// what's left, the org is the first thing dropped (usually the same across every session), then
+// the branch is truncated (which line of work), and the project name goes last (which project).
+function clipRepoIdentity(owner, name, branch, budget) {
+  if (!name) return truncTo(branch, budget);
+  const full = owner ? `${owner}/${name}@${branch}` : `${name}@${branch}`;
+  if (visLen(full) <= budget) return full;
+  const noOwner = `${name}@${branch}`;
+  if (visLen(noOwner) <= budget) return noOwner;
+  const branchBudget = budget - visLen(name) - 1;
+  if (branchBudget >= 4) return `${name}@${truncTo(branch, branchBudget)}`;
+  return truncTo(noOwner, budget);
+}
+const repoReserved = 1 + visLen(gitSync || '') + 2 + visLen(versionBadges);
+const repoBudget = Math.max(8, RIGHT_VALUE_W - repoReserved);
+const repoIdentity = repo ? clipRepoIdentity(gitOwner, gitName, gitBranch, repoBudget) : null;
+const repoValue = (repoIdentity ? repoIdentity + ' ' + gitSync : DarkGray('no repo')) + '  ' + versionBadges;
 
 const rows = [];
 rows.push(gridRow(DarkGray('model'), modelValue, DarkGray('cost'), costValue));

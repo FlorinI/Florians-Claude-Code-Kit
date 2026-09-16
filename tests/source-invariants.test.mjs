@@ -594,15 +594,14 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.11 (PATCH: the quota file gains a second writer, a header probe with no session)', () => {
+test('D4-5 — SL_VERSION is 6.1.13 (PATCH: the backlog-clear sprint — the cold tax counts on the dollar gate, warning rungs project their end, the stamp clamp)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.11',
-    'X.Y.Z is 6.1.11: one behaviour-affecting change a deployment note can name — `<config-home>/statusline-quota.json` now has a SECOND WRITER, a header probe with no session (`home/quota-probe.mjs`), which reads the rate-limit response headers of its own minimal API request every quarter hour and writes them through the same merge; the cluster changes with it, since `statusline.mjs` loses the quota ladder to the new `home/quota-ladder.mjs` and `_sl-compat.mjs` gains `FmtDurShort`. Not X: no displayed figure changes meaning, no threshold moves, the rendered line is byte-identical (npm run parity, no golden blessed) and the calibration samples stay comparable. Not Y: no new cluster or line appears on the status line — the new module is a MOVE, not a display. Where the call is close the project\'s rule is to prefer Z. 6.1.10.x is the deployed build and cannot be reused; B resets to 0 and install.mjs ticks it from there, so a trailing `.1` appearing later is an ordinary re-deploy tick, not a finding');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.13',
+    'X.Y.Z is 6.1.13 (backlog-clear spec §15, ruled at §18.3): the cold tax now counts a leg exactly when the prospective dollar gate would have warned about it, yellow and orange quota rows gain their projected end, and a higher quota reading can no longer carry its row\'s date backwards. Not X: which legs a tally counts changes, not what a displayed number means, and no calibration sample becomes incomparable. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
 });
-
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would
   // otherwise describe a layout that no longer exists.
@@ -865,4 +864,150 @@ test('N11 — the lone-fat-leg absolutes are window-scoped in the two chip test 
   assert.match(s, /full\s+8-leg\s+window/, 'the S15 rationale scopes the one-rank claim to the full 8-leg window');
   assert.match(s, /hold\s+less\s+firmly/, 'the S15 rationale states that shorter windows hold less firmly');
   assert.match(s, /own\s+size\s+into\s+the\s+figure/, 'the S15 rationale states the two-fat-legs short-window break');
+});
+
+// ================================================================================================
+// Backlog-clear sprint (2026-09-17) — B6 and R23 #2 / R16 (c) source rows.
+// Spec: docs/260916-backlog-clear-spec.md §8.3, §11, §12.2. Test plan: docs/260917-backlog-clear-
+// test-plan.md §3.
+// ================================================================================================
+
+// ---- INB-1 — the .inbox H1 IS the ticket's status (spec §8.1, §8.3; A-B6-2, A-B6-3) ----------------
+// A ticket is CLOSED iff line 1 starts with `# CLOSED`; any other first line is OPEN. So an open
+// ticket's first line may carry neither a closure token nor a strikethrough — either one is a close
+// written in a shape nothing can count. Tokens are UPPERCASE and whole-word on purpose: every legacy
+// marker was uppercase, and an ordinary open title ("Tray shows done sessions after restart") must
+// stay legal. `.inbox/` is excluded from liveSurfaceFiles(), so this row walks it itself. The public
+// kit has no `.inbox/`, and the skip is keyed on IN_PUBLIC_KIT, never on existsSync — an existsSync
+// gate is exactly the silent-skip shape .inbox/2026-09-08-four-existssync-gated-… closed.
+const CLOSURE_TOKEN = /(?<![A-Za-z'’-])(CLOSED|FIXED|SHIPPED|RESOLVED|WON['’]T-DO|DONE|MOOT)(?![A-Za-z'’])/;
+function inboxH1Offence(line1) {
+  if (line1.startsWith('# CLOSED')) return null;
+  if (line1.includes('~~')) return 'strikethrough in an open H1';
+  const m = CLOSURE_TOKEN.exec(line1);
+  return m ? `closure token ${m[1]} in an open H1` : null;
+}
+
+test('INB-1 — every .inbox ticket\'s first line is either `# CLOSED…` or an open title with no closure token and no strikethrough', { skip: IN_PUBLIC_KIT ? 'public kit checkout: .inbox/ is private and does not ship' : false }, () => {
+  const dir = join(repo, '.inbox');
+  const tickets = readdirSync(dir).filter((n) => n.endsWith('.md') && n !== 'INBOX.md');
+  // Vacuity guard: the private repo holds 120+ tickets; a broken walk must not pass as "no offences".
+  assert.ok(tickets.length >= 100, `expected the .inbox ticket corpus, found ${tickets.length} files`);
+  const offences = [];
+  for (const n of tickets) {
+    const line1 = readFileSync(join(dir, n), 'utf8').split(/\r?\n/, 1)[0];
+    const why = inboxH1Offence(line1);
+    if (why) offences.push(`${n} — ${why}: ${line1.slice(0, 90)}`);
+  }
+  assert.deepEqual(offences, [],
+    `${offences.length} ticket(s) record a close in a shape the open-count rule cannot see — rewrite line 1 as \`# CLOSED — …\` (or \`# CLOSED as a DECISION — …\`), never rename the file:\n  ${offences.join('\n  ')}`);
+});
+
+test('INB-1b — the H1 rule itself: canonical closes and ordinary open titles pass, legacy closes do not (A-B6-2, A-B6-3)', () => {
+  // The rule on literal lines, so it is pinned in every checkout including the public kit.
+  for (const ok of [
+    '# CLOSED — fixed 2026-08-16 (sprint 5): the probe logs one verdict',
+    '# CLOSED as a DECISION — won\'t-do 2026-08-08 (triage): soften the yellow band',
+    '# CLOSED - fixed 2026-07-01: ascii hyphen form',
+    '# Tray shows done sessions after restart',
+    '# The probe is done too early when the window resets',
+    '# Fixed-width columns clip the repo slug',
+  ]) assert.equal(inboxH1Offence(ok), null, `legal H1 flagged: ${ok}`);
+  for (const bad of [
+    '# ~~BUG~~ SHIPPED 2026-08-16 — the probe logs one verdict',
+    '# ~~Ticket~~ FIXED 2026-08-01 (sprint 3) — something',
+    '# WON\'T-DO — a feature nobody needs',
+    '# The tray flickers — DONE',
+    '# ~~a struck title~~',
+    '# Cold legs are MOOT now',
+  ]) assert.ok(inboxH1Offence(bad), `legacy close not caught: ${bad}`);
+});
+
+// ---- CG-7..CG-9 — one dollar gate for the cold tax, named once (spec §11.1, §11.4) ----------------
+const stripLineComments = (s) => s.split('\n').map((l) => l.replace(/(^|[^:'"`])\/\/.*$/, '$1')).join('\n');
+
+test('CG-7 — COLD_PREMIUM_MIN_USD is exported once from leg-driver.mjs; statusline.mjs imports it and keeps no bare 0.25', () => {
+  const ld = src('home/leg-driver.mjs');
+  const defs = ld.match(/export const COLD_PREMIUM_MIN_USD\s*=/g) ?? [];
+  assert.equal(defs.length, 1, 'leg-driver.mjs exports COLD_PREMIUM_MIN_USD exactly once');
+  for (const f of readdirSync(join(repo, 'home')).filter((n) => n.endsWith('.mjs') && n !== 'leg-driver.mjs')) {
+    assert.ok(!/\b(const|let|var)\s+COLD_PREMIUM_MIN_USD\b/.test(src(`home/${f}`)),
+      `home/${f} redefines COLD_PREMIUM_MIN_USD — import it from leg-driver.mjs so the gate has one value`);
+  }
+  const sl = src('home/statusline.mjs');
+  const imp = /import\s*\{([^}]*)\}\s*from\s*'\.\/leg-driver\.mjs'/.exec(sl);
+  assert.ok(imp && /\bCOLD_PREMIUM_MIN_USD\b/.test(imp[1]), 'statusline.mjs imports COLD_PREMIUM_MIN_USD from ./leg-driver.mjs');
+  const uses = (stripLineComments(sl).match(/\bCOLD_PREMIUM_MIN_USD\b/g) ?? []).length - 1;
+  assert.ok(uses >= 2, `both prospective sites (the rendered row and the sidecar write) use the constant; ${uses} use(s) found`);
+  const bare = stripLineComments(sl).split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => /(?<![\d.])0\.25(?!\d)/.test(l));
+  assert.deepEqual(bare.map(([n, l]) => `${n}: ${l.trim()}`), [], 'no bare 0.25 literal left in statusline.mjs code');
+});
+
+// The body of a top-level `function name(` / `export function name(` up to the next column-0 `}`.
+function fnBody(text, name) {
+  const i = text.search(new RegExp(`^(export )?function ${name}\\(`, 'm'));
+  if (i < 0) return null;
+  const end = text.indexOf('\n}', i);
+  return text.slice(i, end < 0 ? undefined : end + 2);
+}
+
+test('CG-8 — testColdLeg and its statusline.mjs twin carry no token size floor (no 50000, no 8000)', () => {
+  const body = fnBody(src('home/leg-driver.mjs'), 'testColdLeg');
+  assert.ok(body, 'testColdLeg is still a top-level function in leg-driver.mjs');
+  for (const lit of ['50000', '8000', '50_000', '8_000']) {
+    assert.ok(!body.includes(lit), `testColdLeg still carries the ${lit} size floor:\n${body}`);
+  }
+  // The twin: the cold-shape block in UpdateSessionRollups — the ~12 lines before the line that banks
+  // the cold-leg record, which hold the shape terms and the `if` that gates the banking.
+  const sl = src('home/statusline.mjs');
+  const b = sl.indexOf('r.coldLegs.push(');
+  assert.ok(b >= 0, 'the statusline.mjs cold-shape twin (the r.coldLegs.push banking site) is still findable');
+  const a = sl.lastIndexOf('const gap', b);
+  assert.ok(a >= 0 && b - a < 2500, 'the twin\'s `const gap` … `r.coldLegs.push` block is still contiguous');
+  const twin = stripLineComments(sl.slice(a, b));
+  for (const lit of ['50000', '8000', '50_000', '8_000']) {
+    assert.ok(!twin.includes(lit), `the statusline.mjs twin still carries the ${lit} size floor:\n${twin}`);
+  }
+});
+
+test('CG-9 — docs/status-line.md\'s cold section names the gate constant and spells neither 50k nor $0.25', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
+  const doc = src('docs/status-line.md');
+  const start = doc.indexOf('### Row 6 left — `cold`');
+  assert.ok(start >= 0, 'the "Row 6 left — `cold`" section exists');
+  const next = doc.indexOf('\n### ', start + 1);
+  const sec = doc.slice(start, next < 0 ? undefined : next);
+  for (const needle of ['50k', '50000', '50,000', '$0.25', '0.25']) {
+    assert.ok(!sec.includes(needle), `the cold section still spells the measured constant ${needle}`);
+  }
+  assert.ok(sec.includes('COLD_PREMIUM_MIN_USD'), 'the cold section names COLD_PREMIUM_MIN_USD as the counting gate');
+  assert.ok(sec.includes('leg-driver.mjs'), 'the cold section points at the file that holds the constant');
+});
+
+// ---- CL-S — COLD_LEAD_SHARE lives in handover-facts.mjs and no doc quotes it (spec §12.2) ----------
+test('CL-S — COLD_LEAD_SHARE is defined in handover-facts.mjs, and no doc or command quotes its value', () => {
+  const hf = src('home/handover-facts.mjs');
+  const m = /\bconst COLD_LEAD_SHARE\s*=\s*([^;\n]+)/.exec(hf);
+  assert.ok(m, 'handover-facts.mjs defines COLD_LEAD_SHARE');
+  const literal = m[1].trim();
+  // eslint-disable-next-line no-new-func
+  const value = Function(`"use strict"; return (${literal});`)();
+  assert.ok(typeof value === 'number' && value > 0 && value < 1, `COLD_LEAD_SHARE is a share in (0, 1): ${literal}`);
+  const forms = new Set([literal, String(value), `${Math.round(value * 100)}%`, `${Math.round(value * 100)} %`]);
+  if (Math.abs(value - 1 / 3) < 0.01) ['one third', 'a third', '1/3', '33%', '0.33'].forEach((x) => forms.add(x));
+  if (Math.abs(value - 0.25) < 0.01) ['a quarter', 'one quarter', '1/4'].forEach((x) => forms.add(x));
+  if (Math.abs(value - 0.5) < 0.01) ['half', '1/2'].forEach((x) => forms.add(x));
+  // The sprint's own spec and test plan are dated point-in-time artifacts; the live docs are what a
+  // reader meets. Only lines that talk about the cold lead are read, so an unrelated `33%` elsewhere
+  // cannot redden the row.
+  const TOPIC = /COLD_LEAD_SHARE|COST_COLD_LEAD|cold[- ]tax lead|cold tax leads|cold-tax share/i;
+  const docs = liveSurfaceFiles(['docs', 'home/commands', 'SPEC.md', 'CLAUDE.md'])
+    .filter((f) => f.endsWith('.md') && !/[\\/]\d{6}-[^\\/]*$/.test(f));
+  const hits = [];
+  for (const f of docs) {
+    readFileSync(join(repo, f), 'utf8').split('\n').forEach((line, i) => {
+      if (!TOPIC.test(line)) return;
+      for (const form of forms) if (line.toLowerCase().includes(form.toLowerCase())) hits.push(`${f}:${i + 1} quotes ${JSON.stringify(form)}: ${line.trim().slice(0, 120)}`);
+    });
+  }
+  assert.deepEqual(hits, [], 'a doc quotes COLD_LEAD_SHARE\'s value — name the constant and its file instead');
 });

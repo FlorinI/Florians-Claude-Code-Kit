@@ -8,6 +8,7 @@ COST_RECENT: `med3` (median of the last 3 legs) `$0.47`/leg; session mean `$0.78
 COST_DETAIL: main `$2.34` · agents `$2.41` over `5` legs
 COST_AGENTS_TIER: lead
 COST_AGENTS_LEAD: most of the spend is sub-agents — `$2.41` of `$4.75` (`51%`) across `5` legs from `2` agents
+COST_COLD_LEAD: (none)
 COLD: calm — idling past the cache lifetime would add `$1.64` to resume; no urgency
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `51k`, green band — sharp

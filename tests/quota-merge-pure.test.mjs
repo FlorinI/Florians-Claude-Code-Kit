@@ -42,6 +42,10 @@
 //   P4  rule 3: higher usedPercentage (AE-2)    P10 writer: identical bytes → no rewrite (AE-5)
 //   P5  rule 4: later reportedAt, whole (AE-3)  P11 writer: per-key independence, no-window no-write (AE-6)
 //   P6  non-numeric fields count as absent      P12 writer: never throws
+//   P13  rule 3: a higher figure never carries the row's date backwards (clamp)
+//   P13b rule 3: higher AND newer → incoming by reference, its own stamp (copy only when clamping)
+//   P13c rule 3: stored stamp missing/non-numeric → incoming by reference, no clamp, no throw
+//   P14  writer: returns one verdict per incoming window ('written' | 'kept'); {} when nothing decided
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -125,8 +129,11 @@ test('P3 — rule 2: a different resetsAt decides on its own; the later window w
 
 test('P4 — rule 3: at equal resetsAt the higher usedPercentage wins; a lower one is an older reading', () => {
   const s = win({ used: 40, reported: NOW });
-  const higher = win({ used: 41, reported: NOW - 7200 });
-  assert.ok(Object.is(MergeQuotaWindow(s, higher), higher), 'higher usedPercentage wins even with an older stamp');
+  const higher = win({ used: 41, reported: NOW + 60 });
+  assert.ok(Object.is(MergeQuotaWindow(s, higher), higher), 'higher usedPercentage with a newer stamp wins by reference');
+  // An OLDER stamp does not stop a higher figure winning — its stamp is clamped (P13 pins the clamp).
+  assert.equal(MergeQuotaWindow(s, win({ used: 41, reported: NOW - 7200 })).usedPercentage, 41,
+    'higher usedPercentage wins even with an older stamp');
   const lower = win({ used: 39, reported: NOW + 7200 });
   assert.ok(Object.is(MergeQuotaWindow(s, lower), s), 'a LOWER usedPercentage loses even with a fresher stamp — the naive >= gets this wrong');
   // A fractional step counts: 47.2 beats 47.19.
@@ -209,7 +216,8 @@ test('P6 — a non-finite or non-number field counts as ABSENT, never coerced: N
 test('P7 — for two distinct readings the same object wins from either argument position', () => {
   const pairs = [
     ['rule 2', win({ resets: NOW + 1000, used: 99 }), win({ resets: NOW + 20000, used: 1 })],
-    ['rule 3', win({ used: 40, reported: NOW }), win({ used: 41, reported: NOW - 7200 })],
+    // Higher AND newer, so no clamp fires and the winner is an input by reference (P13 covers the clamp).
+    ['rule 3', win({ used: 40, reported: NOW }), win({ used: 41, reported: NOW + 7200 })],
     ['rule 4', win({ reported: NOW - 600, gauge: 'a' }), win({ reported: NOW, gauge: 'b' })],
     ['rule 1 vs undated', { ...win({ used: 99 }), resetsAt: null }, win({ used: 5 })],
     ['rule 3 vs no pct', { resetsAt: OPEN, reportedAt: NOW }, win({ used: 40 })],
@@ -224,6 +232,53 @@ test('P7 — for two distinct readings the same object wins from either argument
   const x = win(); const y = win();
   assert.ok(Object.is(MergeQuotaWindow(x, y), x) && Object.is(MergeQuotaWindow(y, x), y),
     'a total tie returns whichever object was STORED — the merge prefers the bytes already on disk');
+});
+
+// ── P13: rule 3 never moves the row's date backwards (backlog-clear spec §5.3, A-B3-1) ──────────
+
+test('P13 — rule 3: a reading that wins on a higher percentage can never carry the row\'s date backwards', () => {
+  // A-B3-1: 60% stored as of T, then 62% arrives for the same window stamped two hours EARLIER.
+  // Within one window consumption only rises, so 62% cannot have been observed before 60% was: the
+  // stored stamp is a floor on the incoming observation's moment.
+  const T = NOW;
+  const stored = win({ used: 60, reported: T, gauge: 'old-bar' });
+  const incoming = win({ used: 62, reported: T - 7200, gauge: 'new-bar' });
+  const storedCopy = { ...stored }; const incomingCopy = { ...incoming };
+  const out = MergeQuotaWindow(stored, incoming);
+  assert.equal(out.usedPercentage, 62, 'the higher figure wins');
+  assert.ok(out.reportedAt >= T, `the result is dated at or after the stored stamp T=${T}, got ${out.reportedAt} — the row's "as of" never moves backwards`);
+  assert.equal(out.gauge, 'new-bar', 'every other field comes from the incoming reading (it still wins entire, stamp aside)');
+  assert.equal(out.resetsAt, OPEN, 'same window');
+  assert.deepEqual(stored, storedCopy, 'the stored argument is not mutated');
+  assert.deepEqual(incoming, incomingCopy, 'the incoming argument is not mutated — the clamp builds a copy');
+  // Property 1 (§5.2) at the neighbouring branch: when the stored reading wins it is still returned by reference.
+  assert.ok(Object.is(MergeQuotaWindow(incoming, stored), incoming), 'a lower figure still loses, stored returned by reference');
+});
+
+test('P13b — rule 3: a higher AND newer reading is returned by reference with its own stamp (the copy happens only when the clamp fires)', () => {
+  // A-B3-2: 60% as of 14:00, then 62% stamped 14:30 → 62% as of 14:30.
+  const stored = win({ used: 60, reported: NOW });
+  const incoming = win({ used: 62, reported: NOW + 1800 });
+  const out = MergeQuotaWindow(stored, incoming);
+  assert.ok(Object.is(out, incoming), 'no clamp needed → the incoming object itself, not a copy');
+  assert.equal(out.reportedAt, NOW + 1800, 'dated by its own, newer stamp');
+  // Equal stamps are not "backwards" either: no copy.
+  const same = win({ used: 62, reported: NOW });
+  assert.ok(Object.is(MergeQuotaWindow(stored, same), same), 'an equal stamp needs no clamp — returned by reference');
+});
+
+test('P13c — rule 3: incoming wins but a stamp is missing or non-numeric → incoming by reference, no clamp, no throw', () => {
+  const incoming = win({ used: 62, reported: NOW - 7200 });
+  for (const reportedAt of [undefined, null, 'soon', NaN, Infinity, '1788051200']) {
+    const stored = { ...win({ used: 60 }), reportedAt };
+    let out;
+    assert.doesNotThrow(() => { out = MergeQuotaWindow(stored, incoming); }, `stored.reportedAt=${String(reportedAt)}: no throw`);
+    assert.ok(Object.is(out, incoming), `stored.reportedAt=${String(reportedAt)}: nothing to clamp against — incoming by reference`);
+  }
+  // And the mirror: an incoming with no numeric stamp is not given one.
+  const noStamp = { ...win({ used: 62 }), reportedAt: 'x' };
+  assert.ok(Object.is(MergeQuotaWindow(win({ used: 60, reported: NOW }), noStamp), noStamp),
+    'incoming.reportedAt non-numeric: incoming by reference, no stamp invented');
 });
 
 // ── the writer ──────────────────────────────────────────────────────────────────────────────────
@@ -413,4 +468,55 @@ test('P12 — writer: it never throws — a config home that is a file, a missin
       [asFile + '.tmp.' + process.pid, join(missing, QUOTA_FILE_NAME + '.tmp.' + process.pid)].filter(existsSync), [],
       'the failed writes left no temp file behind');
   } finally { h.cleanup(); }
+});
+
+// ── P14: the writer's return value — one verdict per incoming window (backlog-clear spec §6.1) ───
+
+test('P14 — writer: returns one verdict per window the payload carried, as the merge decided; {} when nothing was decided', () => {
+  const h = tempHome();
+  try {
+    // From empty: every carried window is written; a window the payload did not carry has no entry.
+    assert.deepEqual(WriteQuotaFile(h.dir, { fiveHour: FIVE }), { fiveHour: 'written' },
+      'one entry per INCOMING window only — no sevenDay entry for a window the payload did not carry');
+    assert.deepEqual(WriteQuotaFile(h.dir, { fiveHour: FIVE, sevenDay: SEVEN }), { fiveHour: 'kept', sevenDay: 'written' },
+      '5h re-sent identically is a total tie (stored wins → kept); 7d is new (written)');
+
+    // Nothing new: both kept, and the file is not rewritten (the verdict does not depend on a write).
+    const mtime = statSync(h.path).mtimeMs;
+    assert.deepEqual(WriteQuotaFile(h.dir, { fiveHour: { ...FIVE }, sevenDay: { ...SEVEN } }), { fiveHour: 'kept', sevenDay: 'kept' },
+      'an unchanged payload reports both windows kept');
+    assert.equal(statSync(h.path).mtimeMs, mtime, 'and wrote nothing');
+
+    // Split outcome (A-B4-1): 5h wins on a newer stamp, 7d loses on a lower figure — and 7d's stored
+    // reading, date included, is untouched.
+    const seven0 = JSON.stringify(JSON.parse(readText(h)).sevenDay);
+    assert.deepEqual(
+      WriteQuotaFile(h.dir, { fiveHour: { ...FIVE, reportedAt: NOW + 600 }, sevenDay: { ...SEVEN, usedPercentage: 87, reportedAt: NOW + 600 } }),
+      { fiveHour: 'written', sevenDay: 'kept' }, 'each window gets its own verdict');
+    assert.equal(JSON.stringify(JSON.parse(readText(h)).sevenDay), seven0, 'the kept 7d reading is byte-identical, reportedAt included');
+
+    // A clamped win (P13) is still `written`: the reading survived, with its date floored.
+    assert.deepEqual(WriteQuotaFile(h.dir, { sevenDay: { ...SEVEN, usedPercentage: 90, reportedAt: NOW - 7200 } }), { sevenDay: 'written' },
+      'a higher figure with an older stamp wins (clamped) → written');
+    assert.equal(JSON.parse(readText(h)).sevenDay.reportedAt, NOW, 'and the file holds the clamped stamp, not the older one');
+
+    // No usable window → {} (and, per P11, no write).
+    for (const windows of [undefined, null, {}, 'x', 7, [], { fiveHour: null, sevenDay: undefined }, { other: FIVE }]) {
+      assert.deepEqual(WriteQuotaFile(h.dir, windows), {},
+        `windows=${JSON.stringify(windows) ?? String(windows)}: a payload with no usable window decides nothing → {}`);
+    }
+  } finally { h.cleanup(); }
+
+  // The catch path → {}, never a throw and never a verdict for a write that failed.
+  const h2 = tempHome();
+  try {
+    const asFile = join(h2.dir, 'not-a-dir');
+    writeFileSync(asFile, 'i am a file', 'utf8');
+    let r;
+    assert.doesNotThrow(() => { r = WriteQuotaFile(asFile, { fiveHour: FIVE }); }, 'an unwritable target does not throw');
+    assert.deepEqual(r, {}, 'an unwritable target (config home is a file) returns {} from the catch — no `written` for bytes that never landed');
+    for (const bad of [undefined, null, 42, {}]) {
+      assert.deepEqual(WriteQuotaFile(bad, { fiveHour: FIVE }), {}, `configHome=${String(bad)}: the catch path returns {}`);
+    }
+  } finally { h2.cleanup(); }
 });

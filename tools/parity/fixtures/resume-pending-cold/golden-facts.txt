@@ -8,6 +8,7 @@ COST_RECENT: (none)
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COST_RESUME_NOTE: resumed session — legs 1–12 predate this run; the total covers this run only, earlier legs are priced at this run's rate
 COLD: `1` cold leg(s) so far — not priced yet (no leg of this run has a cost basis)
 WARM_REWRITE_TAX: (none)

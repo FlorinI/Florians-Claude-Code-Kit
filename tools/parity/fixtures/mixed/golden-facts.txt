@@ -8,6 +8,7 @@ COST_RECENT: `med6` (median of the last 6 legs) `$0.27`/leg; session mean `$0.42
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: the cold tax so far is `$1.22` of `$2.50` (`49%`) across `1` leg(s) that re-created an expired cache
 COLD: the ~1-hour cache is starting to cool (`~35 min` of warmth left) — a send keeps it warm; cold tax so far: `$1.22` over `1` leg(s)
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `93k`, green band — sharp

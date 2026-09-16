@@ -8,6 +8,7 @@ COST_RECENT: (none)
 COST_DETAIL: (none)
 COST_AGENTS_TIER: none
 COST_AGENTS_LEAD: (none)
+COST_COLD_LEAD: (none)
 COLD: (omit)
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `960k`, red band — heavy degradation

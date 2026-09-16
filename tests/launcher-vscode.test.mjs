@@ -794,19 +794,75 @@ test('P14 — the flag and the command are documented in docs/cc-launcher.md, in
     'one ## section mentions both the flag and the command');
 });
 
-// The inline PowerShell the launcher emits, bounded by `tilerScript`'s own body. Several rows below
-// count keystrokes inside it, and counting them over the whole module would fold in the launcher's
-// own ANSI constants and its prose.
-function tilerSource(src) {
-  const at = src.indexOf('function tilerScript(');
-  assert.ok(at > 0, 'home/claude-launch.mjs must declare tilerScript() — it is the script whose keystrokes these rows count');
+// The body of a named top-level function in the launcher source, braces included, or null when the
+// function is not declared.
+function fnBody(src, name) {
+  const at = src.indexOf(`function ${name}(`);
+  if (at < 0) return null;
   const open = src.indexOf('{', at);
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     if (src[i] === '{') depth++;
     else if (src[i] === '}' && --depth === 0) return src.slice(open, i + 1);
   }
-  throw new Error('tilerScript body is unbalanced');
+  throw new Error(`${name} body is unbalanced`);
+}
+
+// The inline PowerShell the launcher emits: `tilerHelpers`'s body (the Add-Type block and the pure
+// helpers, backlog-clear spec §7.4) followed by `tilerScript`'s (the gesture). Several rows below count
+// keystrokes inside it, and counting them over the whole module would fold in the launcher's own ANSI
+// constants and its prose. A build without the helpers split contributes only tilerScript.
+function tilerSource(src) {
+  const script = fnBody(src, 'tilerScript');
+  assert.ok(script, 'home/claude-launch.mjs must declare tilerScript() — it is the script whose keystrokes these rows count');
+  return (fnBody(src, 'tilerHelpers') || '') + script;
+}
+
+// ── a small reader for PowerShell `if(<cond>){…}else{…}` blocks, for the source-level rows P15, P20, P21 ──
+function blockEnd(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function psIfs(text) {
+  const out = [];
+  for (const m of text.matchAll(/\bif\s*\(/g)) {
+    let depth = 0, close = -1;
+    for (let i = m.index + m[0].length - 1; i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')' && --depth === 0) { close = i; break; }
+    }
+    if (close < 0) continue;
+    const brace = text.slice(close + 1).match(/^\s*\{/);
+    if (!brace) continue;
+    const open = close + brace[0].length;
+    const end = blockEnd(text, open);
+    if (end < 0) continue;
+    const els = text.slice(end + 1).match(/^\s*else\s*\{/);
+    const elseOpen = els ? end + els[0].length : -1;
+    out.push({
+      at: m.index,
+      cond: text.slice(m.index + m[0].length, close),
+      then: [open, end],
+      else: els ? [elseOpen, blockEnd(text, elseOpen)] : null,
+    });
+  }
+  return out;
+}
+
+const inside = (span, idx) => !!span && span[0] < idx && idx < span[1];
+
+// True when `idx` runs only when `v` (a PowerShell variable name, no `$`) is truthy: inside the then-block
+// of `if($v)` / `if([bool]$v)` / `if($v -eq $true)`, or inside the else-block of `if(-not $v)` / `if(!$v)`.
+function gatedOnVar(text, idx, v, after = -1) {
+  const pos = new RegExp(String.raw`^\s*(\[bool\]\s*)?\$${v}(\s*-eq\s*\$true)?\s*$`, 'i');
+  const neg = new RegExp(String.raw`^\s*(-not\s*|!\s*)\$${v}\s*$`, 'i');
+  return psIfs(text).some((b) => b.at > after &&
+    ((pos.test(b.cond) && inside(b.then, idx)) || (neg.test(b.cond) && inside(b.else, idx))));
 }
 
 // --- P15–P18: the guarded Esc, the result readback, and the trace encoding -------------------------
@@ -815,7 +871,7 @@ function tilerSource(src) {
 // own account of what happened rather than the fact it was spawned, and the tiler's trace must
 // round-trip the session's identity emoji.
 
-test('P15 — the tiler sends exactly ONE Esc, and only after finding the foreground is neither window', () => {
+test('P15 — the tiler sends exactly ONE Esc, and only inside a branch on MayDismiss\'s answer', () => {
   // WHY THE GUARD IS NOT OPTIONAL, AND WHY THIS IS A ROW RATHER THAN A COMMENT. The left half hosts a
   // LIVE CLAUDE CODE SESSION. An Esc delivered there interrupts whatever the user was typing — so an
   // unguarded second Esc, added later by someone reasoning only about Snap Assist, is a defect that
@@ -833,13 +889,117 @@ test('P15 — the tiler sends exactly ONE Esc, and only after finding the foregr
   assert.equal(escBytes.length, 1,
     `VK_ESCAPE (0x1B) appears ${escBytes.length} times in the tiler script — exactly one Esc site may exist, because a second one is a second chance to interrupt the live Claude session in the left half`);
 
-  // And that one site is reached only from a foreground read that found NEITHER window. The guard is
-  // read as a span: the `GetForegroundWindow()` call, both comparands, and the keystroke, in order,
-  // inside one enclosing block.
-  const guard = src.match(/\$fgNow\s*=\s*\[CCW\]::GetForegroundWindow\(\)[\s\S]{0,400}?keybd_event\(\s*\$esc/);
-  assert.ok(guard, 'the Esc must be preceded by a GetForegroundWindow() read in the same block — an unconditional Esc lands in the live Claude session');
-  assert.match(guard[0], /\$term/, '…and the read must be compared against the TERMINAL handle');
-  assert.match(guard[0], /\$code/, '…and against the VS CODE handle — the Esc fires only when the foreground is neither');
+  // And that one site runs only inside a branch on MayDismiss's answer (backlog-clear spec §7.4, amended
+  // from the old `$fgNow … $term … $code … keybd_event($esc` span, which the class and process reads now
+  // sit inside). The branch is read structurally: the Esc keystroke must sit in the then-block of an
+  // `if` whose condition calls MayDismiss, or tests a variable assigned from it.
+  const escAt = tiler.search(/keybd_event\(\s*\$esc\b/);
+  assert.ok(escAt > 0, 'the tiler sends its Esc through keybd_event($esc…) — the site this row locates');
+  const mayVars = [...tiler.matchAll(/\$(\w+)\s*=\s*\(?\s*MayDismiss\b/g)].map((m) => m[1]);
+  const gated = psIfs(tiler).some((b) => inside(b.then, escAt) && /\bMayDismiss\b/.test(b.cond)) ||
+    mayVars.some((v) => gatedOnVar(tiler, escAt, v));
+  assert.ok(gated, 'the Esc must sit inside a branch on MayDismiss\'s result — an Esc outside it reaches the live Claude session or a stranger\'s window');
+
+  // MayDismiss's "is it ours" input is still built from BOTH handles, inside DismissPicker.
+  const dismiss = tiler.match(/function DismissPicker\([^)]*\)\s*\{[\s\S]*?\n\s*\}\s*\n/);
+  assert.ok(dismiss, 'the tiler declares DismissPicker');
+  const callAt = dismiss[0].search(/(?<!function\s+)MayDismiss\s/);
+  assert.ok(callAt > 0, 'DismissPicker asks MayDismiss');
+  assert.match(dismiss[0].slice(0, callAt), /\$term/, '…with the foreground compared against the TERMINAL handle');
+  assert.match(dismiss[0].slice(0, callAt), /\$code/, '…and against the VS CODE handle');
+});
+
+// P19 — the Esc predicate, row by row (backlog-clear spec §7.4; test plan §3 B5). MayDismiss is
+// executed, not read: tilerHelpers() is written to a temp .ps1, dot-sourced, and asked each descriptor.
+// Today's guard ("neither of our two windows") answers yes to a foreign terminal and to any app.
+function hasPwsh() {
+  if (process.platform !== 'win32') return false;
+  const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], { stdio: 'ignore' });
+  return r.status === 0;
+}
+
+const MAY_DISMISS_ROWS = [
+  // [descriptor, isOurs, class, process, expected]
+  ['our terminal', true, 'CASCADIA_HOSTING_WINDOW_CLASS', 'WindowsTerminal', false],
+  ['our VS Code', true, 'Chrome_WidgetWin_1', 'Code', false],
+  ['one of ours, even when it wears Snap Assist\'s class and process', true, 'XamlExplorerHostIslandWindow', 'explorer', false],
+  ...['Windows.UI.Core.CoreWindow', 'XamlExplorerHostIslandWindow', 'MultitaskingViewFrame'].flatMap((cls) =>
+    ['explorer', 'ShellExperienceHost'].map((proc) => [`Snap Assist: ${cls} + ${proc}`, false, cls, proc, true])),
+  ['a foreign Windows Terminal', false, 'CASCADIA_HOSTING_WINDOW_CLASS', 'WindowsTerminal', false],
+  ['an arbitrary app', false, 'Notepad', 'notepad', false],
+  ['allowed class, foreign process', false, 'Windows.UI.Core.CoreWindow', 'WindowsTerminal', false],
+  ['foreign class, allowed process', false, 'CabinetWClass', 'explorer', false],
+  ['allowed class and process in different letter case (added by QA)', false, 'xamlexplorerhostislandwindow', 'EXPLORER', true],
+];
+
+test('P19 — MayDismiss answers yes only for a positively identified Snap Assist picker (default-deny)', { skip: hasPwsh() ? false : 'Windows + pwsh only (the predicate is PowerShell)' }, () => {
+  const src = readFileSync(launcher, 'utf8');
+  const body = fnBody(src, 'tilerHelpers');
+  assert.ok(body, 'home/claude-launch.mjs must declare tilerHelpers() — the seam (spec §7.4) that lets a test dot-source MayDismiss with no window on the screen');
+  let helpers;
+  try { helpers = new Function(body.slice(1, -1))(); } catch (e) {
+    assert.fail(`tilerHelpers() must return its PowerShell text without module-scope interpolation, so a test can evaluate it standalone: ${e.message}`);
+  }
+  assert.equal(typeof helpers, 'string', 'tilerHelpers() returns the PowerShell text');
+  assert.match(helpers, /function MayDismiss\(/, 'tilerHelpers() carries MayDismiss');
+
+  const dir = mkdtempSync(join(tmpdir(), 'ccl-maydismiss-'));
+  try {
+    const ps1 = join(dir, 'helpers.ps1');
+    writeFileSync(ps1, '﻿' + helpers, 'utf8');
+    const rows = Buffer.from(JSON.stringify(MAY_DISMISS_ROWS.map(([, isOurs, cls, proc]) => ({ isOurs, cls, proc }))), 'utf8').toString('base64');
+    const cmd = `$ErrorActionPreference='Stop'; . '${ps1}'; ` +
+      `$rows = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${rows}')) | ConvertFrom-Json; ` +
+      `ConvertTo-Json -Compress -InputObject @($rows | ForEach-Object { [bool](MayDismiss ([bool]$_.isOurs) ([string]$_.cls) ([string]$_.proc)) })`;
+    const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf8' });
+    assert.equal(r.status, 0, `dot-sourcing tilerHelpers() and calling MayDismiss failed:\n${r.stderr}\n${r.stdout}`);
+    const answers = JSON.parse(r.stdout.trim().split(/\r?\n/).pop());
+    assert.equal(answers.length, MAY_DISMISS_ROWS.length, `one answer per row:\n${r.stdout}`);
+    MAY_DISMISS_ROWS.forEach(([what, , cls, proc, expected], i) => {
+      assert.equal(answers[i], expected, `${what} (class=${cls}, process=${proc}): MayDismiss must answer ${expected ? 'yes' : 'no'}`);
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('P20 — no SnapKey and no DismissPicker fires unless the Focus call just above it succeeded', () => {
+  // A Win+arrow sent while a stranger holds the foreground snaps the stranger; an Esc sent then reaches
+  // it. The gesture is therefore gated per side on Focus's own return value (spec §7.2 (3)).
+  const tiler = tilerSource(readFileSync(launcher, 'utf8'));
+  const sites = [...tiler.matchAll(/\b(SnapKey\s+0x[0-9A-Fa-f]+|DismissPicker\s+'[^']*')/g)];
+  assert.ok(sites.filter((s) => s[1].startsWith('SnapKey')).length >= 2, 'precondition: both SnapKey call sites located');
+  assert.ok(sites.filter((s) => s[1].startsWith('DismissPicker')).length >= 2, 'precondition: both DismissPicker call sites located');
+  const focusAssigns = [...tiler.matchAll(/\$(\w+)\s*=\s*Focus\b/g)];
+  for (const s of sites) {
+    const prior = focusAssigns.filter((f) => f.index < s.index).pop();
+    assert.ok(prior, `\`${s[1]}\` has no Focus result assigned above it`);
+    assert.ok(gatedOnVar(tiler, s.index, prior[1], prior.index),
+      `\`${s[1]}\` must sit inside a branch on $${prior[1]} (the Focus result assigned just above it) — otherwise it fires into whatever window kept the foreground`);
+  }
+});
+
+test('P21 — every foreground DismissPicker rejects is traced with both its class and its process', () => {
+  // The live check (spec §7.5) depends on this trace: an unrecognised picker gets no Esc, and the
+  // class and process in the log are what name the missing allow-list value.
+  const tiler = tilerSource(readFileSync(launcher, 'utf8'));
+  const dismiss = tiler.match(/function DismissPicker\([^)]*\)\s*\{[\s\S]*?\n\s*\}\s*\n/);
+  assert.ok(dismiss, 'the tiler declares DismissPicker');
+  const body = dismiss[0];
+  const call = body.match(/(?<!function\s+)MayDismiss\s+([^;\n{]*)/);
+  assert.ok(call, 'DismissPicker asks MayDismiss');
+  const vars = [...call[1].matchAll(/\$(\w+)/g)].map((m) => m[1]);
+  assert.ok(vars.length >= 2, `MayDismiss is called with class and process variables (saw: ${call[0].trim()})`);
+  const [cls, proc] = vars.slice(-2);
+  const escAt = body.search(/keybd_event\(\s*\$esc\b/);
+  assert.ok(escAt > 0, 'DismissPicker holds the Esc site');
+  const mayVars = [...body.matchAll(/\$(\w+)\s*=\s*\(?\s*MayDismiss\b/g)].map((m) => m[1]);
+  const branch = psIfs(body).find((b) => inside(b.then, escAt) &&
+    (/\bMayDismiss\b/.test(b.cond) || mayVars.some((v) => new RegExp(String.raw`^\s*(\[bool\]\s*)?\$${v}\s*$`).test(b.cond))));
+  assert.ok(branch, 'the Esc sits in a branch on MayDismiss\'s answer');
+  assert.ok(branch.else, 'the rejection side of that branch exists (an else block)');
+  const rejected = body.slice(branch.else[0], branch.else[1]);
+  const dbg = [...rejected.matchAll(/\bDbg\s+"([^"]*)"/g)].map((m) => m[1]);
+  assert.ok(dbg.some((s) => new RegExp(String.raw`\$${cls}\b`).test(s) && new RegExp(String.raw`\$${proc}\b`).test(s)),
+    `the rejection branch must Dbg both $${cls} (class) and $${proc} (process):\n${rejected}`);
 });
 
 // The six result fixtures of the test plan, plus the four degradation cases the developer drove

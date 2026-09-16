@@ -494,17 +494,18 @@ const tilePlan = {
 function spawnTiler(hwnd, plan) {
   spawn('powershell.exe', psArgs(tilerScript(hwnd, plan, '')), TILE_SPAWN_OPTS).unref();
 }
-// `resultPath`: where the tiler writes its account of what happened. '' → it writes none (launch mode).
-function tilerScript(hwnd, plan, resultPath) {
-  return `$ErrorActionPreference='SilentlyContinue'
-try {
-Add-Type @'
+// The tiler's declarations: the Add-Type block and the helpers that read or decide without acting.
+// Kept apart from tilerScript() so a test can write exactly this text to a .ps1, dot-source it and
+// drive MayDismiss with fixture descriptors — no window, no keystroke, no plan to interpolate.
+function tilerHelpers() {
+  return `Add-Type @'
 using System;using System.Text;using System.Runtime.InteropServices;
 public class CCW{
  public delegate bool EnumProc(IntPtr h,IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb,IntPtr l);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,StringBuilder s,int n);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h,uint f);
  [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m,ref MONITORINFO mi);
@@ -524,6 +525,30 @@ public class CCW{
  [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO{public int cbSize;public RECT rcMonitor;public RECT rcWork;public uint dwFlags;}
 }
 '@
+function Title([IntPtr]$h){$sb=New-Object Text.StringBuilder 512;[void][CCW]::GetWindowText($h,$sb,512);$sb.ToString()}
+function WinClass([IntPtr]$h){$sb=New-Object Text.StringBuilder 256;[void][CCW]::GetClassName($h,$sb,256);$sb.ToString()}
+function Rect([IntPtr]$h){$r=New-Object CCW+RECT;[void][CCW]::GetWindowRect($h,[ref]$r);"$($r.left),$($r.top),$($r.right),$($r.bottom)"}
+# What the Snap Assist picker is, positively identified: its window class AND its owning process (the
+# process name carries no .exe). Anything outside BOTH lists is a window this script has no business
+# sending a key to. An unrecognised picker only costs the snap group (the run reports tiled-no-group),
+# and every rejection is traced with its class and process, so a missing value can be read off the log.
+$SnapAssistClasses=@('Windows.UI.Core.CoreWindow','XamlExplorerHostIslandWindow','MultitaskingViewFrame')
+$SnapAssistProcesses=@('explorer','ShellExperienceHost')
+# MayDismiss — the ONE "may this foreground window be sent Esc?" decision. It takes a DESCRIPTOR and
+# never a handle, so every row of it is reachable from a test with no window on the screen. It is
+# DEFAULT-DENY: the answer is yes only for a window positively identified as the Snap Assist picker.
+# -contains compares case-insensitively.
+function MayDismiss([bool]$isOurs,[string]$cls,[string]$proc){
+ if($isOurs){return $false}
+ return [bool](($SnapAssistClasses -contains $cls) -and ($SnapAssistProcesses -contains $proc))
+}`;
+}
+
+// `resultPath`: where the tiler writes its account of what happened. '' → it writes none (launch mode).
+function tilerScript(hwnd, plan, resultPath) {
+  return `$ErrorActionPreference='SilentlyContinue'
+try {
+${tilerHelpers()}
 try{[void][CCW]::SetProcessDpiAwarenessContext([IntPtr](-4))}catch{}
 $titleMatch=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64utf8(plan.titleMatch)}')).ToLowerInvariant()
 $projectMatch=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64utf8(plan.projectMatch)}')).ToLowerInvariant()
@@ -536,8 +561,6 @@ $resultPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64ut
 # same file. Windows PowerShell 5.1's Add-Content defaults to the ANSI code page, which turns a
 # session title's identity glyph into '?'; its -Encoding utf8 writes a BOM, mid-file, in a shared log.
 function Dbg($m){if($dbg){try{[IO.File]::AppendAllText($log,("[tiler {0}] {1}" -f (Get-Date -Format o),$m)+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))}catch{}}}
-function Title([IntPtr]$h){$sb=New-Object Text.StringBuilder 512;[void][CCW]::GetWindowText($h,$sb,512);$sb.ToString()}
-function Rect([IntPtr]$h){$r=New-Object CCW+RECT;[void][CCW]::GetWindowRect($h,[ref]$r);"$($r.left),$($r.top),$($r.right),$($r.bottom)"}
 # Which window holds the keyboard right now. Reported so the caller never has to guess, and so a
 # focus that ended on a Windows picker is visible instead of invisible.
 function FgName(){$f=[CCW]::GetForegroundWindow();if($f -eq $term){'terminal'}elseif($f -eq $code){'vscode'}else{'other'}}
@@ -601,28 +624,42 @@ function SnapKey([byte]$arrow){  # tap Win+<arrow>: LWin=0x5B down, arrow down/u
 # KEYBOARD — it survives with no input for minutes, it eats the arrow keys and Enter, and while it
 # holds the foreground the second snap gesture goes to it instead of to our window, so no snap group
 # ever forms. Esc closes it. This is the ONLY Esc this script sends, and it is guarded: the left half
-# hosts a live Claude Code session, so an Esc that reached the terminal would interrupt whatever the
-# user is typing. It is sent only when the foreground window is neither of our two windows.
+# hosts a live Claude Code session, and any other foreground window (a second terminal, an editor with
+# a dialog open) would lose state to a stray Esc. It is sent only when MayDismiss identifies the
+# foreground window as the Snap Assist picker.
 function DismissPicker($at){
  $fgNow=[CCW]::GetForegroundWindow()
- if($fgNow -ne $term -and $fgNow -ne $code){
+ $fgCls=WinClass $fgNow;$fgPid=[uint32]0;[void][CCW]::GetWindowThreadProcessId($fgNow,[ref]$fgPid)
+ $fgProc='';try{$fgProc=(Get-Process -Id $fgPid -ErrorAction Stop).ProcessName}catch{}
+ $isOurs=($fgNow -eq $term -or $fgNow -eq $code)
+ $may=MayDismiss $isOurs $fgCls $fgProc
+ if($may){
   $esc=[byte]0x1B  # VK_ESCAPE — down, then up
   [CCW]::keybd_event($esc,0,0,[UIntPtr]::Zero);[CCW]::keybd_event($esc,0,2,[UIntPtr]::Zero)
   Start-Sleep -Milliseconds 150
-  Dbg "dismiss/$at fg=$fgNow is neither terminal nor VS Code -> Esc sent; fg now=$([CCW]::GetForegroundWindow())"
- }else{Dbg "dismiss/$at fg=$fgNow is one of ours -> no Esc"}
+  Dbg "dismiss/$at fg=$fgNow class=[$fgCls] process=[$fgProc] is Snap Assist -> Esc sent; fg now=$([CCW]::GetForegroundWindow())"
+ }else{Dbg "dismiss/$at fg=$fgNow class=[$fgCls] process=[$fgProc] ours=$isOurs is not Snap Assist -> no Esc"}
 }
 # The rectangles SetWindowPos gave the two windows. A window that really snapped carries the snap
 # border adjustment afterwards, so a rectangle unchanged by the gesture means the snap never landed.
 $t0=Rect $term;$c0=Rect $code
 Dbg "rects after SetWindowPos: term=[$t0] code=[$c0]"
 # VS Code RIGHT first (0x27), terminal LEFT second (0x25) -> focus ends on the terminal.
-$f1=Focus $code;Start-Sleep -Milliseconds 150;SnapKey 0x27
-Start-Sleep -Milliseconds 400   # let the snap settle before dismissing the picker it raises
-DismissPicker 'after-right'
-$f2=Focus $term;Start-Sleep -Milliseconds 150;SnapKey 0x25
-Start-Sleep -Milliseconds 400
-DismissPicker 'after-left'
+# Each side's keystrokes are gated on its Focus result: a Win+arrow sent while a stranger holds the
+# foreground would snap the stranger. A side that could not take focus keeps its rectangle, so it
+# reports snapped=false and the launcher maps that to tiled-no-group.
+$f1=Focus $code
+if($f1){
+ Start-Sleep -Milliseconds 150;SnapKey 0x27
+ Start-Sleep -Milliseconds 400   # let the snap settle before dismissing the picker it raises
+ DismissPicker 'after-right'
+}else{Dbg "focus VS Code failed -> no keys sent for the right half"}
+$f2=Focus $term
+if($f2){
+ Start-Sleep -Milliseconds 150;SnapKey 0x25
+ Start-Sleep -Milliseconds 400
+ DismissPicker 'after-left'
+}else{Dbg "focus terminal failed -> no keys sent for the left half"}
 # The terminal is where the command was typed, so it is where the next keystroke must go.
 $f3=Focus $term;Start-Sleep -Milliseconds 120
 $t1=Rect $term;$c1=Rect $code

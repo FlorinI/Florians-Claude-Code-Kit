@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, getDriver, ModelTier, tierWeight, M_CACHE_READ, M_OUTPUT } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, getDriver, ModelTier, tierWeight, M_CACHE_READ, M_OUTPUT, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
 import { fmtN, nowEpoch, psRound } from './_sl-compat.mjs';
 
 const argv = process.argv.slice(2);
@@ -88,15 +88,16 @@ let anyCold = false;
 const bodyLines = [];
 for (const l of topLegs) {
   let drv = getDriver(l);
-  const isCold = testColdLeg(l);
+  // ❆ means "counted in the cold tax", so it takes the tax's own dollar gate (COLD_PREMIUM_MIN_USD,
+  // the status line's and the fact sheet's): this leg's avoidable premium — (write units −
+  // read-equivalent) × base, the exact quantity the cumulative tax sums. A cold-shaped leg under the
+  // gate still reads cold in its driver label and carries no ❆. With no basis there is nothing to
+  // price the gate with, so every cold-shaped leg is marked and the dollar clause is elided.
+  const legTax = base != null ? (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base : null;
+  const isCold = testColdLeg(l) && (legTax == null || legTax >= COLD_PREMIUM_MIN_USD);
   if (isCold) {
     anyCold = true;
-    if (base != null) {
-      // Surface THIS leg's avoidable premium INSIDE the driver text: (write units − read-equivalent) × base —
-      // the exact quantity the status line's cumulative tax sums. With no basis the clause is elided.
-      const legTax = (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base;
-      if (drv.endsWith(')')) drv = drv.slice(0, -1) + ('; $' + fmtN(legTax, 2) + ' avoidable cold tax)');
-    }
+    if (legTax != null && drv.endsWith(')')) drv = drv.slice(0, -1) + ('; $' + fmtN(legTax, 2) + ' avoidable cold tax)');
   }
   const mark = isCold ? `${snow} ` : '  ';
   bodyLines.push(base != null

@@ -157,12 +157,24 @@ export const DRIVER_VERBS = [
   'loaded',
 ];
 
-// Test-ColdLeg — the ONE cold-tax predicate, shared everywhere. Mirrors leg-driver.ps1.
+// The ONE cold-premium dollar gate, both sides. PROSPECTIVELY the status line shows a cold stake only
+// at or above it; RETROSPECTIVELY a cold-shaped leg is counted in the cold tax (the `cold $x` chip,
+// the sidecar's nColdLegs / coldWastedUsd, the fact sheet's COLD line, the spikes panel's ❆) only when
+// its own avoidable premium — (write units − read-equivalent) × base, tier-weighted — is at or above
+// it. One quantity, one gate: a leg is counted after exactly when a leg its size would have been
+// warned about before.
+export const COLD_PREMIUM_MIN_USD = 0.25;
+
+// Test-ColdLeg — the ONE cold SHAPE predicate, shared everywhere: an idle gap longer than the prior
+// cache's TTL, and either a low read-back against the write or a collapsed warm set. It carries NO
+// size floor — how much a cold leg cost is the dollar gate's question (COLD_PREMIUM_MIN_USD), asked by
+// every consumer that reports money. getDriver's `re-cached … (cold — cache expired after idle)` label
+// uses this ungated shape: the label says what happened, the tax counts what it cost.
+// Mirrors leg-driver.ps1.
 export function testColdLeg(l) {
-  const bigRewrite = (l.cw >= 50000 && l.cr < l.cw * 0.5);
+  const lowReadBack = (l.cr < l.cw * 0.5);
   const collapsed = (l.prevWarm > 0 && l.cr < l.prevWarm * 0.7);
-  return l.gapToPrev != null && l.gapToPrev > l.coldTtl
-    && l.cw >= 8000 && (bigRewrite || collapsed);
+  return l.gapToPrev != null && l.gapToPrev > l.coldTtl && (lowReadBack || collapsed);
 }
 
 // Test-CompactedLeg — the ONE compacted predicate. The warm set COLLAPSED (cr < 0.7×prevWarm)

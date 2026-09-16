@@ -71,7 +71,7 @@ test('W4 — one weight function: TIER_BASE[ is used outside leg-driver only by 
 
 test('testColdLeg — flags the post-idle big-rewrite leg (m3), not the warm ones', () => {
   const js = getScannedLegs(fixture);
-  // m3 is leg idx 3: gap 1970s > 300s TTL, cw 60000 >= 50000, cr 100 < 0.5*cw -> cold
+  // m3 is leg idx 3: gap 1970s > 300s TTL, cr 100 < 0.5*cw (low read-back against the write) -> cold
   assert.equal(testColdLeg(js[2]), true, 'm3 should be cold');
   assert.equal(testColdLeg(js[0]), false, 'm1 (first, no gap) not cold');
   assert.equal(testColdLeg(js[1]), false, 'm2 (warm) not cold');
@@ -405,4 +405,44 @@ test('getDriver — labels match the dominant weighted term', () => {
   assert.equal(getDriver(reread), 're-read deep context (~500k)');
   const fresh = { cwUnits: 100, cr: 100, out: 100, inT: 90000, cw: 0, prevWarm: 0, gapToPrev: null, coldTtl: 300 };
   assert.equal(getDriver(fresh), 'large fresh input (~90k)');
+});
+
+// ═══ backlog-clear sprint (2026-09-17), R23 #2 — the cold SHAPE loses its token floors ═══════════════
+// Spec docs/260916-backlog-clear-spec.md §11.1 move 2: testColdLeg keeps the shape (idle gap past the
+// prior cache's TTL, AND a low read-back ratio against the write OR a collapsed warm set) and drops the
+// `cw >= 50000` / `cw >= 8000` size floors. How much a cold leg COST is the dollar gate's question,
+// asked where a `base` exists (statusline read side, handover-facts, render-spikes) — covered by
+// CG-3..CG-6 in leg-pricing.test.mjs. These rows are pure records, so they run in the public kit too.
+
+test('CG-1 — a cold-shaped leg BELOW the old token floors passes the shape test (the case the ticket names)', () => {
+  // (a) collapse path, write under the old 8k floor: gap 4500 s > 1h TTL, cr 100 < 0.7 × prevWarm 5000.
+  const underEight = { cwUnits: 12000, cr: 100, out: 300, inT: 2, cw: 6000, prevWarm: 5000, gapToPrev: 4500, coldTtl: 3600 };
+  assert.equal(testColdLeg(underEight), true, 'a collapsed warm set after idle is cold whatever the write size');
+  // (b) low-read-back path, write under the old 50k floor, NO collapse (cr 7500 ≥ 0.7 × 10000):
+  //     cr 7500 < 0.5 × cw 40000 → the write is mostly a rebuild. Today's build rejects it on cw < 50000.
+  const underFifty = { cwUnits: 80000, cr: 7500, out: 400, inT: 2, cw: 40000, prevWarm: 10000, gapToPrev: 4500, coldTtl: 3600 };
+  assert.equal(testColdLeg(underFifty), true, 'a mostly-rebuilt context after idle is cold under 50k too');
+});
+
+test('CG-2 — a warm-shaped leg still fails, however large', () => {
+  // (a) idle past the TTL but the cache survived: cr 90000 ≥ 0.5 × cw 60000 and ≥ 0.7 × prevWarm 95000.
+  const survived = { cwUnits: 120000, cr: 90000, out: 400, inT: 2, cw: 60000, prevWarm: 95000, gapToPrev: 4500, coldTtl: 3600 };
+  assert.equal(testColdLeg(survived), false, 'a large write with its warm set read back is not cold');
+  // (b) the same big rebuild shape inside the TTL → never cold (gap is the discriminator).
+  const shortGap = { cwUnits: 200000, cr: 0, out: 400, inT: 2, cw: 100000, prevWarm: 0, gapToPrev: 60, coldTtl: 3600 };
+  assert.equal(testColdLeg(shortGap), false, 'no TTL-exceeding gap, no cold leg');
+  // (c) gap EXACTLY the TTL is not past it (strict >).
+  assert.equal(testColdLeg({ ...underFiftyShape(), gapToPrev: 3600 }), false, 'gap == TTL is not idle past it');
+  // (d) read-back exactly half the write, no collapse → not a low read-back (strict <).
+  const half = { cwUnits: 80000, cr: 20000, out: 400, inT: 2, cw: 40000, prevWarm: 25000, gapToPrev: 4500, coldTtl: 3600 };
+  assert.equal(testColdLeg(half), false, 'cr == 0.5 × cw is the boundary and stays warm');
+});
+function underFiftyShape() {
+  return { cwUnits: 80000, cr: 7500, out: 400, inT: 2, cw: 40000, prevWarm: 10000, gapToPrev: 4500, coldTtl: 3600 };
+}
+
+test('CG-3 (label half) — the driver label stays UNGATED: a sub-floor cold leg reads cold', () => {
+  // §11.1: getDriver keeps the shape predicate for its label — the label says what happened; the tax
+  // counts what it cost. The panel half (no ❆ below the gate) is CG-3 in leg-pricing.test.mjs.
+  assert.equal(getDriver(underFiftyShape()), 're-cached ~40k (cold — cache expired after idle)');
 });

@@ -1,6 +1,6 @@
 ---
 description: View or update this project's session identity (name/color/model/effort) in .desk/session-identity.json — the file the `cc` launcher reads to name and color each session — then echo paste-ready /rename, /color, /model, /effort lines for the live session.
-argument-hint: "[show] | name <text> | color <name> | model <id> | effort <level>"
+argument-hint: "[show] | name <text> | color <name> | model <id> | effort <level> | colors"
 ---
 
 # /identity
@@ -38,6 +38,9 @@ Four fields, three surfaces:
   `claude --model`, e.g. `opus`, `sonnet`, `claude-opus-4-8`). Accept any non-empty token.
 - `effort ...` → set/replace `effort`. **Validate** against `low | medium | high | xhigh | max`; if
   it isn't one of those, don't persist it — list the levels and ask.
+- **`colors`** (or `color` with no value) → render the swatch row from "Color" under Interactive
+  setup, print the `/color <name>` line under it, and stop. Nothing is read or written. It is how the
+  palette gets shown once `color` is already set, since setup only runs for unset fields.
 - to **clear** a field: `<field> none` (or `unset`) → remove that key.
 - any combination, in any order, separated by `/`, `;`, `,`, or whitespace.
 
@@ -133,17 +136,20 @@ nothing for `effort`.
 ### Color (show the hues, don't just list words)
 
 `/color` accepts 8 named colors: **red, blue, green, yellow, purple, orange, pink, cyan**. They exceed
-the 4-option cap and can't show hue inside `AskUserQuestion`, so render a **swatch row** in a tool
-block. The kit ships with Node, so use it (no shell-specific script needed — adapt the quoting to your
-shell):
+the 4-option cap and can't show hue inside `AskUserQuestion`, so show the hues as **coloured hearts
+in the message text**, on one line:
 
-```sh
-node -e "const c={red:[225,95,95],orange:[235,160,80],yellow:[225,205,95],green:[95,200,130],blue:[120,170,240],purple:[185,135,235],pink:[240,145,200],cyan:[120,205,215]},e=String.fromCharCode(27);let r='';for(const n in c){const[R,G,B]=c[n];r+=e+'[48;2;'+R+';'+G+';'+B+'m'+e+'[38;2;0;0;0m '+n+' '+e+'[0m  ';}console.log('  '+r.trimEnd());"
+```
+❤️ red · 💙 blue · 💚 green · 💛 yellow · 💜 purple · 🧡 orange · 🩷 pink · 🩵 cyan
 ```
 
 Then ask which color they want (they reply with a name). On reply: persist `color` (steps 4–5) and
-echo the `/color <name>` paste-line (step 6). The RGB values approximate Claude Code's palette — close
-enough to choose by.
+echo the `/color <name>` paste-line (step 6).
+
+**Don't draw this row with ANSI escape codes in a tool block.** The shell that runs tool commands may
+have `NO_COLOR` set, which strips every color code and leaves the row as plain words. The squares are
+characters, so they survive any channel; their hues approximate Claude Code's palette closely enough
+to choose by.
 
 ### Name (smart defaults, easy skip)
 

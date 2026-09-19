@@ -147,7 +147,7 @@ Then ask which color they want (they reply with a name). On reply: persist `colo
 echo the `/color <name>` paste-line (step 6).
 
 **Don't draw this row with ANSI escape codes in a tool block.** The shell that runs tool commands may
-have `NO_COLOR` set, which strips every color code and leaves the row as plain words. The squares are
+have `NO_COLOR` set, which strips every color code and leaves the row as plain words. The hearts are
 characters, so they survive any channel; their hues approximate Claude Code's palette closely enough
 to choose by.
 

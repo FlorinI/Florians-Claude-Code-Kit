@@ -1,5 +1,5 @@
 ---
-description: Dump the in-head topics of this session, triage each into a bucket (handover / memory / project-docs / do-now), act on them, and write a handover file for the next session to pick up. Say "/handover ok" to run non-interactively with default buckets.
+description: Dump the in-head topics of this session, triage each into a bucket (handover / memory / project-docs / do-now), act on them, and write a handover file for the next session to pick up. Say "/handover ok" to run non-interactively with default buckets; any further text is a note to the next session ("/handover ok resume once the env is prepared").
 ---
 
 # /handover — deliberate session handover
@@ -17,6 +17,24 @@ If the command was invoked with the argument **`ok`** (case-insensitive — `ok`
 The only pauses still permitted are the deliberate-action confirmations in Step 3 for outward-facing or hard-to-reverse X items (commits, pushes, deletes, sends) — those are never auto-run off defaults.
 
 Otherwise (plain `/handover`), run the full interactive flow below: present the draft, take the user's triage adjustments, then act.
+
+### The intent note — any other text in the arguments
+
+Everything in the arguments except a leading `ok` is the **intent note**: the user's message to the session that picks this handover up — why they are stopping and what they plan to do next. No keyword introduces it, and quotes are optional (strip one pair of surrounding quotes if present).
+
+| Invocation | Mode | Intent note |
+|---|---|---|
+| `/handover ok I'll get back to this on my other computer.` | non-interactive | `I'll get back to this on my other computer.` |
+| `/handover This is step two of five; the plan lives in another repo.` | interactive | the whole argument |
+| `/handover ok` or `/handover` | as above | none |
+
+`ok` counts as the mode switch only as the first whole word (`okay, later…` is a note, not a mode). If an interactive note must itself start with the word "ok", the user quotes it: `/handover "ok so the plan is…"`.
+
+When an intent note is present:
+
+- Record it **verbatim** at the top of the handover file, under `## Intent`, above Goal (Step 4). Never paraphrase, correct, or merge it into the eight coordinates — it is the user's own words and outranks the drafted sections.
+- Lead the slug with it (Step 4).
+- Echo it back in the Step-5 report so the user sees exactly what was recorded.
 
 ## Step 1 — draft the eight coordinates
 
@@ -118,6 +136,8 @@ Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons
 
 Then add a **slug** naming what the handover is *about*: 2–4 kebab-case words drawn from the semantics of the H payload — `sprint-chain-flight`, `cold-tax-recal`, `handover-file-naming` — never a generic filler like `session`, `work`, or `misc`. A handover usually has one dominant topic; when the payload genuinely splits across two or three unrelated topics, join their slugs with commas and no spaces (`sprint-chain-flight,inbox-triage`). Lowercase ASCII letters, digits, hyphens, and those separating commas only.
 
+When the user gave an intent note, its slug comes **first**: 2–4 kebab-case words for the intent itself (`other-computer`, `after-env-prep`, `opt-step-2-of-5`), then a comma, then the payload slug — `other-computer,sync-homes`.
+
 Write to `<cwd>/.desk/handovers/<timestamp>-<slug>.md`. Create the `.desk/handovers/` directory if it doesn't exist.
 
 **Scaffold `.desk/.gitignore` when it is missing** — one line, `handovers/*.consumed.md`, plus a comment saying consumed notes are spent and only unconsumed ones belong in the repo. Only unconsumed handovers live in the repo; a consumed one is a note some session already loaded. The rule sits *inside* `.desk/` rather than in the repo's root `.gitignore` because `.desk/` is this env's own directory — so it needs no entry in a file the project owns, no per-machine git config, and it survives a fresh clone. Never add a `.desk` rule to the repo's root `.gitignore`.
@@ -138,6 +158,10 @@ model: <current model display name>
 ---
 
 # Handover from <timestamp>
+
+## Intent
+
+> <the user's intent note, verbatim — omit this section when none was given>
 
 ## Goal
 
@@ -182,6 +206,6 @@ Omit any section (including "Resolved before clear") that has nothing in it.
 
 ## Step 5 — report and stop
 
-Tell the user the path you wrote to and remind them: "Run `/clear` when ready. Your next session in this directory will auto-load the handover and mark it consumed."
+Tell the user the path you wrote to, quote the intent note if one was recorded, and remind them: "Run `/clear` when ready. Your next session in this directory will auto-load the handover and mark it consumed."
 
 Do not run `/clear` yourself — that's for the user.

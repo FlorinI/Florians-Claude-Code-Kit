@@ -47,7 +47,8 @@ Before any other on-session-start behavior, check the working directory for a pe
 3. **Rename the file** to insert \`.consumed\` before \`.md\` — do this BEFORE reading it. That's the consumed marker.
 4. Read the renamed file and use it as orientation for this session.
 5. Open the first turn by acknowledging the resume in one sentence and summarizing what was loaded
-   (3–4 lines max), then defer to the project's own conventions.
+   (3–4 lines max), then defer to the project's own conventions. If the note has an \`## Intent\`
+   section, quote it verbatim first — it is the user's own message to this session.
 6. After the first turn, treat the handover as one-time orientation — don't re-quote it as a source of truth.
 
 If no unconsumed handover exists, proceed normally.`;

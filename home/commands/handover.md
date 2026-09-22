@@ -33,6 +33,7 @@ Everything in the arguments except a leading `ok` is the **intent note**: the us
 When an intent note is present:
 
 - Record it **verbatim** at the top of the handover file, under `## Intent`, above Goal (Step 4). Never paraphrase, correct, or merge it into the eight coordinates — it is the user's own words and outranks the drafted sections.
+- Show it at the top of the Step-2 triage, above item 1, in both modes (see Step 2).
 - Lead the slug with it (Step 4).
 - Echo it back in the Step-5 report so the user sees exactly what was recorded.
 
@@ -99,6 +100,8 @@ Every numbered item gets a disposition — the triage is a **1:1 echo of the dra
 When an item is genuinely both (a decision that also revealed a working-style preference), split it: the decision → **D**, the preference → **M**. When a project has no docs home for it yet, that's a **D** item whose action is "create the doc" — don't downgrade it to **M** just because the file doesn't exist.
 
 Default heuristics: preferences / working-style / corrections / validated patterns → **M** (Claude memory); durable decisions / constraints / architecture / conventions / roadmap → **D** (project docs); quick actionable tasks the user wants done → **X**; forward-looking state & blockers → **H**; already-persisted items → **—** unless worth restating in H.
+
+**If the user gave an intent note, open the triage with it**, as a bold line above item 1, verbatim — `**Intent:** <note>`. It is the lens for the buckets: an item that serves the stated next step belongs in **H**, and one that doesn't may not belong at all. The intent line is not numbered and takes no bucket.
 
 Present compactly, defaults already filled in — one line per draft item, reusing the draft's numbers (this echoes items 1–N; a real list runs to whatever N was, not a summarized handful):
 

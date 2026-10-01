@@ -323,8 +323,9 @@ if (!flags.configDir) delete childEnv.CLAUDE_CONFIG_DIR;
 // or fails because of this step.
 const VS_SPAWN_OPTS = { detached: true, stdio: 'ignore' };
 let vsPlan = { action: 'off', target: null, exe: null };
-// `--no-vscode` forces the co-launch off REGARDLESS of CC_VSCODE — the profile sets that var
-// globally, so an env-only opt-out can't express "this one session, without VS Code". vsPlan stays
+// `--no-vscode` forces the co-launch off REGARDLESS of CC_VSCODE — that var is set for every shell
+// (normally a line in the user's shell profile), so an env-only
+// opt-out can't express "this one session, without VS Code". vsPlan stays
 // {action:'off'}, so tiling gates off through the existing path (tileEnabled needs vsPlan.exe) and
 // reports the existing 'vscode-off' reason — the reason taxonomy is not extended.
 // `--pair-vscode` is the inverse: the user asked for VS Code explicitly, so the env is not consulted.

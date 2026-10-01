@@ -21,6 +21,10 @@ every session, to:
 
 A matching `SessionStart` hook (`session-start-handover.mjs`) surfaces a pending handover at launch.
 
+A launcher that starts a session not meant to continue the work (a search, an always-on helper) sets
+`CC_SKIP_HANDOVER_PICKUP=1` in that session's environment: the hook then reports no pending note to
+the pickup check, and its start-up line says pickup is off, so the note stays pending for its own session.
+
 ## /handover-check
 
 `/handover-check` reads the current status-line snapshot and gives a plain-language verdict on

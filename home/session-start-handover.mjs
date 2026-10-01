@@ -15,6 +15,12 @@
 // rule, one implementation, covered by the tests that already drive this file. The chip cannot serve
 // that purpose: it travels in `systemMessage`, which reaches the user's terminal, while
 // `hookSpecificOutput.additionalContext` is the only hook channel that reaches the model.
+//
+// OPT-OUT: CC_SKIP_HANDOVER_PICKUP=1 (exactly "1") switches pickup off for this session. A launcher
+// that starts a session not meant to continue the work (a search, an always-on helper) sets it, so the
+// note stays pending for the session it was written for. `--find` then prints nothing, whether or not
+// a note is pending, and the chip says pickup is off instead of inviting a load. The variable is
+// inherited by every process the session starts, including the shell that runs `--find`.
 
 import { readdirSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -27,6 +33,7 @@ const FIND_MODE = findAt !== -1;
 const findDir = FIND_MODE && argv[findAt + 1] && !argv[findAt + 1].startsWith('--') ? argv[findAt + 1] : null;
 
 const cwd = findDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const SKIP_PICKUP = process.env.CC_SKIP_HANDOVER_PICKUP === '1';
 
 // Handovers live in <cwd>/.desk/handovers/ — ours, and outside the namespace repos blanket-ignore.
 // `.claude/handovers/` is the LEGACY location, still scanned so a repo whose notes haven't moved
@@ -47,9 +54,9 @@ for (const rel of ['.desk/handovers', '.claude/handovers']) {
 }
 
 // CLI mode ends here: the resolved path, or nothing at all. Empty output means no pending note —
-// callers must not read it as an error.
+// callers must not read it as an error. With pickup off, nothing is printed either way.
 if (FIND_MODE) {
-  if (pendingHandover) process.stdout.write(join(cwd, ...handoverRel.split('/'), pendingHandover));
+  if (pendingHandover && !SKIP_PICKUP) process.stdout.write(join(cwd, ...handoverRel.split('/'), pendingHandover));
   process.exit(0);
 }
 
@@ -62,7 +69,9 @@ const ESC = '\x1b';
 const RESET = `${ESC}[0m`;
 const HANDOVER_CHIP = `${ESC}[1;30;103m`; // bold black-on-bright-yellow
 
-const msg = pendingHandover
+const msg = pendingHandover && SKIP_PICKUP
+  ? `\n[${cwdName}] Handover pickup is off in this session; ${handoverRel}/${pendingHandover} stays pending for its own session.`
+  : pendingHandover
   ? `\n${HANDOVER_CHIP} HANDOVER ${RESET} ${handoverRel}/${pendingHandover} ready - say anything (eg. 'go') to load.`
   : `\n[${cwdName}] No pending handover - ${claudeMdNote}.`;
 

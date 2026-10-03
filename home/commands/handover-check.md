@@ -25,7 +25,7 @@ Two phases — **all data-gathering first, then one report.**
          node "<config home>/render-legspark.mjs" --mono --frozen
          node "<config home>/render-spikes.mjs" --mono --frozen
 
-   - **Agent** tool — `subagent_type: general-purpose`, `model: sonnet`, `description: handover-check read`, `prompt:` the indented block under *Subagent prompt* below, with the **`handover-facts.mjs` output pasted into the `FACT SHEET:` slot**. It does NO tool calls — it only composes — and returns Style-B markdown. (Sonnet, not Haiku: the compose step is one cheap call, and Sonnet is more reliable at adding *correct* insight without bending a band's meaning — Haiku once wrote "the ~60% cliff where things get sharp", which is inverted.)
+   - **Agent** tool — `subagent_type: general-purpose`, `model: opus`, `description: handover-check read`, `prompt:` the indented block under *Subagent prompt* below, with the **`handover-facts.mjs` output pasted into the `FACT SHEET:` slot**. It does NO tool calls — it only composes — and returns Style-B markdown. (Opus: the compose step is one call, and it must add correct insight without bending a band's meaning — Haiku once wrote "the ~60% cliff where things get sharp", which is inverted.)
 
    `-Mono` gives plain glyphs (no ANSI — the message surface strips colour). The fact sheet, legspark, and spikes now all read one frozen snapshot, so they're mutually consistent.
 

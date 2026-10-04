@@ -326,7 +326,9 @@ test('C19 — an open variadic list never gets /color appended; a flag closes it
 
 test('G2 source — the launcher stays public-kit clean: zero non-builtin imports, no private strings', () => {
   const s = readFileSync(launcher, 'utf8');
-  assert.ok(!/from\s+['"](?!node:)/.test(s), 'no non-builtin imports');
+  // Re-pinned (backlog sprint B8, 2026-10-04): the one allowed non-builtin import is the title module,
+  // which ships beside the launcher in the kit. Any other package or relative import still fails.
+  assert.ok(!/from\s+['"](?!node:|\.\/session-title\.mjs['"])/.test(s), 'no non-builtin imports other than ./session-title.mjs');
   // This file ships in the public kit, so the private needles are assembled rather than written as
   // literals — the P2 leak scan sweeps exported tests for the very strings this row checks.
   const needles = ['.claude' + '-team', '·' + 'team', 'cc' + '2'];

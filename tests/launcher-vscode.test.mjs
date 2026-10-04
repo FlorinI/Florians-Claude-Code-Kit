@@ -585,8 +585,11 @@ test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `
   const flags = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
   assert.deepEqual(flags, ['--cloud', '--debug', '--from-pr', '--prompt-suggestions', '--remote-control',
     '--resume', '--teleport', '--worktree', '-d', '-r', '-w'].sort());
-  // Public file: zero deps, zero private references (the launcher ships in the kit).
-  assert.ok(!/from\s+['"](?!node:)/.test(src), 'no non-builtin imports');
+  // Public file: zero third-party deps, zero private references (the launcher ships in the kit).
+  // Re-pinned 2026-10-04 (backlog sprint B8): the one sibling import is the shared title module,
+  // which ships beside it; anything else is a dependency the kit does not carry.
+  const specs = [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((x) => x[1]);
+  for (const s of specs) assert.ok(s.startsWith('node:') || s === './session-title.mjs', `non-builtin import: ${s}`);
 });
 
 // --- pair mode (rows P1–P14) ---------------------------------------------------------------------
@@ -1097,4 +1100,412 @@ test('P18 — no `on` literal survives in the pair summary, and the trace is wri
     '…with a BOM-LESS UTF8Encoding, matching what the launcher\'s own appendFileSync writes to the same file');
   assert.ok(!/-Encoding\s+utf8/i.test(dbg[0]),
     "…and never `-Encoding utf8`, which on PowerShell 5.1 writes a BOM in the middle of a file two processes append to");
+});
+
+// --- inherited session variables (rows SE1–SE8) --------------------------------------------------
+// The launcher reads its sibling session-env-scrub.json. The Claude child loses every variable that
+// matches a listed PREFIX (CC_SKIP_ is the per-session opt-out convention); the listed NAMES are
+// Claude Code's own markers and reach the child untouched. A VS Code the launcher starts gets an
+// explicit env with every listed name and every prefix match removed. Matching is case-insensitive on
+// Windows. No valid file: the launch proceeds as before and one stderr line says so, on the paths that
+// spawn only. These rows run the launcher LIVE (no dry-run seam) against stub `claude` / `code` that
+// record the environment they were given; CC_TILE_FAKE_RESULT keeps pair mode away from every window.
+// Variable names here are neutral (CC_SKIP_ONE …): this file ships in the public kit.
+
+// The list's exact content, as the spec fixes it. Inline, not a fixture file: the exporter copies
+// fixtures one by one, and an inline value travels with this public suite by construction.
+const SCRUB_LIST = {
+  comment: 'Variables a Claude Code session leaves in the environment of every process it starts. A launcher that starts a new, independent session, or an app whose terminals will, removes them first. `names` are removed by exact name; `prefixes` remove every variable whose name starts with the prefix. CC_SKIP_ is the naming convention for a per-session opt-out: the launch that wants one sets it, and nothing it starts inherits it.',
+  names: [
+    'CLAUDE_CODE_CHILD_SESSION', 'NO_COLOR', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_BRIDGE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'GIT_TERMINAL_PROMPT',
+    'CLAUDE_CONFIG_DIR',
+  ],
+  prefixes: ['CC_SKIP_'],
+};
+const SCRUB_FILE_IN_REPO = join(here, '..', 'home', 'session-env-scrub.json');
+const TITLE_MODULE = join(here, '..', 'home', 'session-title.mjs');
+// The invalid states of the list (spec: anything but an object whose names/prefixes are arrays of
+// identifier strings counts as no valid file). `null` = the file is absent.
+const SCRUB_INVALID = [
+  ['missing', null],
+  ['one bad entry', JSON.stringify({ names: ['NO_COLOR', 'A;B'], prefixes: ['CC_SKIP_'] })],
+  ['a wrong shape (names is a string)', JSON.stringify({ names: 'NO_COLOR', prefixes: ['CC_SKIP_'] })],
+  ['not JSON', 'this is not JSON {\n'],
+];
+const missingLine = (p) => `cc: ${p} is missing or invalid, so inherited session variables are not cleared. Reinstall to restore it.`;
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const winFold = (k) => (IS_WIN ? k.toUpperCase() : k);
+
+// Stubs that write their environment (and argv) next to themselves, then a .done marker, so a
+// detached `code` can be waited for without reading a half-written file.
+function makeRecorderShims() {
+  const d = mkdtempSync(join(tmpdir(), 'ccl-rec-'));
+  for (const n of ['claude', 'code']) {
+    writeFileSync(join(d, n + '.cmd'),
+      `@echo off\r\nset > "%~dp0${n}.env"\r\necho(%*> "%~dp0${n}.argv"\r\necho done> "%~dp0${n}.done"\r\nexit /b 0\r\n`, 'utf8');
+    writeFileSync(join(d, n),
+      `#!/bin/sh\nenv > "$(dirname "$0")/${n}.env"\nprintf '%s ' "$@" > "$(dirname "$0")/${n}.argv"\necho done > "$(dirname "$0")/${n}.done"\n`, 'utf8');
+    try { chmodSync(join(d, n), 0o755); } catch {}
+  }
+  return d;
+}
+
+function readEnvFile(p) {
+  const map = new Map();
+  for (const l of readFileSync(p, 'utf8').split(/\r?\n/)) {
+    const i = l.indexOf('=');
+    if (i > 0) map.set(winFold(l.slice(0, i)), l.slice(i + 1));
+  }
+  return map;
+}
+
+// Runs a launcher (default: the repo's) live in `proj` with the recorder stubs. Returns the process
+// result and what each stub saw ({ env: Map, argv: string } or null when it never ran).
+function runRecorded({ launcherPath = launcher, proj, args = [], env: extraEnv = {}, waitFor = [], shims: given = null }) {
+  const shims = given || makeRecorderShims();
+  const fake = join(shims, 'no-tile-result.json');   // absent on purpose: pair mode reports 'unknown'
+  try {
+    const env = {
+      PATH: shims,
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
+      USERPROFILE: proj, HOME: proj,
+      CC_TILE_FAKE_RESULT: fake,
+      ...(IS_WIN ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
+      TEMP: process.env.TEMP || tmpdir(), TMP: process.env.TMP || tmpdir(),
+      ...extraEnv,
+    };
+    const res = spawnSync(process.execPath, [launcherPath, ...args], { cwd: proj, env, encoding: 'utf8' });
+    const seen = {};
+    for (const n of ['claude', 'code']) {
+      const done = join(shims, `${n}.done`);
+      if (waitFor.includes(n)) { const until = Date.now() + 10000; while (!existsSync(done) && Date.now() < until) sleepMs(50); }
+      // skip-guards: not a skip — a stub that never ran is recorded as null, and the rows assert on that.
+      seen[n] = existsSync(done)
+        ? { env: readEnvFile(join(shims, `${n}.env`)), argv: readFileSync(join(shims, `${n}.argv`), 'utf8').trim() }
+        : null;
+    }
+    return { res, seen };
+  } finally {
+    if (!given) rmTree(shims);
+  }
+}
+
+function newProj() {
+  const proj = mkdtempSync(join(tmpdir(), 'ccl-sproj-'));
+  mkdirSync(join(proj, '.desk'), { recursive: true });
+  writeFileSync(join(proj, '.desk', 'session-identity.json'), JSON.stringify(IDENT), 'utf8');
+  return proj;
+}
+
+// A copy of the launcher and the title module beside it in a folder of its own, with the list file in
+// the given state — so the no-valid-file rows never touch the repo's list. A missing module is a build
+// gap: readFileSync throws and the row fails.
+function launcherCopy(listBytes) {
+  const d = mkdtempSync(join(tmpdir(), 'ccl-copy-'));
+  writeFileSync(join(d, 'claude-launch.mjs'), readFileSync(launcher));
+  writeFileSync(join(d, 'session-title.mjs'), readFileSync(TITLE_MODULE));
+  if (listBytes !== null) writeFileSync(join(d, 'session-env-scrub.json'), listBytes, 'utf8');
+  return { dir: d, path: join(d, 'claude-launch.mjs'), list: join(d, 'session-env-scrub.json') };
+}
+
+const MARKERS_ON = { CLAUDE_CODE_CHILD_SESSION: '1', NO_COLOR: '1' };
+const OPTOUTS_ON = { CC_SKIP_ONE: '1', CC_SKIP_TWO: '1' };
+const hasPrefix = (m, p) => [...m.keys()].some((k) => k.startsWith(winFold(p)));
+
+test('SE1 — launch: the Claude child loses every CC_SKIP_ variable and keeps Claude Code\'s own markers', () => {
+  // Red if: the prefix rule is not applied to the child (CC_SKIP_ONE reaches it), or the names list is
+  // applied to it too (CLAUDE_CODE_CHILD_SESSION / NO_COLOR vanish).
+  const proj = newProj();
+  try {
+    const { res, seen } = runRecorded({ proj, args: ['--no-vscode'], env: { ...OPTOUTS_ON, ...MARKERS_ON } });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '', 'a valid list prints nothing');
+    assert.ok(seen.claude, 'the claude stub ran');
+    assert.ok(!hasPrefix(seen.claude.env, 'CC_SKIP_'), `no CC_SKIP_ variable reaches claude: ${[...seen.claude.env.keys()].filter((k) => k.startsWith('CC_SKIP')).join(', ')}`);
+    assert.equal(seen.claude.env.get(winFold('CLAUDE_CODE_CHILD_SESSION')), '1', 'Claude Code\'s own marker still reaches it');
+    assert.equal(seen.claude.env.get(winFold('NO_COLOR')), '1', 'listed names are not applied to the Claude child');
+    assert.equal(seen.code, null, '--no-vscode: no VS Code');
+  } finally { rmTree(proj); }
+});
+
+// The title markers a second-home session's shell carries (the launcher's own two keys). Fix F4
+// (261004 [G2.5]): they belong to the launch that set them, so they never reach VS Code — a bare
+// `claude` in its terminal runs on the primary home and must not label itself as the other one.
+const TITLE_MARKERS_ON = { CC_TITLE_PREFIX: '\u{1F7EA}', CC_TITLE_SUFFIX: '\u00B7s' };
+
+test('SE2 — pair mode: VS Code gets none of the listed names, no CC_SKIP_ variable and no title marker, and keeps the rest', () => {
+  // Red if: the VS Code spawn passes no `env` (it inherits everything), scrubs by names only, or lets
+  // CC_TITLE_PREFIX / CC_TITLE_SUFFIX through (F4).
+  const proj = newProj();
+  try {
+    const every = Object.fromEntries(SCRUB_LIST.names.map((n) => [n, 'x']));
+    const { res, seen } = runRecorded({ proj, args: ['--pair-vscode'], env: { ...every, ...OPTOUTS_ON, ...MARKERS_ON, ...TITLE_MARKERS_ON, CLAUDE_CONFIG_DIR: join(proj, 'second-home') }, waitFor: ['code'] });
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(seen.code, 'the code stub ran (detached) within 10 s');
+    for (const n of SCRUB_LIST.names) assert.ok(!seen.code.env.has(winFold(n)), `${n} must not reach VS Code`);
+    assert.ok(!hasPrefix(seen.code.env, 'CC_SKIP_'), 'no CC_SKIP_ variable reaches VS Code');
+    for (const n of Object.keys(TITLE_MARKERS_ON)) assert.ok(!seen.code.env.has(winFold(n)), `${n} must not reach VS Code`);
+    assert.ok(!seen.code.env.has(winFold('CLAUDE_CONFIG_DIR')), 'CLAUDE_CONFIG_DIR must not reach VS Code');
+    for (const keep of ['PATH', 'TEMP', ...(IS_WIN ? ['PATHEXT'] : [])]) {
+      assert.ok(seen.code.env.has(winFold(keep)), `${keep} still reaches VS Code — the scrub removes only the list`);
+    }
+  } finally { rmTree(proj); }
+});
+
+test('SE3 — Windows: a lower-case opt-out or marker is matched case-insensitively', { skip: IS_WIN ? false : 'environment names are case-sensitive off Windows' }, () => {
+  // Red if: matching is case-sensitive on Windows. (The Claude child keeps `no_color`: names are not
+  // applied to it, as SE1 pins; it loses the lower-case opt-out.)
+  const proj = newProj();
+  try {
+    const env = { cc_skip_handover_pickup: '1', no_color: '1' };
+    const launch = runRecorded({ proj, args: ['--no-vscode'], env });
+    assert.ok(launch.seen.claude, 'the claude stub ran');
+    assert.ok(!launch.seen.claude.env.has('CC_SKIP_HANDOVER_PICKUP'), 'a lower-case CC_SKIP_ variable does not reach claude');
+    const pair = runRecorded({ proj, args: ['--pair-vscode'], env, waitFor: ['code'] });
+    assert.ok(pair.seen.code, 'the code stub ran');
+    assert.ok(!pair.seen.code.env.has('CC_SKIP_HANDOVER_PICKUP'), 'a lower-case CC_SKIP_ variable does not reach VS Code');
+    assert.ok(!pair.seen.code.env.has('NO_COLOR'), 'a lower-case listed name does not reach VS Code');
+  } finally { rmTree(proj); }
+});
+
+test('SE4 — CLAUDE_CONFIG_DIR keeps its own rule for the Claude child, and neither it nor a title marker reaches VS Code', () => {
+  // Red if: the scrub overrides the --config-dir delta, the inherited value reaches claude without the
+  // flag, or CLAUDE_CONFIG_DIR, CC_TITLE_PREFIX or CC_TITLE_SUFFIX leaks to VS Code (F4: the home and
+  // its markers travel together, so VS Code gets neither).
+  const proj = newProj();
+  const cfg = mkdtempSync(join(tmpdir(), 'ccl-cfg-'));
+  try {
+    const inherited = { CLAUDE_CONFIG_DIR: join(proj, 'inherited-home'), ...TITLE_MARKERS_ON };
+    const withFlag = runRecorded({ proj, args: ['--no-vscode', '--config-dir', cfg], env: inherited });
+    assert.equal(withFlag.seen.claude.env.get(winFold('CLAUDE_CONFIG_DIR')), resolve(cfg), '--config-dir sets it for the child');
+    const without = runRecorded({ proj, args: ['--no-vscode'], env: inherited });
+    assert.ok(!without.seen.claude.env.has(winFold('CLAUDE_CONFIG_DIR')), 'without the flag the child gets none');
+    for (const args of [['--pair-vscode'], ['--pair-vscode', '--config-dir', cfg]]) {
+      const pair = runRecorded({ proj, args, env: inherited, waitFor: ['code'] });
+      assert.ok(pair.seen.code, `the code stub ran (${args.join(' ')})`);
+      assert.ok(!pair.seen.code.env.has(winFold('CLAUDE_CONFIG_DIR')), `VS Code gets no CLAUDE_CONFIG_DIR (${args.join(' ')})`);
+      for (const n of Object.keys(TITLE_MARKERS_ON)) assert.ok(!pair.seen.code.env.has(winFold(n)), `VS Code gets no ${n} (${args.join(' ')})`);
+    }
+  } finally { rmTree(proj); rmTree(cfg); }
+});
+
+test('SE5 — no valid list: the launch proceeds exactly as with one, removes nothing, and prints one stderr line', () => {
+  // Red if: a missing/invalid list fails the launch, changes the claude argv, removes anything, or
+  // prints zero or two lines (or a different line).
+  const proj = newProj();
+  try {
+    const ref = runRecorded({ proj, args: ['--no-vscode'], env: OPTOUTS_ON });
+    assert.ok(ref.seen.claude, 'the in-repo launch reached claude');
+    for (const [what, bytes] of SCRUB_INVALID) {
+      const copy = launcherCopy(bytes);
+      try {
+        const run = runRecorded({ launcherPath: copy.path, proj, args: ['--no-vscode'], env: OPTOUTS_ON });
+        assert.equal(run.res.status, ref.res.status, `${what}: same exit code as with a valid list`);
+        assert.ok(run.seen.claude, `${what}: claude is still launched`);
+        assert.equal(run.seen.claude.argv, ref.seen.claude.argv, `${what}: same claude argv`);
+        assert.equal(run.seen.claude.env.get(winFold('CC_SKIP_ONE')), '1', `${what}: nothing is removed — the opt-out still reaches claude`);
+        const lines = run.res.stderr.split(/\r?\n/).filter(Boolean);
+        assert.equal(lines.length, 1, `${what}: exactly one stderr line, got ${JSON.stringify(run.res.stderr)}`);
+        assert.equal(lines[0], missingLine(copy.list), `${what}: the spec's line, naming the copy's list path`);
+      } finally { rmTree(copy.dir); }
+    }
+  } finally { rmTree(proj); }
+});
+
+test('SE6 — the missing-list line prints once per launch: on the spawning paths, never on --print-title, --print-tabcolor or the dry run', () => {
+  // Red if: the line prints on a seam the `cc` shell function calls around every launch (it would
+  // then show three times), or it is missing from launch or pair mode.
+  const proj = newProj();
+  const copy = launcherCopy(null);
+  try {
+    for (const [label, args, extra] of [
+      ['--print-title', ['--print-title'], {}],
+      ['--print-tabcolor', ['--print-tabcolor'], { WT_SESSION: 'x' }],
+      ['the dry run', [], { CC_LAUNCH_DRYRUN: '1' }],
+    ]) {
+      const { res } = runRecorded({ launcherPath: copy.path, proj, args, env: extra });
+      assert.equal(res.status, 0, `${label}: ${res.stderr}`);
+      assert.equal(res.stderr, '', `${label}: no missing-list line`);
+    }
+    for (const [label, args, waitFor] of [['launch', ['--no-vscode'], []], ['pair mode', ['--pair-vscode'], ['code']]]) {
+      const { res } = runRecorded({ launcherPath: copy.path, proj, args, waitFor });
+      const lines = res.stderr.split(/\r?\n/).filter(Boolean);
+      assert.deepEqual(lines, [missingLine(copy.list)], `${label}: exactly the one line`);
+    }
+  } finally { rmTree(copy.dir); rmTree(proj); }
+});
+
+test('SE7 — the dry-run plan carries the rule (names, prefixes), identical whatever the shell carries', () => {
+  // Red if: the plan lists the variables that happened to be present (two shells → two plans), or it
+  // drops the rule, or it claims the names list for the Claude child.
+  const proj = newProj();
+  try {
+    const every = Object.fromEntries([...SCRUB_LIST.names.map((n) => [n, 'x']), ['CC_SKIP_ONE', '1']]);
+    const shims = makeRecorderShims();   // one stub folder for both runs: the plan names the stub's path
+    const plans = [every, {}].map((env) => {
+      const { res } = runRecorded({ proj, shims, args: [], env: { CC_LAUNCH_DRYRUN: '1', CC_VSCODE: '1', ...env } });
+      assert.equal(res.status, 0, res.stderr);
+      return res.stdout;
+    });
+    assert.equal(plans[0], plans[1], 'the plan is byte-equal between a shell carrying every listed variable and one carrying none');
+    const plan = JSON.parse(plans[1].trim().split('\n').pop());
+    const all = JSON.stringify(plan);
+    for (const n of SCRUB_LIST.names) assert.ok(all.includes(`"${n}"`), `the plan names the rule's ${n}`);
+    assert.ok(all.includes('"CC_SKIP_"'), 'the plan names the CC_SKIP_ prefix');
+    // Where the rule sits is the implementer's choice; every subtree under a key naming the Claude
+    // spawn must, between them, carry the prefix and never the names list.
+    const claudeParts = [];
+    (function walk(o) {
+      if (!o || typeof o !== 'object') return;
+      for (const [k, v] of Object.entries(o)) { if (/claude/i.test(k)) claudeParts.push(JSON.stringify(v)); walk(v); }
+    })(plan);
+    assert.ok(claudeParts.some((s) => s.includes('"CC_SKIP_"')), 'a rule for the Claude spawn is reported, naming the prefix');
+    assert.ok(!claudeParts.some((s) => s.includes('"NO_COLOR"')), 'the Claude spawn\'s rule does not claim the names list');
+    rmTree(shims);
+  } finally { rmTree(proj); }
+});
+
+test('SE8 — the list file is the spec\'s exact content: identifiers only, the nine names in order, one prefix', () => {
+  // Red if: an entry is added, dropped or reordered, the comment drifts, or a name stops being a plain
+  // identifier (the PowerShell readers splice entries into a command a new shell runs).
+  assert.ok(existsSync(SCRUB_FILE_IN_REPO), 'home/session-env-scrub.json sits beside the launcher');
+  const parsed = JSON.parse(readFileSync(SCRUB_FILE_IN_REPO, 'utf8').replace(/^\uFEFF/, ''));
+  assert.deepEqual(parsed, SCRUB_LIST, 'parsed content deep-equals the spec');
+  assert.equal(parsed.comment, SCRUB_LIST.comment, 'the comment string is byte-equal');
+  for (const e of [...parsed.names, ...parsed.prefixes]) assert.match(e, /^[A-Za-z_][A-Za-z0-9_]*$/, `${e} is an identifier`);
+  // The names are the pre-sprint relaunch scrub's list minus its two opt-outs, in the same order —
+  // pinned literally so a drift in either place shows here.
+  assert.deepEqual(parsed.names, ['CLAUDE_CODE_CHILD_SESSION', 'NO_COLOR', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_BRIDGE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'GIT_TERMINAL_PROMPT', 'CLAUDE_CONFIG_DIR']);
+  assert.deepEqual(parsed.prefixes, ['CC_SKIP_']);
+});
+// --- the launcher titles through the shared module (rows LT1, LT2) -------------------------------
+// The title's four rules (identity read, base name, branch, title) live in home/session-title.mjs;
+// the launcher calls it. LT1 pins that the launcher's --print-title and the module's command line
+// agree for every repository shape; LT2 pins that the move changed no title the launcher printed
+// before, except the intended identity-read cases. These rows need real git, so they build their own
+// throwaway repositories with a hermetic git environment instead of using runLauncher's shim PATH.
+
+const LT_ROOT = mkdtempSync(join(tmpdir(), 'ccl-lt-'));
+const LT_HOME = join(LT_ROOT, '_home');
+mkdirSync(LT_HOME, { recursive: true });
+process.on('exit', () => { try { rmSync(LT_ROOT, { recursive: true, force: true }); } catch {} });
+
+function ltEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) {
+    if (/^(CC_TITLE_PREFIX|CC_TITLE_SUFFIX|CLAUDE_PROJECT_DIR|CC_LAUNCH_DRYRUN|GIT_DIR|GIT_WORK_TREE|GIT_CEILING_DIRECTORIES)$/i.test(k)) delete env[k];
+  }
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', HOME: LT_HOME, USERPROFILE: LT_HOME, GIT_CEILING_DIRECTORIES: LT_ROOT, ...extra };
+}
+function ltGit(cwd, ...args) {
+  const r = spawnSync('git', ['-c', 'user.name=qa', '-c', 'user.email=qa@x', ...args], { cwd, env: ltEnv(), encoding: 'utf8' });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout.trim();
+}
+let ltSeq = 0;
+function ltDir(leaf) { const d = join(LT_ROOT, String(++ltSeq), leaf); mkdirSync(d, { recursive: true }); return d; }
+function ltRepo(leaf, { branch = 'main', commit = true, origin = null } = {}) {
+  const d = ltDir(leaf);
+  ltGit(d, 'init', '-q', '-b', branch);
+  if (origin) ltGit(d, 'remote', 'add', 'origin', origin);
+  if (commit) { writeFileSync(join(d, 'f.txt'), 'x\n'); ltGit(d, 'add', 'f.txt'); ltGit(d, 'commit', '-q', '-m', 'init'); }
+  return d;
+}
+function ltIdentity(dir, sub, raw) {
+  mkdirSync(join(dir, sub), { recursive: true });
+  writeFileSync(join(dir, sub, 'session-identity.json'), typeof raw === 'string' ? raw : JSON.stringify(raw), 'utf8');
+  return dir;
+}
+
+// Every repository and identity shape the module rows cover.
+function ltShapes() {
+  const shapes = [];
+  shapes.push(['no repo, no identity', ltDir('plain')]);
+  shapes.push(['repo on main, named', ltIdentity(ltRepo('named'), '.desk', { name: 'env' })]);
+  shapes.push(['origin https slug', ltRepo('o-https', { origin: 'https://x/y/proj.git' })]);
+  shapes.push(['origin scp slug', ltRepo('o-scp', { origin: 'git@host:a/proj' })]);
+  shapes.push(['origin with a trailing slash', ltRepo('o-slash', { origin: 'https://x/y/proj/' })]);
+  const none = ltRepo('o-none');
+  shapes.push(['no origin', none]);
+  const sub = join(none, 'deeper'); mkdirSync(sub, { recursive: true });
+  shapes.push(['a subfolder of a repo', sub]);
+  const det = ltRepo('detached'); ltGit(det, 'checkout', '-q', '--detach');
+  shapes.push(['detached HEAD', det]);
+  shapes.push(['unborn branch', ltRepo('unborn', { branch: 'trunk', commit: false })]);
+  const wtMain = ltRepo('wt-main', { origin: 'https://x/y/proj.git' });
+  const wt = join(dirname(wtMain), 'wt-feat'); ltGit(wtMain, 'worktree', 'add', '-q', '-b', 'feat', wt);
+  shapes.push(['a worktree with a remote', wt]);
+  const wtMain2 = ltRepo('wt-main2');
+  const wt2 = join(dirname(wtMain2), 'wt-feat2'); ltGit(wtMain2, 'worktree', 'add', '-q', '-b', 'feat', wt2);
+  shapes.push(['a worktree without a remote', wt2]);
+  shapes.push(['legacy-only identity', ltIdentity(ltDir('legacy'), '.claude', { name: 'legacyname' })]);
+  for (const [label, raw] of [['"hello"', '"hello"'], ['42', '42'], ['[1,2]', '[1,2]'], ['{}', '{}']]) {
+    const d = ltIdentity(ltDir('bad-desk'), '.desk', raw);
+    shapes.push([`.desk holding ${label} beside a named .claude`, ltIdentity(d, '.claude', { name: 'legacyname' })]);
+  }
+  shapes.push(['blank identity name', ltIdentity(ltRepo('blank'), '.desk', { name: '   ' })]);
+  return shapes;
+}
+
+function printTitle(launcherPath, cwd, args = []) {
+  const r = spawnSync(process.execPath, [launcherPath, ...args, '--print-title'], { cwd, env: ltEnv(), encoding: 'utf8' });
+  assert.equal(r.status, 0, `--print-title exited ${r.status}: ${r.stderr}`);
+  return r.stdout;
+}
+
+test('LT1 — for every repository shape, the launcher\'s --print-title equals the module\'s /rename line minus `/rename `', () => {
+  // Red if: the launcher keeps any rule of its own (its identity read, base chain, branch or join),
+  // so the tab title and the paste-ready line can drift apart.
+  assert.ok(existsSync(TITLE_MODULE), 'home/session-title.mjs exists beside the launcher');
+  for (const [label, dir] of ltShapes()) {
+    const tab = printTitle(launcher, dir, ['--title-prefix', '[P]', '--title-suffix', '[S]']);
+    const r = spawnSync(process.execPath, [TITLE_MODULE], { cwd: dir, env: ltEnv({ CC_TITLE_PREFIX: '[P]', CC_TITLE_SUFFIX: '[S]' }), encoding: 'utf8' });
+    assert.equal(r.status, 0, `${label}: module exited ${r.status}: ${r.stderr}`);
+    assert.equal(tab, r.stdout.replace(/\n$/, '').replace(/^\/rename /, ''), `${label}: the tab title and the module's line agree`);
+    const plain = printTitle(launcher, dir);
+    const r2 = spawnSync(process.execPath, [TITLE_MODULE], { cwd: dir, env: ltEnv(), encoding: 'utf8' });
+    assert.equal(plain, r2.stdout.replace(/\n$/, '').replace(/^\/rename /, ''), `${label}: unmarked, too`);
+  }
+});
+
+// The freeze ref of the sprint that moved the title into the module: its launcher is the "before".
+const FREEZE_REF = 'e007d25';
+function preChangeLauncher() {
+  const r = spawnSync('git', ['show', `${FREEZE_REF}:home/claude-launch.mjs`], { cwd: join(here, '..'), encoding: 'utf8' });
+  if (r.status !== 0 || !r.stdout) return null;
+  const d = join(LT_ROOT, '_before');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'claude-launch.mjs'), r.stdout, 'utf8');
+  return join(d, 'claude-launch.mjs');
+}
+
+test('LT2 — the tab title is unchanged by the move, except the intended identity-read cases', (t) => {
+  // Red if: the module changes a title the launcher printed before for a valid identity file or none
+  // (base chain, branch, detached HEAD), or the intended fixes do not happen (a bare-value or array
+  // .desk file must now yield the .claude name; a .desk `{}` must now take the chain).
+  const before = preChangeLauncher();
+  if (!before) { t.skip('the pre-change launcher is not in this checkout\'s history (the public kit)'); return; }
+  const same = [
+    ['a valid .desk identity', ltIdentity(ltRepo('v-desk'), '.desk', { name: 'deskname', color: 'purple' })],
+    ['a valid legacy-only identity', ltIdentity(ltRepo('v-legacy'), '.claude', { name: 'legacyname' })],
+    ['no identity file, in a repo', ltRepo('v-none', { origin: 'https://x/y/proj.git' })],
+    ['no repo', ltDir('v-norepo')],
+    ['detached HEAD', (() => { const d = ltRepo('v-det'); ltGit(d, 'checkout', '-q', '--detach'); return d; })()],
+  ];
+  for (const [label, dir] of same) {
+    for (const args of [[], ['--title-prefix', '[P]', '--title-suffix', '[S]']]) {
+      assert.equal(printTitle(launcher, dir, args), printTitle(before, dir, args), `${label} ${args.join(' ')}: byte-identical to the pre-change title`);
+    }
+  }
+  for (const raw of ['"hello"', '42', '[1,2]']) {
+    const d = ltIdentity(ltIdentity(ltDir('fix-desk'), '.desk', raw), '.claude', { name: 'legacyname' });
+    assert.equal(printTitle(launcher, d), 'legacyname', `.desk holding ${raw}: the .claude name is now used`);
+    // The pre-change read stopped at any value with own keys: a string or an array did, 42 did not.
+    if (raw !== '42') assert.notEqual(printTitle(before, d), 'legacyname', `.desk holding ${raw}: a real difference from the pre-change title`);
+  }
+  const empty = ltIdentity(ltIdentity(ltDir('fix-empty'), '.desk', '{}'), '.claude', { name: 'legacyname' });
+  assert.equal(printTitle(launcher, empty), 'fix-empty', '.desk `{}` is an identity with no name: the chain, not the legacy file');
+  assert.equal(printTitle(before, empty), 'legacyname', 'the pre-change launcher fell through to the legacy file here');
 });

@@ -16,6 +16,8 @@
     { "source": "home/handover-facts.mjs", "dest": "handover-facts.mjs" },
     { "source": "home/session-start-handover.mjs", "dest": "session-start-handover.mjs" },
     { "source": "home/claude-launch.mjs", "dest": "claude-launch.mjs" },
+    { "source": "home/session-title.mjs", "dest": "session-title.mjs" },
+    { "source": "home/session-env-scrub.json", "dest": "session-env-scrub.json" },
     { "source": "home/dialogue-protocol.md", "dest": "dialogue-protocol.md" },
     { "source": "home/commands/handover.md", "dest": "commands/handover.md" },
     { "source": "home/commands/handover-check.md", "dest": "commands/handover-check.md" },

@@ -1,0 +1,15 @@
+{
+  "comment": "Variables a Claude Code session leaves in the environment of every process it starts. A launcher that starts a new, independent session, or an app whose terminals will, removes them first. `names` are removed by exact name; `prefixes` remove every variable whose name starts with the prefix. CC_SKIP_ is the naming convention for a per-session opt-out: the launch that wants one sets it, and nothing it starts inherits it.",
+  "names": [
+    "CLAUDE_CODE_CHILD_SESSION",
+    "NO_COLOR",
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_PID",
+    "GIT_TERMINAL_PROMPT",
+    "CLAUDE_CONFIG_DIR"
+  ],
+  "prefixes": ["CC_SKIP_"]
+}

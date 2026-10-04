@@ -6,7 +6,8 @@
 // (~/.claude/claude-launch.mjs) serves every project — invoked via a tiny `cc` shell function the
 // installer adds to your shell profile ($PROFILE on Windows, ~/.zshrc or ~/.bashrc on macOS/Linux).
 //
-// Reads <cwd>/.desk/session-identity.json:
+// Reads the current project's remembered session identity (the read rule, the name fallbacks, the
+// branch and the title composition all live in the sibling session-title.mjs):
 //   name   -> session name/title via `--name <name>@<branch>` on a FRESH launch; omitted when the
 //             user's argv is resume-shaped, so Claude Code restores that session's own stored name.
 //             Falls back through three tiers: identity name -> repo name (origin slug, else git
@@ -31,9 +32,11 @@
 //   --print-title / --print-tabcolor   the shell-function seams (see below)
 
 import { readFileSync, existsSync, statSync, readdirSync, appendFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { readIdentity, sessionTitle, dirLeaf } from './session-title.mjs';
 
 const ESC = '\x1b';
 const BEL = '\x07';
@@ -90,38 +93,21 @@ if (flags.pairVsCode && flags.noVsCode) {
 }
 const pair = flags.pairVsCode;
 
-// --- identity ---------------------------------------------------------------------------------
-// <cwd>/.desk/ is the home; the .claude/ read is the LEGACY fallback for a repo whose file hasn't
-// moved yet. Drop it once every config home has installed the move.
-let id = {};
-for (const dir of ['.desk', '.claude']) {
-  try { id = JSON.parse(readFileSync(join(loc, dir, 'session-identity.json'), 'utf8')) || {}; } catch {}
-  if (Object.keys(id).length) break;
-}
-const idName = typeof id.name === 'string' ? id.name.trim() : '';
+// --- identity + title -------------------------------------------------------------------------
+// session-title.mjs owns the identity read (the project's own file, else the legacy location; a
+// file counts only when it holds a JSON object), the name fallbacks (identity name -> repo name ->
+// folder leaf), the branch and the composition, so every other place that offers this session a
+// title computes the same one.
+const { identity } = readIdentity(loc);
+const id = identity || {};
 const idColor = typeof id.color === 'string' ? id.color.trim() : '';
 const idModel = typeof id.model === 'string' ? id.model.trim() : '';
 const idEffort = typeof id.effort === 'string' ? id.effort.trim() : '';
-
-// --- git branch + repo slug -------------------------------------------------------------------
-function git(args) {
-  try { return execFileSync('git', args, { cwd: loc, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
-  catch { return ''; }
-}
-let branch = git(['branch', '--show-current']) || git(['rev-parse', '--short', 'HEAD']);
-
-// Session name falls back through three tiers: identity name -> repo name -> folder leaf.
-const folder = loc.split(/[\\/]/).filter(Boolean).pop() || loc;   // 3rd: current directory leaf
-let repo = '';                                                    // 2nd: the git repo's own name
-const origin = git(['config', '--get', 'remote.origin.url']);
-if (origin) { const m = origin.replace(/\.git$/, '').match(/([^:/]+)$/); if (m) repo = m[1]; }
-if (!repo) { const top = git(['rev-parse', '--show-toplevel']); if (top) repo = top.split(/[\\/]/).filter(Boolean).pop() || ''; }
-const base = idName || repo || folder;                            // 1st: explicit /identity name
-const core = branch ? `${base}@${branch}` : base;
+const folder = dirLeaf(loc);   // the VS Code window match token below
 // ONE title computation, upstream of every consumer — the --print-title seam, the OSC 2 paints, the
 // `--name` handed to claude, and the tiler's titleMatch. So a marker supplied by the caller rides
 // into all of them by construction, with no second place to drift out of sync.
-const title = [flags.titlePrefix, core, flags.titleSuffix].filter(Boolean).join(' ');
+const title = sessionTitle(loc, { identity, prefix: flags.titlePrefix, suffix: flags.titleSuffix });
 
 // --- `--print-title` seam: emit the resolved title and exit, nothing else ---------------------
 // The shell `cc` function calls this after Claude Code exits so that PWSH ITSELF re-owns the tab
@@ -185,7 +171,7 @@ if (rgb) {
 // `--cloud` (a bare description creates a new session).
 // `--fork-session` OVERRIDES the resume shape: a fork is a NEW session that starts from the parent's
 // history, so it gets a fresh `--name` — otherwise it inherits the parent's stored name verbatim and
-// the fleet tray shows two identical rows it cannot tell apart.
+// a session list shows two identical rows it cannot tell apart.
 const RESUME_FLAGS = new Set(['-r', '--resume', '-c', '--continue', '--from-pr', '--teleport']);
 const isFork = flags.rest.includes('--fork-session');
 const isResume = !isFork && flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')[0]));
@@ -296,7 +282,7 @@ const claudeArgv = pair ? [] : shimVector(claudePath, cli);
 // this launcher's own identity/git reads (those are per-project, not per-config-home). Two inputs:
 // `--config-dir` → CLAUDE_CONFIG_DIR, set only when the flag was given; and the title markers →
 // CC_TITLE_PREFIX / CC_TITLE_SUFFIX, exported so in-session title composition (the /identity rename
-// lines) can reproduce the full marked title.
+// lines, the start-up banner, the naming nudge) can reproduce the full marked title.
 //
 // EVERY launch is authoritative over the two markers: both keys are ALWAYS written, empty when the
 // flag was absent. A marker must not outlive the launch that asked for it, and it can arrive without
@@ -313,8 +299,57 @@ const claudeArgv = pair ? [] : shimVector(claudePath, cli);
 // title says. The deletion is not part of envDelta: the delta names keys this launch WRITES.
 const envDelta = { CC_TITLE_PREFIX: flags.titlePrefix, CC_TITLE_SUFFIX: flags.titleSuffix };
 if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
-const childEnv = { ...process.env, ...envDelta };
+
+// --- inherited session variables (the sibling session-env-scrub.json) ---------------------------
+// A Claude Code session leaves markers in the environment of everything it starts, and a launch can
+// carry per-session opt-outs (the CC_SKIP_ prefix). Typed in a shell that inherited them, `cc` would
+// start a session that is not an ordinary one. The list file names both kinds:
+//   - the Claude child loses every variable matching a listed PREFIX — the opt-outs belong to the
+//     launch that set them. The `names` are Claude Code's own markers, which it reads to recognise a
+//     launch from inside one of its sessions, so they are left for it to see.
+//   - VS Code loses every listed name and every prefix match, plus this launcher's two title markers
+//     (see scrubRule): a `cc` or `claude` typed in one of its terminals must start an ordinary session.
+// Matching is case-insensitive on Windows (environment names are case-insensitive there, and a spread
+// of process.env keeps whatever casing a variable was set with), exact elsewhere. A missing or
+// invalid file removes nothing extra and costs one stderr line on the paths that spawn; the launch
+// never fails because of it.
+const SCRUB_FILE = join(dirname(fileURLToPath(import.meta.url)), 'session-env-scrub.json');
+function readScrubList(p) {
+  const valid = (a) => Array.isArray(a) && a.every((s) => typeof s === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s));
+  try {
+    const j = JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, ''));
+    if (j && typeof j === 'object' && !Array.isArray(j) && valid(j.names) && valid(j.prefixes)) {
+      return { names: j.names, prefixes: j.prefixes };
+    }
+  } catch { /* missing, unreadable or not JSON */ }
+  return null;
+}
+const scrubList = readScrubList(SCRUB_FILE);
+function withoutVars(env, names, prefixes) {
+  const fold = process.platform === 'win32' ? (s) => s.toUpperCase() : (s) => s;
+  const N = new Set(names.map(fold));
+  const P = prefixes.map(fold);
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    const K = fold(k);
+    if (N.has(K) || P.some((p) => K.startsWith(p))) continue;
+    out[k] = v;
+  }
+  return out;
+}
+const childEnv = { ...(scrubList ? withoutVars(process.env, [], scrubList.prefixes) : process.env), ...envDelta };
 if (!flags.configDir) delete childEnv.CLAUDE_CONFIG_DIR;
+// The rule each spawn applies, for the dry-run plan: the rule, never the variables that happened to
+// be present, so the plan does not depend on the shell it runs in. null = no valid list file.
+// VS Code also loses this launcher's own two title markers. They describe the session this launcher
+// starts, and VS Code is not that session: a bare `claude` typed in one of its terminals runs on the
+// primary home (the list removes CLAUDE_CONFIG_DIR), so it must not see another home's markers
+// either. They are launcher-owned, not list entries, and travel with CLAUDE_CONFIG_DIR: removed
+// exactly when the list is valid, so a missing list still changes nothing.
+const scrubRule = {
+  claude: scrubList ? { names: [], prefixes: scrubList.prefixes } : null,
+  vscode: scrubList ? { names: [...scrubList.names, 'CC_TITLE_PREFIX', 'CC_TITLE_SUFFIX'], prefixes: scrubList.prefixes } : null,
+};
 
 // --- VS Code co-launch (env-gated; default off) -------------------------------------------------
 // CC_VSCODE truthy → open VS Code on this project, detached, before claude launches. Exactly one
@@ -678,11 +713,12 @@ if (dryRun) {
       title, titlePrefix: flags.titlePrefix, titleSuffix: flags.titleSuffix,
       configDir: flags.configDir, noVsCode: flags.noVsCode,
     },
-    vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true } },
+    vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true }, envScrub: scrubRule.vscode },
     // envDelta is the DELTA ONLY — never the inherited environment, so a dry-run captured in a CI
     // log can't spill anything. Always carries both title markers (empty when the flag was absent —
     // every launch is authoritative over them); CLAUDE_CONFIG_DIR only when --config-dir was given.
-    claude: { argv: claudeArgv, envDelta },
+    // envScrub is the removal rule from the list file (null when it is missing or invalid).
+    claude: { argv: claudeArgv, envDelta, envScrub: scrubRule.claude },
     tile: {
       enabled: tilePlan.enabled, reason: tilePlan.reason, side: tilePlan.side, ratio: tilePlan.ratio,
       captureMethod: tilePlan.captureMethod, snapGroup: tilePlan.snapGroup, titleMatch: tilePlan.titleMatch,
@@ -699,6 +735,11 @@ if (pair && vsPlan.action === 'skip-no-cli') {
   console.error('vscode-no-cli: the `code` command is not on PATH, so VS Code cannot be opened.');
   process.exit(1);
 }
+
+// From here on something is spawned (claude, or VS Code in pair mode). The shell function runs the
+// launcher three times per `cc` (the two print seams and this launch), so the missing-list line is
+// printed here, once, and never on the seams or the dry run.
+if (!scrubList) console.error(`cc: ${SCRUB_FILE} is missing or invalid, so inherited session variables are not cleared. Reinstall to restore it.`);
 
 // Windows tiling: capture the terminal's HWND BEFORE VS Code opens. At launch the foreground window
 // IS the terminal at this instant; in pair mode the parent walk names the terminal's process and its
@@ -717,6 +758,10 @@ if (tilePlan.enabled && !fakeTileResult) {
 if (vsPlan.exe) {
   try {
     const [vsExe, ...vsArgs] = shimVector(vsPlan.exe, [vsPlan.target]);
+    // A VS Code this call cold-starts hands its environment to every integrated terminal, so it gets
+    // the scrubbed one (no valid list: the inherited environment, as before). Set on the shared opts
+    // only here, after the dry-run exit, so the plan never prints an environment.
+    if (scrubRule.vscode) VS_SPAWN_OPTS.env = withoutVars(process.env, scrubRule.vscode.names, scrubRule.vscode.prefixes);
     spawn(vsExe, vsArgs, VS_SPAWN_OPTS).unref();   // the one VS Code spawn site
   } catch { /* never block or fail the claude launch */ }
 }

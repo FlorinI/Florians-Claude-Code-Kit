@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync, realpathSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -1204,9 +1204,13 @@ function newProj() {
 
 // A copy of the launcher and the title module beside it in a folder of its own, with the list file in
 // the given state — so the no-valid-file rows never touch the repo's list. A missing module is a build
-// gap: readFileSync throws and the row fails.
+// gap: readFileSync throws and the row fails. The folder is resolved because the launcher names its
+// list from its own resolved location (Node realpaths the main module): on macOS the temp folder
+// /var/… is a symlink to /private/var/…. Plain realpathSync, not .native, is the resolver Node uses
+// for the main module, so the expected path matches it on every OS (.native would also expand
+// Windows 8.3 short names, which Node does not).
 function launcherCopy(listBytes) {
-  const d = mkdtempSync(join(tmpdir(), 'ccl-copy-'));
+  const d = realpathSync(mkdtempSync(join(tmpdir(), 'ccl-copy-')));
   writeFileSync(join(d, 'claude-launch.mjs'), readFileSync(launcher));
   writeFileSync(join(d, 'session-title.mjs'), readFileSync(TITLE_MODULE));
   if (listBytes !== null) writeFileSync(join(d, 'session-env-scrub.json'), listBytes, 'utf8');

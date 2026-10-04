@@ -1138,14 +1138,18 @@ const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0
 const winFold = (k) => (IS_WIN ? k.toUpperCase() : k);
 
 // Stubs that write their environment (and argv) next to themselves, then a .done marker, so a
-// detached `code` can be waited for without reading a half-written file.
+// detached `code` can be waited for without reading a half-written file. PATH holds only this folder,
+// so the POSIX stub may use shell builtins and absolute paths only: its folder is written in, and
+// `env` is called as /usr/bin/env (present on Linux and macOS alike).
 function makeRecorderShims() {
   const d = mkdtempSync(join(tmpdir(), 'ccl-rec-'));
+  const shq = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
   for (const n of ['claude', 'code']) {
     writeFileSync(join(d, n + '.cmd'),
       `@echo off\r\nset > "%~dp0${n}.env"\r\necho(%*> "%~dp0${n}.argv"\r\necho done> "%~dp0${n}.done"\r\nexit /b 0\r\n`, 'utf8');
+    const out = (ext) => shq(join(d, `${n}.${ext}`));
     writeFileSync(join(d, n),
-      `#!/bin/sh\nenv > "$(dirname "$0")/${n}.env"\nprintf '%s ' "$@" > "$(dirname "$0")/${n}.argv"\necho done > "$(dirname "$0")/${n}.done"\n`, 'utf8');
+      `#!/bin/sh\n/usr/bin/env > ${out('env')}\nprintf '%s ' "$@" > ${out('argv')}\necho done > ${out('done')}\n`, 'utf8');
     try { chmodSync(join(d, n), 0o755); } catch {}
   }
   return d;

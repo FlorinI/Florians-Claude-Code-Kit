@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 // sprint1-launcher — mechanics tests for the launcher half of sprint 1 (2026-08-29): N14 the launcher
 // owns CLAUDE_CONFIG_DIR, N4 a fork is a fresh session, N2 `--cloud <description>` is the prompt,
-// G2 VALUE_FLAGS / VARIADIC_FLAGS vs the installed `claude --help` 2.1.251.
+// G2 VALUE_FLAGS / VARIADIC_FLAGS vs the installed `claude --help` (2.1.294 since 2026-10-08, rows C17, C17m, C20).
 //
 // Spec: .claude/plans/260829-sprint1-status-launcher-spec.md
 // Acceptance examples (frozen at [G1], commit d094872): AE-13 … AE-15, AE-18 … AE-21.
@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(here, '..');
 const launcher = join(ROOT, 'home', 'claude-launch.mjs');
-const HELP_FIXTURE = join(here, 'fixtures', 'claude-help-2.1.251.txt');
+const HELP_FIXTURE = join(here, 'fixtures', 'claude-help-2.1.294.txt');
 // The public-kit marker. This file ships in the kit, and the kit has neither the exporter nor the
 // private docs — so the exporter's absence says "this checkout is the public kit". A bare existsSync
 // on `docs/cc-launcher.md` cannot tell the kit from a deletion; this can, and the deletion is what
@@ -245,7 +245,7 @@ test('C16 — `--cloud <uuid>` and `--cloud=x`: a consumed value is the prompt (
 });
 
 // ================================================================================================
-// G2 — the flag table matches `claude --help` 2.1.251 (AE-19, AE-20, AE-21) — rows C17–C19
+// G2 — the flag table matches `claude --help` 2.1.294 (AE-19, AE-20, AE-21; AE-1b.1–3) — rows C17–C20
 // ================================================================================================
 
 // Parse the checked-in help text. A flag line starts with exactly two spaces then `-`; the names are
@@ -271,29 +271,77 @@ function launcherSet(src, name) {
 }
 const sorted = (s) => [...s].sort();
 
-test('C17 — VALUE_FLAGS ∪ VARIADIC_FLAGS equals the `<value>` flags of claude --help 2.1.251; VARIADIC equals the `<x...>` set; OPTIONAL equals the `[x]` set (AE-21)', () => {
-  const help = parseHelp(readFileSync(HELP_FIXTURE, 'utf8'));
+// The comparison body of C17, as a function returning the list of differences, so C17m can prove it
+// fails on the guarded edit (a flag removed from VALUE_FLAGS) without editing the launcher on disk.
+function flagDrift(src, helpText) {
+  const help = parseHelp(helpText);
+  const diffs = [];
+  const VALUE = launcherSet(src, 'VALUE_FLAGS'), VARIADIC = launcherSet(src, 'VARIADIC_FLAGS'), OPTIONAL = launcherSet(src, 'OPTIONAL_VALUE_FLAGS');
+  for (const f of help.variadic) if (!VARIADIC.has(f)) diffs.push(`variadic flag ${f} missing from VARIADIC_FLAGS`);
+  for (const f of VARIADIC) if (!help.variadic.has(f)) diffs.push(`VARIADIC_FLAGS carries ${f}, which the help does not list as <x...>`);
+  for (const f of help.optional) if (!OPTIONAL.has(f)) diffs.push(`optional-value flag ${f} missing from OPTIONAL_VALUE_FLAGS`);
+  for (const f of OPTIONAL) if (!help.optional.has(f)) diffs.push(`OPTIONAL_VALUE_FLAGS carries ${f}, which the help does not list as [x]`);
+  for (const f of help.value) if (!VALUE.has(f)) diffs.push(`single-value flag ${f} missing from VALUE_FLAGS`);
+  const helpAll = new Set([...help.value, ...help.variadic]);
+  for (const f of new Set([...VALUE, ...VARIADIC])) if (!helpAll.has(f)) diffs.push(`launcher knows ${f} as a value flag, which the help does not list (stale)`);
+  return diffs;
+}
+
+test('C17 — VALUE_FLAGS ∪ VARIADIC_FLAGS equals the `<value>` flags of claude --help 2.1.294; VARIADIC equals the `<x...>` set; OPTIONAL equals the `[x]` set (AE-21, AE-1b.3)', () => {
+  // Re-pinned 2026-10-08 (title/log/Chrome sprint, item 1b): the fixture is the verbatim help of
+  // 2.1.294, which adds two value flags (--permission-prompts, --system-prompt-snapshot) and a boolean
+  // (--desktop) over 2.1.251; no flag was removed.
+  const helpText = readFileSync(HELP_FIXTURE, 'utf8');
+  const help = parseHelp(helpText);
   // The fixture parsed to what the spec read by hand (sanity on the parser, not on the launcher).
-  for (const f of ['--autocompact', '--environment', '-n', '--name', '--allowedTools', '--disallowedTools']) {
+  for (const f of ['--autocompact', '--environment', '-n', '--name', '--allowedTools', '--disallowedTools', '--permission-prompts', '--system-prompt-snapshot']) {
     assert.ok(help.value.has(f) || help.variadic.has(f), `parser: ${f} is a value flag in the help text`);
   }
+  assert.ok(!help.value.has('--desktop') && !help.optional.has('--desktop'), 'parser: --desktop is a boolean in the help text');
   assert.deepEqual(sorted(help.variadic), ['--add-dir', '--allowed-tools', '--allowedTools', '--betas', '--disallowed-tools', '--disallowedTools', '--file', '--mcp-config', '--tools'].sort());
   assert.ok(help.optional.has('--cloud') && help.optional.has('-r') && help.optional.has('-d'));
 
   const s = readFileSync(launcher, 'utf8');
-  const VALUE = launcherSet(s, 'VALUE_FLAGS'), VARIADIC = launcherSet(s, 'VARIADIC_FLAGS'), OPTIONAL = launcherSet(s, 'OPTIONAL_VALUE_FLAGS');
-  assert.deepEqual(sorted(VARIADIC), sorted(help.variadic), 'VARIADIC_FLAGS drifts from the <x...> flags');
-  assert.deepEqual(sorted(OPTIONAL), sorted(help.optional), 'OPTIONAL_VALUE_FLAGS drifts from the [x] flags');
-  const allValue = new Set([...VALUE, ...VARIADIC]);
-  assert.deepEqual(sorted(allValue), sorted(new Set([...help.value, ...help.variadic])),
-    'VALUE_FLAGS ∪ VARIADIC_FLAGS drifts from the <…> flags (a flag the launcher does not know is an untinted session; one the help lacks is stale)');
-  for (const f of help.value) assert.ok(VALUE.has(f), `single-value flag ${f} missing from VALUE_FLAGS`);
-  for (const f of ['--autocompact', '--environment', '-n', '--allowedTools', '--disallowedTools']) assert.ok(allValue.has(f), `${f} (new in 2.1.251) is known`);
+  assert.deepEqual(flagDrift(s, helpText), [], 'the launcher flag tables drift from claude --help 2.1.294');
+  const VALUE = launcherSet(s, 'VALUE_FLAGS');
+  for (const f of ['--permission-prompts', '--system-prompt-snapshot']) assert.ok(VALUE.has(f), `${f} (new in 2.1.294) is in VALUE_FLAGS`);
   // The comment names the version it was checked against.
-  assert.ok(s.includes('2.1.251'), 'the launcher comment names Claude Code 2.1.251');
-  assert.ok(!s.includes('2.1.233'), 'and no longer 2.1.233');
+  assert.ok(s.includes('2.1.294'), 'the launcher comment names Claude Code 2.1.294');
+  assert.ok(!s.includes('2.1.251'), 'and no longer 2.1.251');
+  assert.ok(!existsSync(join(here, 'fixtures', 'claude-help-2.1.251.txt')), 'the 2.1.251 fixture is deleted, not kept beside the new one');
 });
 
+test('C17m — C17 fails on the guarded edit: either new flag removed from VALUE_FLAGS yields exactly one difference naming it (AE-1b.3)', () => {
+  const helpText = readFileSync(HELP_FIXTURE, 'utf8');
+  const s = readFileSync(launcher, 'utf8');
+  const m = s.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(m, 'VALUE_FLAGS literal found');
+  for (const flag of ['--permission-prompts', '--system-prompt-snapshot']) {
+    const body = m[1];
+    assert.ok(body.includes(`'${flag}'`), `${flag} is in the VALUE_FLAGS literal to begin with`);
+    const mutated = s.replace(m[0], m[0].replace(new RegExp(`'${flag}',?\\s*`), ''));
+    assert.notEqual(mutated, s, `${flag} was removed from the mutated source`);
+    const diffs = flagDrift(mutated, helpText);
+    assert.equal(diffs.length, 1, `exactly one difference with ${flag} removed: ${JSON.stringify(diffs)}`);
+    assert.ok(diffs[0].includes(flag), `the difference names ${flag}: ${diffs[0]}`);
+  }
+});
+
+test('C20 — the 2.1.294 value flags consume their value; a prompt after one still suppresses /color (AE-1b.1, AE-1b.2)', () => {
+  assert.deepEqual(argvFor(['--system-prompt-snapshot', 'on']).slice(-3), ['--system-prompt-snapshot', 'on', COLOR],
+    '`on` is the value of --system-prompt-snapshot, never the prompt — the session is tinted');
+  assert.deepEqual(argvFor(['--permission-prompts', 'host']).slice(-3), ['--permission-prompts', 'host', COLOR]);
+  const withPrompt = argvFor(['--permission-prompts', 'none', 'do X']);
+  assert.equal(withPrompt.at(-1), 'do X', 'the prompt reaches Claude Code last');
+  assert.ok(!hasColor(withPrompt), `no /color after a real prompt: ${withPrompt.join(' ')}`);
+  assert.deepEqual(argvFor(['--desktop']).slice(-2), ['--desktop', COLOR], 'an unknown flag is a boolean: /color injected');
+});
+test('C17d — docs/cc-launcher.md names the help version the tables mirror: 2.1.294, not 2.1.251 (private repo only)', { skip: IN_PUBLIC_KIT ? 'public kit: the private docs are not shipped' : false }, () => {
+  const doc = readFileSync(join(ROOT, 'docs', 'cc-launcher.md'), 'utf8');
+  assert.ok(doc.includes('2.1.294'), 'docs/cc-launcher.md names 2.1.294');
+  assert.ok(!doc.includes('2.1.251'), 'docs/cc-launcher.md no longer names 2.1.251');
+  assert.ok(!doc.includes('claude-help-2.1.251'), 'and never the deleted fixture');
+});
 test('C18 — a value flag new in 2.1.251 still self-colours (AE-19)', () => {
   assert.deepEqual(argvFor(['--autocompact', '200k']).slice(-3), ['--autocompact', '200k', COLOR]);
   assert.deepEqual(argvFor(['--environment', 'env_1']).slice(-3), ['--environment', 'env_1', COLOR]);

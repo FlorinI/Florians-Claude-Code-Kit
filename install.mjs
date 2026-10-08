@@ -223,12 +223,16 @@ function launcherProfile(claudeHome, shellHome, platform = process.platform) {
       // CC. `--print-title` echoes the resolved title; `--print-tabcolor` echoes the OSC tab-color
       // escape (empty on non-WT); the launch itself paints both while CC runs. Wrapped in try/catch so a
       // headless/no-console host can't error the prompt.
+      // The re-assert sits in the launch's `finally`: a console Ctrl+C event (one pressed while CC is
+      // not in raw mode, e.g. during start-up) makes pwsh stop the function after the launch returns,
+      // and only a `finally` block still runs then. The launch's exit code is saved and restored, so
+      // `$LASTEXITCODE` after `cc` is Claude Code's, not the tab-colour probe's.
       // The fixed args go to ALL THREE invocations. They must: `--print-title` resolves the title from
       // the same inputs as the launch, so a probe missing them would re-title the tab with an UNMARKED
       // string the instant CC exits — the marker would appear to work and then silently vanish.
       fnLine: (cmd, script, args) => {
         const fx = fixed(args, '`"');
-        return `function ${cmd} { node "${fwd}/${script}"${fx} @args; try { $t = (node "${fwd}/${script}"${fx} --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${script}"${fx} --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`;
+        return `function ${cmd} { try { node "${fwd}/${script}"${fx} @args } finally { $rc = $LASTEXITCODE; try { $t = (node "${fwd}/${script}"${fx} --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${script}"${fx} --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {}; $global:LASTEXITCODE = $rc } }`;
       },
     };
   }

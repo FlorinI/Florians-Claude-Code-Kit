@@ -381,7 +381,9 @@ const fwdHome = (home) => resolve(home).replace(/\\/g, '/');
 test('V1 — with NO variants the emitted function is byte-identical to the pre-variants form', () => {
   withHome((home) => {
     const fwd = fwdHome(home);
-    const winExpected = `function cc { node "${fwd}/${LAUNCH_SCRIPT}" @args; try { $t = (node "${fwd}/${LAUNCH_SCRIPT}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${LAUNCH_SCRIPT}" --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {} }`;
+    // Re-pinned 2026-10-08: the launch sits in try { } finally { }, so the title step also runs when a
+    // console Ctrl+C makes pwsh stop the function, and $LASTEXITCODE after it is the launch's own.
+    const winExpected = `function cc { try { node "${fwd}/${LAUNCH_SCRIPT}" @args } finally { $rc = $LASTEXITCODE; try { $t = (node "${fwd}/${LAUNCH_SCRIPT}" --print-title 2>$null); if ($t) { $Host.UI.RawUI.WindowTitle = $t }; $c = (node "${fwd}/${LAUNCH_SCRIPT}" --print-tabcolor 2>$null); if ($c) { [Console]::Write($c) } } catch {}; $global:LASTEXITCODE = $rc } }`;
     const posixExpected = `cc() { node "${fwd}/${LAUNCH_SCRIPT}" "$@"; }`;
     const win = writeBlock(home, { platform: 'win32' });
     assert.ok(win.body.includes(winExpected), 'Windows form unchanged with no variants');

@@ -21,6 +21,12 @@
 //
 // Title/name = [<title-prefix>] <identity name | repo name | folder leaf>@<branch> [<title-suffix>].
 //
+// Exit title: a session renamed during its life leaves the tab on its FINAL name. The launcher
+// follows its child's live registry entry while it runs, reads the final name from that session's
+// transcript after it exits (both readers live in session-title.mjs), applies the launch's markers,
+// and on Windows hands the result to the shell's `--print-title` call through a small file keyed by
+// the shell's pid. A session never renamed keeps the recomputed launch title.
+//
 // Launcher-owned flags (self-consumed — never forwarded to claude, never seen by the prompt scan):
 //   --config-dir <path>    run claude against another config home (CLAUDE_CONFIG_DIR in the child env;
 //                          deleted from the child env when the flag is absent — every launch owns it)
@@ -36,7 +42,11 @@ import { join, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readIdentity, sessionTitle, dirLeaf } from './session-title.mjs';
+import {
+  readIdentity, sessionTitle, dirLeaf,
+  readRegistryEntry, findTranscript, lastCustomTitle, composeExitTitle,
+  writeExitTitleFile, readExitTitleFile, deleteExitTitleFile,
+} from './session-title.mjs';
 
 const ESC = '\x1b';
 const BEL = '\x07';
@@ -115,8 +125,21 @@ const title = sessionTitle(loc, { identity, prefix: flags.titlePrefix, suffix: f
 // exits — Windows Terminal falls back to the shell's own title, i.e. the profile default
 // ("PowerShell"). Only the shell process setting $Host.UI.RawUI.WindowTitle makes it stick. So the
 // launcher exposes the computed title here; the shell writes it. Early-exit BEFORE any OSC / color /
-// VS Code / claude side effect — this call prints one line and does nothing else.
-if (flags.rest.includes('--print-title')) { process.stdout.write(title); process.exit(0); }
+// VS Code / claude side effect — this call prints one line and does nothing else, apart from deleting
+// the exit-title file below.
+//
+// A session RENAMED during its life keeps its final name: the launch that ran it left that name in
+// the exit-title file for this same shell (process.ppid — the launch and this call are both direct
+// children of the shell). It is printed only when the file was written for this cwd, config home and
+// markers within the last 60 s; the file is deleted whatever is decided, and in every other case the
+// title is recomputed, so a session never renamed that switched branch shows the current branch.
+if (flags.rest.includes('--print-title')) {
+  const kept = readExitTitleFile(process.ppid, {
+    cwd: loc, configDir: flags.configDir, titlePrefix: flags.titlePrefix, titleSuffix: flags.titleSuffix,
+  });
+  process.stdout.write(kept ?? title);
+  process.exit(0);
+}
 
 // --- terminal title (OSC 2 — portable) + tab color (per terminal) -----------------------------
 function termWrite(seq) { try { if (process.stdout.isTTY) process.stdout.write(seq); } catch {} }
@@ -188,14 +211,14 @@ cli.push(...userArgs);
 // still self-colors but `cc "do X"` is left untouched. Unknown flags are treated as boolean — a
 // mis-read only skips the /color, never clobbers a real prompt.
 //
-// The three flag tables below mirror `claude --help` of Claude Code 2.1.251 (`<value>` flags, `<x...>`
+// The three flag tables below mirror `claude --help` of Claude Code 2.1.294 (`<value>` flags, `<x...>`
 // variadic flags, `[value]` optional flags); a test pins them against the checked-in help text.
 const VALUE_FLAGS = new Set([
   '--agent', '--agents', '--append-system-prompt', '--autocompact', '--debug-file', '--effort',
   '--environment', '--fallback-model', '--input-format', '--json-schema', '--max-budget-usd', '--model',
-  '-n', '--name', '--output-format', '--permission-mode', '--plugin-dir', '--plugin-url',
-  '--remote-control-session-name-prefix', '--session-id', '--setting-sources', '--settings',
-  '--system-prompt',
+  '-n', '--name', '--output-format', '--permission-mode', '--permission-prompts', '--plugin-dir',
+  '--plugin-url', '--remote-control-session-name-prefix', '--session-id', '--setting-sources',
+  '--settings', '--system-prompt', '--system-prompt-snapshot',
 ]);
 // Variadic flags (`--flag <x...>`): commander keeps taking argv tokens as list items until one starts
 // with '-'. So the scan consumes every following non-flag token — and when the argv ENDS inside such
@@ -443,7 +466,7 @@ function tileOutcome(r) {
 // NOTE: NO `detached: true`. DETACHED_PROCESS gives powershell.exe no console at all, and the console
 // host then fails to initialize and never runs the script. `windowsHide` (CREATE_NO_WINDOW) gives it
 // a HIDDEN console instead — which works. The tiler finishes within ~5s while the launcher is still
-// blocked on the claude spawnSync, so it never needs to outlive the parent; `.unref()` is enough.
+// waiting on the claude child, so it never needs to outlive the parent; `.unref()` is enough.
 const TILE_SPAWN_OPTS = { stdio: 'ignore', windowsHide: true };
 function psEncode(src) { return Buffer.from(src, 'utf16le').toString('base64'); }
 function b64utf8(s) { return Buffer.from(String(s), 'utf8').toString('base64'); }
@@ -811,13 +834,77 @@ if (pair) {
 if (tilePlan.enabled && termHwnd) { try { spawnTiler(termHwnd, tilePlan); tlog(`tiler spawned termHwnd=${termHwnd}`); } catch (e) { tlog(`tiler spawn threw ${e}`); } }
 else if (tilePlan.enabled) { tlog(`tiler NOT spawned (termHwnd=${termHwnd})`); }
 
-const res = spawnSync(claudeArgv[0], claudeArgv.slice(1), { stdio: 'inherit', env: childEnv });
+// --- launch claude and follow its session ---------------------------------------------------------
+// Only a file written by THIS launch may be read by the shell's --print-title call after it, so a
+// leftover from an earlier launch in the same shell (one that was killed before it could clean up)
+// is deleted before the child starts.
+deleteExitTitleFile(process.ppid);
 
-// Re-assert the tab title on exit. Claude Code retitles the terminal while it runs and leaves it on
-// its own title when it quits. This OSC 2 restores <name@branch> on terminals that keep a child's
-// title after the child exits (iTerm2 / most *nix terminals). Windows Terminal instead reverts to
-// the shell's own title on child exit, so there the `cc` function re-owns it via --print-title +
-// $Host.UI.RawUI.WindowTitle — this write is harmless there (same string, pwsh overwrites it next).
-if (title) termWrite(`${ESC}]2;${title}${BEL}`);
+// The child's config home: --config-dir when given, else Claude Code's default. Exact, because the
+// child env carries no CLAUDE_CONFIG_DIR without the flag (deleted above).
+const childHome = flags.configDir || join(homedir(), '.claude');
 
-process.exit(typeof res.status === 'number' ? res.status : (res.error ? 1 : 0));
+// While the child runs, a Ctrl+C that reaches the whole console group (Claude Code reads it as a key)
+// must end at most Claude Code, never this launcher: an exited launcher would leave the shell's
+// prompt and Claude Code fighting over one console. Installed before the spawn.
+process.on('SIGINT', () => {});
+
+// The asynchronous spawn (same argv, stdio and env as before) is what lets the launcher learn the
+// child's pid while the child runs. Its registry entry is read at once and then every second; the
+// last entry that reads cleanly is kept — a missing or half-written file changes nothing. Following
+// the entry, not an id the launcher chose, is what tracks a resume picked in the picker, `/clear`
+// (a new session id in the same process) and `/resume` from inside the session.
+let lastEntry = null;
+let poll = null;
+let finished = false;
+let child;
+try { child = spawn(claudeArgv[0], claudeArgv.slice(1), { stdio: 'inherit', env: childEnv }); }
+catch (e) { child = null; finishLaunch(null, e); }
+if (child) {
+  const readEntry = () => { const e = readRegistryEntry(childHome, child.pid); if (e) lastEntry = e; };
+  readEntry();
+  poll = setInterval(readEntry, 1000);
+  child.on('error', (e) => finishLaunch(null, e));
+  child.on('exit', (code) => finishLaunch(code, null));
+}
+
+function finishLaunch(code, error) {
+  if (finished) return;
+  finished = true;
+  if (poll) clearInterval(poll);
+
+  // The session's final name: its transcript's last recorded title (which catches a rename in the
+  // last second before exit), else the registry's name, sanitised and carrying this launch's markers.
+  // Not renamed — the result equals the launch title, or there is no session to read (too short for
+  // one poll, headless, an npm `claude.cmd` whose pid is not the session's) — keeps today's behaviour.
+  let exitTitle = title;
+  if (lastEntry) {
+    const file = findTranscript(childHome, lastEntry.sessionId);
+    const r = composeExitTitle({
+      transcriptName: file ? lastCustomTitle(file) : null,
+      registryName: lastEntry.name,
+      launchTitle: title, prefix: flags.titlePrefix, suffix: flags.titleSuffix,
+    });
+    if (r.renamed) {
+      exitTitle = r.title;
+      // Windows Terminal reverts a child-set title when the child exits, so the shell re-owns the tab
+      // through --print-title, which reads this file. Other platforms' terminals keep a child's title
+      // and their `cc` function never calls --print-title: the OSC 2 below is enough there.
+      if (process.platform === 'win32') {
+        writeExitTitleFile(process.ppid, {
+          title: exitTitle, cwd: loc, configDir: flags.configDir,
+          titlePrefix: flags.titlePrefix, titleSuffix: flags.titleSuffix, writtenAt: Date.now(),
+        });
+      }
+    }
+  }
+
+  // Re-assert the tab title on exit. Claude Code retitles the terminal while it runs and leaves it on
+  // its own title when it quits. This OSC 2 restores the session's title on terminals that keep a
+  // child's title after the child exits (iTerm2 / most *nix terminals). Windows Terminal instead
+  // reverts to the shell's own title on child exit, so there the `cc` function re-owns it via
+  // --print-title + $Host.UI.RawUI.WindowTitle — this write is harmless there (pwsh overwrites it next).
+  if (exitTitle) termWrite(`${ESC}]2;${exitTitle}${BEL}`);
+
+  process.exit(typeof code === 'number' ? code : (error ? 1 : 0));
+}

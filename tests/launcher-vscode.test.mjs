@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync, realpathSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync, existsSync, realpathSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn as spawnChild } from 'node:child_process';
 
 // launcher-vscode (rows H1–H6) — the cc launcher's VS Code co-launch, exercised through the
 // CC_LAUNCH_DRYRUN seam: the launcher prints its full plan (VS Code action/target/spawnOpts +
@@ -223,10 +223,13 @@ test('T6 — the tiler forms a snap group VS-Code-right-first then terminal-left
 
 test('T7 — the launcher re-asserts the tab title after Claude Code exits (name persists on the prompt)', () => {
   const src = readFileSync(launcher, 'utf8');
-  // The OSC 2 re-emit must live AFTER the claude spawnSync, not only before it.
-  const spawn = src.indexOf('spawnSync(claudeArgv[0]');
-  const lastOsc = src.lastIndexOf('ESC}]2;${title}');
-  assert.ok(spawn > 0 && lastOsc > spawn, 'an OSC 2 title write follows the claude spawnSync');
+  // The OSC 2 re-emit must live AFTER the claude spawn, not only before it. Re-pinned 2026-10-08
+  // (title/log/Chrome sprint, item 1, spec steps 1 and 4): the launch is an asynchronous `spawn`, and
+  // the exit write sits in the exit handler and carries the exit title (the session's final name when
+  // it was renamed, else the launch title).
+  const spawnAt = src.indexOf('spawn(claudeArgv[0]');
+  const lastOsc = src.lastIndexOf('ESC}]2;${exitTitle}');
+  assert.ok(spawnAt > 0 && lastOsc > spawnAt, 'an OSC 2 write of the exit title follows the claude spawn');
 });
 
 // --- launcher-owned flags (rows L1–L18) -----------------------------------------------------------
@@ -578,7 +581,7 @@ test('C11 — a real prompt after an optional flag is never clobbered', () => {
   assert.ok(!hasColor(argv));
 });
 
-test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `claude --help` (2.1.251; set unchanged since 2.1.233)', () => {
+test('C12 — OPTIONAL_VALUE_FLAGS carries exactly the optional-value flags of `claude --help` (2.1.294; set unchanged since 2.1.233)', () => {
   const src = readFileSync(launcher, 'utf8');
   const m = src.match(/const OPTIONAL_VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\);/);
   assert.ok(m, 'OPTIONAL_VALUE_FLAGS literal found');
@@ -1213,6 +1216,8 @@ function launcherCopy(listBytes) {
   const d = realpathSync(mkdtempSync(join(tmpdir(), 'ccl-copy-')));
   writeFileSync(join(d, 'claude-launch.mjs'), readFileSync(launcher));
   writeFileSync(join(d, 'session-title.mjs'), readFileSync(TITLE_MODULE));
+  // The title module imports the session-name sanitizer beside it (title/log/Chrome sprint, item 1).
+  writeFileSync(join(d, 'sanitize-name.mjs'), readFileSync(join(dirname(TITLE_MODULE), 'sanitize-name.mjs')));
   if (listBytes !== null) writeFileSync(join(d, 'session-env-scrub.json'), listBytes, 'utf8');
   return { dir: d, path: join(d, 'claude-launch.mjs'), list: join(d, 'session-env-scrub.json') };
 }
@@ -1516,4 +1521,449 @@ test('LT2 — the tab title is unchanged by the move, except the intended identi
   const empty = ltIdentity(ltIdentity(ltDir('fix-empty'), '.desk', '{}'), '.claude', { name: 'legacyname' });
   assert.equal(printTitle(launcher, empty), 'fix-empty', '.desk `{}` is an identity with no name: the chain, not the legacy file');
   assert.equal(printTitle(before, empty), 'legacyname', 'the pre-change launcher fell through to the legacy file here');
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// ET1–ET13 — the tab keeps the session's final name after Claude Code exits
+// Spec:      docs/261008-title-log-chrome-sprint-spec.md item 1 (frozen at [G1], f47e3c0)
+// Test plan: docs/261008-title-log-chrome-sprint-test-plan.md §3.1; acceptance examples AE-1.1–AE-1.11
+//
+// The launcher end to end, with a STUB in place of Claude Code. The stub is `claude.cmd` → node stub.mjs
+// (POSIX: `claude` → exec node stub.mjs), scripted by a plan file named in STUB_PLAN. It writes the
+// registry entry Claude Code writes, keyed by the pid the launcher spawned (on Windows the launcher's
+// direct child is the cmd.exe running the shim, which is the stub's parent), appends `custom-title`
+// lines to a transcript under <--config-dir>/projects/, sleeps, deletes the entry and exits.
+//
+// A FAKE SHELL stands in for the `cc` function's pwsh: a node process that runs the launcher (launch),
+// then the launcher with `--print-title` and the same arguments, and reports both. The two runs are its
+// direct children, as they are the pwsh's under `cc` — which is what the exit-title file is keyed by.
+//
+// Every row runs in its own sandbox: TEMP/TMP, USERPROFILE/HOME, the config home and the project are
+// all inside it, so no row reads or writes a real shell's exit-title file. Markers are [P] / [S].
+// The launch title in every row is `[P] projx [S]` (identity name, no git repository).
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+const ET_WIN = process.platform === 'win32';
+const ET_SKIP_WIN = ET_WIN ? false : 'Windows-only: the exit-title file is written on Windows only (spec step 3)';
+const ET_ARGS = (cfg) => ['--config-dir', cfg, '--title-prefix', '[P]', '--title-suffix', '[S]', '--no-vscode'];
+const ET_LAUNCH_TITLE = '[P] projx [S]';
+
+const STUB_SRC = String.raw`
+import { readFileSync, writeFileSync, appendFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+const plan = JSON.parse(readFileSync(process.env.STUB_PLAN, 'utf8'));
+const cfg = process.env.CLAUDE_CONFIG_DIR;
+const key = process.platform === 'win32' ? process.ppid : process.pid;
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const rec = { argv: process.argv.slice(2), key, watch: [] };
+const save = () => { if (plan.record) writeFileSync(plan.record, JSON.stringify(rec)); };
+const folder = join(cfg, 'projects', plan.folder || 'proj-folder');
+let sid = null;
+for (const st of plan.steps) {
+  const s = st.sessionId || sid;
+  if (st.op === 'register') {
+    sid = st.sessionId;
+    mkdirSync(join(cfg, 'sessions'), { recursive: true });
+    writeFileSync(join(cfg, 'sessions', key + '.json'), JSON.stringify({ pid: key, sessionId: sid, cwd: process.cwd(), name: st.name, nameSource: 'user', kind: 'interactive' }));
+  } else if (st.op === 'title') {
+    mkdirSync(folder, { recursive: true });
+    appendFileSync(join(folder, s + '.jsonl'), JSON.stringify({ type: 'custom-title', customTitle: st.name, sessionId: s }) + '\n');
+  } else if (st.op === 'line') {
+    mkdirSync(folder, { recursive: true });
+    appendFileSync(join(folder, s + '.jsonl'), JSON.stringify({ type: 'user', message: { content: 'x' }, sessionId: s }) + '\n');
+  } else if (st.op === 'sleep') {
+    sleep(st.ms);
+  } else if (st.op === 'unregister') {
+    rmSync(join(cfg, 'sessions', key + '.json'), { force: true });
+  } else if (st.op === 'watch') {
+    rec.watch.push(existsSync(process.env.STUB_WATCH || '')); save();
+  } else if (st.op === 'mark') {
+    writeFileSync(st.file, 'm');
+  } else if (st.op === 'exit') {
+    save(); process.exit(st.code);
+  }
+}
+save();
+process.exit(0);
+`;
+
+// The fake shell. argv: <launcher> <script.json>. The script is a list of actions run in order:
+//   { launch: [...args], env?, killAfterMarker? }  the launch (its tree killed once the marker exists)
+//   { printTitle: [...args] }                      `--print-title`, its stdout kept
+//   { seed: { title, configDir, titlePrefix, titleSuffix, ageMs? } }
+//                                                  a matching exit-title file for THIS shell's pid
+//   { check: true }                                whether this shell's exit-title file exists
+// It prints one JSON line: { pid, results }.
+const SHELL_SRC = String.raw`
+import { spawnSync, spawn, execFileSync } from 'node:child_process';
+import { writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+const [launcher, scriptPath] = process.argv.slice(2);
+const script = JSON.parse(readFileSync(scriptPath, 'utf8'));
+const file = join(tmpdir(), 'cc-exit-title-' + process.pid + '.json');
+const results = [];
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+for (const a of script) {
+  if (a.seed) {
+    writeFileSync(file, JSON.stringify({ title: a.seed.title, cwd: process.cwd(), configDir: a.seed.configDir, titlePrefix: a.seed.titlePrefix, titleSuffix: a.seed.titleSuffix, writtenAt: Date.now() - (a.seed.ageMs || 0) }));
+    results.push({ seeded: file, bytes: readFileSync(file, 'utf8') });
+  } else if (a.check) {
+    const exists = existsSync(file);
+    results.push({ exists, bytes: exists ? readFileSync(file, 'utf8') : null });
+  } else if (a.printTitle) {
+    const r = spawnSync(process.execPath, [launcher, ...a.printTitle, '--print-title'], { encoding: 'utf8' });
+    results.push({ title: r.stdout, status: r.status, stderr: r.stderr });
+  } else if (a.launch) {
+    const env = { ...process.env, STUB_WATCH: file, ...(a.env || {}) };
+    if (!a.killAfterMarker) {
+      const r = spawnSync(process.execPath, [launcher, ...a.launch], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+      results.push({ status: r.status, stdout: r.stdout, stderr: r.stderr });
+    } else {
+      const c = spawn(process.execPath, [launcher, ...a.launch], { env, stdio: 'ignore' });
+      const end = Date.now() + 20000;
+      while (!existsSync(a.killAfterMarker) && Date.now() < end) sleep(20);
+      try { execFileSync('taskkill', ['/T', '/F', '/PID', String(c.pid)], { stdio: 'ignore' }); } catch {}
+      sleep(300);
+      results.push({ killed: true, markerSeen: existsSync(a.killAfterMarker) });
+    }
+  }
+}
+process.stdout.write(JSON.stringify({ pid: process.pid, results }));
+process.exit(0);
+`;
+
+function etSandbox() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ccl-et-')));
+  const sb = { root, shims: join(root, 'shims'), cfg: join(root, 'cfg'), tmp: join(root, 'tmp'), home: join(root, 'home'), proj: join(root, 'proj'), n: 0 };
+  for (const d of [sb.shims, sb.cfg, sb.tmp, sb.home, sb.proj]) mkdirSync(d, { recursive: true });
+  mkdirSync(join(sb.proj, '.desk'), { recursive: true });
+  writeFileSync(join(sb.proj, '.desk', 'session-identity.json'), JSON.stringify({ name: 'projx' }), 'utf8');
+  writeFileSync(join(sb.shims, 'stub.mjs'), STUB_SRC, 'utf8');
+  writeFileSync(join(sb.root, 'shell.mjs'), SHELL_SRC, 'utf8');
+  writeFileSync(join(sb.shims, 'claude.cmd'), `@"${process.execPath}" "%~dp0stub.mjs" %*\r\n`, 'utf8');
+  writeFileSync(join(sb.shims, 'claude'), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/stub.mjs" "$@"\n`, 'utf8');
+  try { chmodSync(join(sb.shims, 'claude'), 0o755); } catch {}
+  writeFileSync(join(sb.shims, 'code.cmd'), '@echo off\r\nexit /b 0\r\n', 'utf8');
+  writeFileSync(join(sb.shims, 'code'), '#!/bin/sh\nexit 0\n', 'utf8');
+  try { chmodSync(join(sb.shims, 'code'), 0o755); } catch {}
+  return sb;
+}
+function etEnv(sb, extra = {}) {
+  return {
+    PATH: sb.shims, PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    USERPROFILE: sb.home, HOME: sb.home, TEMP: sb.tmp, TMP: sb.tmp, TMPDIR: sb.tmp,
+    GIT_CEILING_DIRECTORIES: sb.root, GIT_CONFIG_NOSYSTEM: '1',
+    ...(ET_WIN ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
+    ...extra,
+  };
+}
+function etPlan(sb, steps) {
+  const p = join(sb.root, `plan-${++sb.n}.json`);
+  const record = join(sb.root, `record-${sb.n}.json`);
+  writeFileSync(p, JSON.stringify({ steps, record }), 'utf8');
+  return { path: p, record };
+}
+function etScript(sb, script) {
+  const sp = join(sb.root, `script-${++sb.n}.json`);
+  writeFileSync(sp, JSON.stringify(script), 'utf8');
+  return sp;
+}
+// One fake shell over a script; returns { pid, results }.
+function etShell(sb, script, env = {}) {
+  const r = spawnSync(process.execPath, [join(sb.root, 'shell.mjs'), launcher, etScript(sb, script)], { cwd: sb.proj, env: etEnv(sb, env), encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 0, `the fake shell exited ${r.status}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+function etShellAsync(sb, script, env = {}) {
+  const sp = etScript(sb, script);
+  return new Promise((res, rej) => {
+    const c = spawnChild(process.execPath, [join(sb.root, 'shell.mjs'), launcher, sp], { cwd: sb.proj, env: etEnv(sb, env) });
+    let out = '', err = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.stderr.on('data', (d) => { err += d; });
+    c.on('close', (code) => (code === 0 ? res(JSON.parse(out)) : rej(new Error(`fake shell exited ${code}: ${err}`))));
+  });
+}
+// A launch + `--print-title` for one stub plan, in a fresh fake shell.
+function etRun(sb, steps, { env = {}, args = ET_ARGS(sb.cfg) } = {}) {
+  const plan = etPlan(sb, steps);
+  const out = etShell(sb, [{ launch: args, env: { STUB_PLAN: plan.path, ...env } }, { printTitle: args }], env);
+  let record = null;
+  try { record = JSON.parse(readFileSync(plan.record, 'utf8')); } catch { /* the stub never ran (a spawn error) */ }
+  return { launch: out.results[0], title: out.results[1].title, record, shellPid: out.pid };
+}
+// Tear the sandbox down; returns the exit-title files left in its temp folder (expected: none).
+function etTeardown(sb) {
+  const left = readdirSync(sb.tmp).filter((f) => /^cc-exit-title-/.test(f));
+  // A killed launcher's stub (ET7) can hold the project folder as its cwd for a moment after the kill.
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    try { rmSync(sb.root, { recursive: true, force: true }); break; } catch (e) {
+      if (Date.now() > deadline) throw e;
+      const until = Date.now() + 200;
+      while (Date.now() < until) { /* no async seam in a sync teardown — a short spin */ }
+    }
+  }
+  return left;
+}
+
+test('ET1 — a renamed session: the fake shell\'s --print-title prints the final name; the file is gone; no session id was passed (AE-1.1, AE-1.5)', { skip: ET_SKIP_WIN }, () => {
+  // Red if: the poll never runs, or --print-title ignores the file.
+  const sb = etSandbox();
+  try {
+    const r = etRun(sb, [
+      { op: 'register', sessionId: 'sid-et1', name: ET_LAUNCH_TITLE },
+      { op: 'title', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1500 },
+      { op: 'title', name: '[P] beta [S]' },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    assert.equal(r.launch.status, 0, `the launch exited ${r.launch.status}: ${r.launch.stderr}`);
+    assert.equal(r.title, '[P] beta [S]', 'the tab keeps the session\'s final name');
+    assert.ok(r.record, 'the stub ran');
+    assert.ok(!r.record.argv.some((a) => /^--session-id/.test(a)), `the launcher passed no session id (argv: ${JSON.stringify(r.record.argv)})`);
+  } finally { assert.deepEqual(etTeardown(sb), [], 'no exit-title file is left behind'); }
+});
+
+test('ET1b — the session id changes mid-run (/clear, /resume): the title follows the session running at exit (AE-1.8)', { skip: ET_SKIP_WIN }, () => {
+  // Red if: the launcher keeps the first id.
+  const sb = etSandbox();
+  try {
+    const withTitle = etRun(sb, [
+      { op: 'register', sessionId: 'sid-first', name: '[P] alpha [S]' },
+      { op: 'title', name: '[P] alpha [S]' },
+      { op: 'sleep', ms: 1300 },
+      { op: 'register', sessionId: 'sid-second', name: '[P] gamma [S]' },
+      { op: 'title', sessionId: 'sid-second', name: '[P] gamma [S]' },
+      { op: 'sleep', ms: 1300 },
+      { op: 'title', sessionId: 'sid-first', name: '[P] LATE-FIRST [S]' },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    assert.equal(withTitle.title, '[P] gamma [S]', 'the second session\'s name; the first transcript\'s later rename is ignored');
+
+    const noTitle = etRun(sb, [
+      { op: 'register', sessionId: 'sid-third', name: '[P] alpha [S]' },
+      { op: 'title', name: '[P] alpha [S]' },
+      { op: 'sleep', ms: 1300 },
+      { op: 'register', sessionId: 'sid-fourth', name: ET_LAUNCH_TITLE },
+      { op: 'line', sessionId: 'sid-fourth' },
+      { op: 'sleep', ms: 1300 },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    assert.equal(noTitle.title, ET_LAUNCH_TITLE, 'the session at exit holds only the launch name → the launch title, never the pre-clear name');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET2 — never renamed: the launch title, byte-equal to a bare --print-title with no file (AE-1.4)', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    const r = etRun(sb, [
+      { op: 'register', sessionId: 'sid-et2', name: ET_LAUNCH_TITLE },
+      { op: 'title', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1300 },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    const bare = etShell(sb, [{ printTitle: ET_ARGS(sb.cfg) }]).results[0].title;
+    assert.equal(bare, ET_LAUNCH_TITLE, 'the bare --print-title is the launch title');
+    assert.equal(r.title, bare, 'byte-equal');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET3 — a rename in the last second: the transcript read after exit catches it (AE-1.7)', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    const r = etRun(sb, [
+      { op: 'register', sessionId: 'sid-et3', name: ET_LAUNCH_TITLE },
+      { op: 'title', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1300 },
+      { op: 'unregister' },
+      { op: 'title', name: 'late' },
+      { op: 'exit', code: 0 },
+    ]);
+    assert.equal(r.title, '[P] late [S]');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET4 — too short for one poll: no registry entry ever → the launch title', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    const r = etRun(sb, [{ op: 'title', sessionId: 'sid-et4', name: 'never-seen' }, { op: 'exit', code: 0 }]);
+    assert.equal(r.title, ET_LAUNCH_TITLE);
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET5 — two fake shells together, same cwd and config home, only the first renames: neither shows the other\'s name (AE-1.6)', { skip: ET_SKIP_WIN }, async () => {
+  // Red if: the file is keyed by anything the two share (cwd, project folder), or the newest transcript wins.
+  const sb = etSandbox();
+  try {
+    const a = etPlan(sb, [
+      { op: 'register', sessionId: 'sid-alpha', name: ET_LAUNCH_TITLE },
+      { op: 'title', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1300 },
+      { op: 'title', name: 'alpha' },
+      { op: 'sleep', ms: 400 },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    const b = etPlan(sb, [
+      { op: 'register', sessionId: 'sid-bravo', name: ET_LAUNCH_TITLE },
+      { op: 'title', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 2200 },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    const args = ET_ARGS(sb.cfg);
+    const [ra, rb] = await Promise.all([
+      etShellAsync(sb, [{ launch: args, env: { STUB_PLAN: a.path } }, { printTitle: args }]),
+      etShellAsync(sb, [{ launch: args, env: { STUB_PLAN: b.path } }, { printTitle: args }]),
+    ]);
+    assert.notEqual(ra.pid, rb.pid);
+    assert.equal(ra.results[1].title, '[P] alpha [S]', 'tab A: its own name');
+    assert.equal(rb.results[1].title, ET_LAUNCH_TITLE, 'tab B: the launch title, not tab A\'s name');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET6 — a stale file for this shell is deleted at launch start, before Claude Code runs (AE-1.9)', { skip: ET_SKIP_WIN }, () => {
+  // Red if: the delete happens after the spawn's exit, or not at all.
+  const sb = etSandbox();
+  try {
+    const plan = etPlan(sb, [{ op: 'watch' }, { op: 'sleep', ms: 2000 }, { op: 'watch' }, { op: 'exit', code: 0 }]);
+    const args = ET_ARGS(sb.cfg);
+    const out = etShell(sb, [
+      { seed: { title: 'STALE', configDir: sb.cfg, titlePrefix: '[P]', titleSuffix: '[S]' } },
+      { launch: args, env: { STUB_PLAN: plan.path } },
+      { printTitle: args },
+    ]);
+    const rec = JSON.parse(readFileSync(plan.record, 'utf8'));
+    assert.deepEqual(rec.watch, [false, false], 'while Claude Code runs, the stale file is already gone');
+    assert.equal(out.results[2].title, ET_LAUNCH_TITLE, 'the tab never shows the stale name');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET7 — a launch killed while Claude Code runs, after an earlier launch left `alpha`: --print-title prints the launch title (AE-1.9)', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    const args = ET_ARGS(sb.cfg);
+    const first = etPlan(sb, [
+      { op: 'register', sessionId: 'sid-a7', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1300 },
+      { op: 'title', name: 'alpha' },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+    const marker = join(sb.root, 'sleeping');
+    const second = etPlan(sb, [
+      { op: 'register', sessionId: 'sid-b7', name: ET_LAUNCH_TITLE },
+      { op: 'mark', file: marker },
+      { op: 'sleep', ms: 8000 },
+      { op: 'exit', code: 0 },
+    ]);
+    const out = etShell(sb, [
+      { launch: args, env: { STUB_PLAN: first.path } },
+      { check: true },
+      { launch: args, env: { STUB_PLAN: second.path }, killAfterMarker: marker },
+      { printTitle: args },
+    ]);
+    assert.equal(out.results[1].exists, true, 'precondition: the first (renamed) launch left its file');
+    assert.equal(out.results[2].markerSeen, true, 'the second launch was killed while its Claude Code ran');
+    assert.equal(out.results[3].title, ET_LAUNCH_TITLE, 'never `alpha`');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET8 — a 100-code-point name with an embedded escape: 80 code points ending in …, no control byte (AE-1.10)', { skip: ET_SKIP_WIN }, () => {
+  // Plain `cc` (no markers), so the printed title is the sanitised name alone.
+  const sb = etSandbox();
+  try {
+    const name = 'n\x1b[31m' + 'ș'.repeat(99);
+    const r = etRun(sb, [
+      { op: 'register', sessionId: 'sid-et8', name: 'projx' },
+      { op: 'sleep', ms: 1300 },
+      { op: 'title', name },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ], { args: ['--config-dir', sb.cfg, '--no-vscode'] });
+    const cps = Array.from(r.title);
+    assert.equal(cps.length, 80, `80 code points (got ${cps.length}: ${JSON.stringify(r.title)})`);
+    assert.equal(cps.at(-1), '…');
+    assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(r.title), 'no control byte');
+    assert.ok(r.title.startsWith('nșș'), 'the escape is stripped, the name kept');
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET9 — exit codes: the child\'s code; a spawn error → 1 and the launch title; 0 → 0', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    assert.equal(etRun(sb, [{ op: 'exit', code: 7 }]).launch.status, 7, 'the stub\'s 7 is the launcher\'s 7');
+    assert.equal(etRun(sb, [{ op: 'exit', code: 0 }]).launch.status, 0);
+    const broken = etRun(sb, [{ op: 'exit', code: 0 }], { env: { ComSpec: join(sb.root, 'no-such-cmd.exe') } });
+    assert.equal(broken.launch.status, 1, `a spawn error exits 1 (got ${broken.launch.status}): ${broken.launch.stderr}`);
+    assert.ok(!/Unhandled|uncaught/i.test(broken.launch.stderr), `no unhandled crash: ${broken.launch.stderr}`);
+    assert.equal(broken.title, ET_LAUNCH_TITLE);
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET10 — pair mode and the dry-run seam neither write nor delete the exit-title file', { skip: ET_SKIP_WIN }, () => {
+  const sb = etSandbox();
+  try {
+    const fake = join(sb.root, 'tile.json');
+    writeFileSync(fake, JSON.stringify({ v: 1, terminal: { found: true, placed: true, snapped: true }, vscode: { found: true, placed: true, snapped: true }, foreground: 'terminal' }), 'utf8');
+    for (const [what, launchArgs, env] of [
+      ['pair mode', ['--pair-vscode'], { CC_TILE_FAKE_RESULT: fake }],
+      ['dry run', ET_ARGS(sb.cfg), { CC_LAUNCH_DRYRUN: '1' }],
+    ]) {
+      const out = etShell(sb, [
+        { seed: { title: 'SEEDED', configDir: sb.cfg, titlePrefix: '[P]', titleSuffix: '[S]' } },
+        { launch: launchArgs, env },
+        { check: true },
+      ]);
+      assert.equal(out.results[1].status, 0, `${what}: exited ${out.results[1].status}: ${out.results[1].stderr}`);
+      assert.equal(out.results[2].exists, true, `${what}: the seeded file survives`);
+      assert.equal(out.results[2].bytes, out.results[0].bytes, `${what}: byte-identical`);
+      rmSync(out.results[0].seeded, { force: true });
+    }
+  } finally { assert.deepEqual(etTeardown(sb), []); }
+});
+
+test('ET11 — POSIX: a renamed stub session leaves no exit-title file (macOS and Linux write none)', { skip: ET_WIN ? 'POSIX-only' : false }, () => {
+  const sb = etSandbox();
+  try {
+    etRun(sb, [
+      { op: 'register', sessionId: 'sid-et11', name: ET_LAUNCH_TITLE },
+      { op: 'sleep', ms: 1300 },
+      { op: 'title', name: 'beta' },
+      { op: 'unregister' },
+      { op: 'exit', code: 0 },
+    ]);
+  } finally { assert.deepEqual(etTeardown(sb), [], 'no cc-exit-title-* in the sandbox temp'); }
+});
+
+test('ET12 — nothing leaks into the real TEMP: no exit-title file for this process, and --print-title from this process still agrees with the module', () => {
+  // L6, R6 and LT1 call --print-title as direct children of this test process, in the real TEMP. They
+  // stay correct only while no launch ever writes a file keyed by this process's pid there.
+  assert.ok(!existsSync(join(tmpdir(), `cc-exit-title-${process.pid}.json`)), 'no exit-title file for this test process in the real TEMP');
+  const dir = ltIdentity(ltDir('et12'), '.desk', { name: 'et12name' });
+  assert.equal(printTitle(launcher, dir, ['--title-prefix', '[P]', '--title-suffix', '[S]']), '[P] et12name [S]');
+});
+
+test('ET13 — code view: SIGINT listener before the spawn; async spawn; the exit OSC 2 and the file take the exit title; file gated on win32; exit-code mapping', () => {
+  // The exit OSC 2 write is gated on a TTY, which no offline run has, so its value is checked here.
+  const src = readFileSync(launcher, 'utf8');
+  const sigint = src.search(/process\.on\(\s*'SIGINT'/);
+  const spawnAt = src.indexOf('spawn(claudeArgv[0]');
+  assert.ok(sigint > 0 && spawnAt > sigint, 'a SIGINT listener is installed before Claude Code is spawned');
+  assert.ok(!/spawnSync\(\s*claudeArgv\[0\]/.test(src), 'Claude Code is not started with spawnSync');
+  assert.match(src, /\]2;\$\{exitTitle\}/, 'the exit OSC 2 write carries the exit title');
+  const fileAt = src.indexOf('writeExitTitleFile(process.ppid');
+  assert.ok(fileAt > 0, 'the launcher writes the exit-title file keyed by its ppid');
+  assert.match(src.slice(fileAt, fileAt + 300), /title:\s*exitTitle/, 'the file carries the exit title');
+  const gate = src.lastIndexOf("process.platform === 'win32'", fileAt);
+  assert.ok(gate > 0 && fileAt - gate < 400, 'the file write sits behind a win32 check');
+  assert.match(src, /process\.exit\(typeof code === 'number' \? code : \(error \? 1 : 0\)\)/, 'exit code: the child\'s, else 1 on an error, else 0');
+  const del = src.indexOf('deleteExitTitleFile(process.ppid)');
+  assert.ok(del > 0 && del < spawnAt, 'the stale file is deleted before the spawn');
 });

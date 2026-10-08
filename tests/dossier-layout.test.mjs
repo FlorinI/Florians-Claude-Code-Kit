@@ -523,8 +523,9 @@ test('16 — at cap: the verdict drops the window label and the hedge survives i
 const CAVEATS = [
   '⚠ leg $ suspect: base far below list (resumed without history?)',
   '⚠ $ excludes fast premium (understated)',
-  '⚠ $-gates Fable/Opus-calibrated',
   '⚠ serving:',
+  // `⚠ $-gates Fable/Opus-calibrated` is hidden since 2026-10-08 (Florian: "I don't need that
+  // warning"; statusline.mjs SHOW_DOLLAR_GATE_CALIBRATION_CHIP), so it no longer fires anywhere.
   // `⚠ tier-mix ` was the fifth. Retired 2026-09-06 (bsl6.1.8.0): it named a condition with no
   // consequence — the $ split it sat beside is tier-weighted either way — and with fable sub-agents
   // it fired on every working session. Not listed here as a must-never-appear string: this list's
@@ -599,7 +600,7 @@ test('20 — the crowded flags row keeps every chip whole (A14)', () => {
     assert.ok(flags.includes(want), `${f}: ${want} missing from a row built to carry all of them: ${flags}`);
   }
   assert.ok(flags.includes('⚠ $ excludes fast premium (understated)'), `${f}: the fast caveat, in full`);
-  assert.ok(flags.includes('⚠ $-gates Fable/Opus-calibrated'), `${f}: the gates caveat, in full`);
+  assert.ok(!flags.includes('$-gates'), `${f}: the gates caveat is hidden`);
   assert.ok(!flags.includes('…'), `${f}: the right column never truncates — no caveat may be abbreviated (A14)`);
 });
 

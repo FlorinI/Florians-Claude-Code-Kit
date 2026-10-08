@@ -24,7 +24,7 @@ import { WriteQuotaFile } from './quota-file.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.13.0';
+export const SL_VERSION = '6.1.13.1';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -1500,7 +1500,9 @@ if (legPricingSuspect && perLegCostArr.length > 0) {
 if (fastMode && !isNil(costUsd)) flagChips.push(DarkGray('⚠ $ excludes fast premium (understated)'));
 // temporary — removed by Stage B (dollar-gate re-anchor): the $ color bands / verdict floors are
 // calibrated on Fable/Opus headline pricing, so on a sonnet/haiku main the dollars gate too hot.
-if (!isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
+// Hidden 2026-10-08 at Florian's request ("I don't need that warning"); flip to show it again.
+const SHOW_DOLLAR_GATE_CALIBRATION_CHIP = false;
+if (SHOW_DOLLAR_GATE_CALIBRATION_CHIP && !isNil(costUsd) && (mainTier === 'sonnet' || mainTier === 'haiku')) {
   flagChips.push(DarkGray('⚠ $-gates Fable/Opus-calibrated'));
 }
 if (tierMismatch) flagChips.push(DarkGray('⚠ serving:' + tierMismatch.serving));

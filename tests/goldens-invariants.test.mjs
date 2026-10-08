@@ -232,9 +232,11 @@ test('E3 — zero tax: no model clause at all', () => {
 });
 
 // ---- G: gap-week guard ----------------------------------------------------------------------------
-test('G1 — sonnet/haiku main: dim chip on the cost cluster + COST_GATES_NOTE emit', () => {
+// The status-line chip is hidden since 2026-10-08 (statusline.mjs SHOW_DOLLAR_GATE_CALIBRATION_CHIP);
+// the fact-sheet emit is unchanged.
+test('G1 — sonnet/haiku main: no status-line chip (hidden), COST_GATES_NOTE still emitted', () => {
   for (const f of ['gapweek-sonnet', 'small-young', 'no-transcript']) {
-    assert.match(stdout(f), /⚠ \$-gates Fable\/Opus-calibrated/, `${f}: chip missing`);
+    assert.ok(!stdout(f).includes('$-gates'), `${f}: the hidden chip must not render`);
     assert.match(facts(f), /COST_GATES_NOTE: \$ thresholds calibrated for Fable\/Opus pricing/, `${f}: emit missing`);
   }
 });

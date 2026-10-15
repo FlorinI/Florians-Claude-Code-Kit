@@ -594,13 +594,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.13 (PATCH: the backlog-clear sprint — the cold tax counts on the dollar gate, warning rungs project their end, the stamp clamp)', () => {
+test('D4-5 — SL_VERSION is 6.1.14 (PATCH: the `auto` compaction window on native-1M models and the compaction point follow Claude Code 2.1.299)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.13',
-    'X.Y.Z is 6.1.13 (backlog-clear spec §15, ruled at §18.3): the cold tax now counts a leg exactly when the prospective dollar gate would have warned about it, yellow and orange quota rows gain their projected end, and a higher quota reading can no longer carry its row\'s date backwards. Not X: which legs a tally counts changes, not what a displayed number means, and no calibration sample becomes incomparable. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.14',
+    'X.Y.Z is 6.1.14 (auto-compact-1m spec, item 2): the `auto` compaction window on a native-1M model follows Claude Code 2.1.299 — the full window, not ~500k — and the compaction point is the window − 33k, not × 0.95, for every source; a behaviour-affecting fix. Not X: what the wall distance means is unchanged and no calibration era opens. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would
@@ -1010,4 +1010,121 @@ test('CL-S — COLD_LEAD_SHARE is defined in handover-facts.mjs, and no doc or c
     });
   }
   assert.deepEqual(hits, [], 'a doc quotes COLD_LEAD_SHARE\'s value — name the constant and its file instead');
+});
+
+// ---- ACW-1 — no live doc still puts the auto-compact wall at 95% (2026-10-14 sprint, finding F1) --
+// Spec: .claude/plans/2026-10-14-auto-compact-1m-spec.md. Claude Code compacts at window − 33000
+// (20k summary reserve + 13k buffer), not at ×0.95 of the window; the status line moved with the
+// re-freeze at a58bb43. A doc that still says "95%" teaches the old wall, which on a 1M window is
+// 17k too early. The unit is a SENTENCE: wrapped prose is joined within its paragraph, while list
+// items, table rows, headings and fenced lines each stand alone, so two neighbouring bullets cannot
+// combine into a false hit. Dated records (`docs/YYMMDD-*`) keep their own claims, per the project's
+// rule for point-in-time artifacts, and are not swept. A living doc states the current rule only —
+// "replacing ×0.95" is history and trips this row too.
+const ACW_TOPIC = /auto[- ]?compact|to-compact|\bcompaction\b|\bCompactAt\b|\bwall\b/i;
+const ACW_95 = /(?<![\d.])95\s?(?:%|percent)|(?<![\d.])0\.95(?!\d)/i;
+function wall95Sentences(text) {
+  const out = [];
+  const lines = text.split(/\r?\n/);
+  let unit = null; // { start, parts: [[lineNo, text]] }
+  let fenced = false;
+  const flush = () => {
+    if (!unit) return;
+    let joined = '';
+    const at = []; // char offset in `joined` → line number
+    for (const [n, t] of unit.parts) { at.push([joined.length, n]); joined += (joined ? ' ' : '') + t.trim(); }
+    let off = 0;
+    for (const s of joined.split(/(?<=[.!?])\s+(?=[A-Z`*(\["])/)) {
+      const i = joined.indexOf(s, off); off = i + s.length;
+      if (ACW_TOPIC.test(s) && ACW_95.test(s)) out.push([at.filter(([o]) => o <= i).pop()[1], s]);
+    }
+    unit = null;
+  };
+  lines.forEach((l, i) => {
+    const n = i + 1;
+    if (/^\s*(```|~~~)/.test(l)) { flush(); fenced = !fenced; return; }
+    const standalone = fenced || /^\s*([-*+]\s|\d+[.)]\s|\||#|>)/.test(l);
+    if (!l.trim()) { flush(); return; }
+    if (standalone) { flush(); unit = { parts: [[n, l]] }; if (fenced || /^\s*(\||#)/.test(l)) flush(); return; }
+    if (!unit) unit = { parts: [] };
+    unit.parts.push([n, l]);
+  });
+  flush();
+  return out;
+}
+
+test('ACW-1 — no live doc or command pairs the auto-compact wall with 95% / ×0.95', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
+  const files = liveSurfaceFiles(['docs', 'home/commands', '.claude/commands', 'SPEC.md', 'watch/dependency-surface.md'])
+    .filter((f) => f.endsWith('.md') && !/^docs[\\/]\d{6}-/.test(f));
+  for (const must of ['docs/long-context-degradation-2026.md', 'docs/status-line.md', 'SPEC.md', 'watch/dependency-surface.md']) {
+    assert.ok(files.some((f) => f.replace(/\\/g, '/') === must), `the walk missed ${must} — the sweep is not running`);
+  }
+  const hits = [];
+  for (const f of files) {
+    for (const [n, s] of wall95Sentences(readFileSync(join(repo, f), 'utf8'))) hits.push(`${f}:${n} ${s.slice(0, 140)}`);
+  }
+  assert.deepEqual(hits, [],
+    `the wall is window − 33k, not 95% of the window — these sentences still state the old trigger:\n  ${hits.join('\n  ')}`);
+});
+
+test('ACW-1b — the sentence rule itself: stale wall statements are caught, unrelated 95s are not', () => {
+  const caught = (t) => wall95Sentences(t).length > 0;
+  for (const bad of [
+    'Plus a fill-aware overlay. `to-compact` already covers the hard 95% auto-compact wall.',
+    '**Where the wall\'s window comes from.** The distance is `95% of the effective auto-compact window − used`.',
+    '- `home/statusline.mjs:144-150` — `CompactWindow(ctxSize)` / `CompactAt` (×0.95)',
+    'Claude Code fires its compaction\nat 95 % of the window, so plan for it.',
+    'The wall sits at x0.95 of the window.',
+  ]) assert.ok(caught(bad), `stale wall statement not caught: ${bad}`);
+  for (const ok of [
+    'Under-pace at 95% is genuinely fine. The auto-compact wall sits 33k below the window.',
+    'Consensus "compact at ~60%, not 95%" matches our fill-cliff.',
+    '- the auto-compact wall is window − 33000\n- quota at 95% turns the chip red',
+    '| auto-compact | 967k |\n| fill | 95% |',
+    'A cost of $10.95 per wall-clock hour.',
+  ]) assert.ok(!caught(ok), `unrelated 95 flagged: ${JSON.stringify(ok)}`);
+});
+
+// ---- ACW-2 — the prose that steers the composer and the grader names the wall (2026-10-14 sprint,
+// spec item 8, finding F1). The fact sheet's HEADLINE_BASIS can name quality (a tie: red band and
+// the wall both at level 3) while YOURCALL_BASIS names the wall; a composer that follows the headline
+// driver swaps the wall out of the your-call line (F1). The composer instruction must keep the
+// your-call reason, the grading rubric must accept a wall-led your-call, and no live doc may still
+// describe the check as cost vs quality alone.
+test('ACW-2a — handover-check.md: the YOUR CALL instruction keeps YOURCALL_BASIS\'s reason in the lead, never the HEADLINE_BASIS driver', () => {
+  const yc = src('home/commands/handover-check.md').split(/\r?\n/).find((l) => /^\s*• YOUR CALL\b/.test(l));
+  assert.ok(yc, 'the subagent prompt has a "• YOUR CALL" bullet');
+  assert.match(yc, /YOURCALL_BASIS gives is the lead reason/, `YOURCALL_BASIS's reason leads the line: ${yc}`);
+  assert.match(yc, /never replace it with the headline's driver/, `the headline driver never replaces it: ${yc}`);
+  assert.match(yc, /at the auto-compact wall the reason is the wall/, `the wall case is named: ${yc}`);
+});
+
+test('ACW-2b — interpret-statusline.md: the Your-call rubric names the auto-compact wall, so a wall-led call is not graded Off', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the project-local command does not ship' : false }, () => {
+  const lines = src('.claude/commands/interpret-statusline.md').split(/\r?\n/);
+  const rubric = lines.find((l) => l.startsWith('- **→ Your call**'));
+  assert.ok(rubric, 'the rubric has a "→ Your call" bullet');
+  assert.match(rubric, /auto-compact wall/, `the Your-call rubric names the wall: ${rubric}`);
+  assert.match(rubric, /the wall is a third input and leads the call/, `the wall leads the call near/at/past it: ${rubric}`);
+  assert.match(rubric, /wall-led call that leaves cost and quality aside is correct/, `a wall-only call is accepted: ${rubric}`);
+  const off = lines.find((l) => l.startsWith('- **✗ Off**'));
+  assert.ok(off, 'the rubric has a "✗ Off" bullet');
+  // "doesn't match the two axes" alone would grade a wall-led call Off; the wall clause must sit beside it.
+  if (/two axes/.test(off)) assert.match(off, /two axes \(or, near or past the wall, one that doesn't name the wall/, `the Off criterion names the wall: ${off}`);
+});
+
+test('ACW-2c — no live doc or command describes the handover check as "cost vs quality" alone', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {
+  // Dated records — `docs/YYMMDD-*` and a basename ending in its date (`…-2026-05.md`, the May 2026
+  // field survey, which describes the kit as it was then) — keep their own claims and are not swept.
+  const files = liveSurfaceFiles(['docs', 'home/commands', '.claude/commands', 'SPEC.md', 'CLAUDE.md'])
+    .filter((f) => f.endsWith('.md') && !/^docs[\\/]\d{6}-/.test(f) && !/-\d{4}-\d{2}(-\d{2})?\.md$/.test(f));
+  for (const must of ['home/commands/handover-check.md', '.claude/commands/interpret-statusline.md', 'docs/status-line.md', 'SPEC.md']) {
+    assert.ok(files.some((f) => f.replace(/\\/g, '/') === must), `the walk missed ${must} — the sweep is not running`);
+  }
+  const COST_VS_QUALITY = /cost\s*(?:vs\.?|versus)\s*quality|cost-vs-quality/i;
+  const hits = [];
+  for (const f of files) {
+    readFileSync(join(repo, f), 'utf8').split(/\r?\n/).forEach((l, i) => { if (COST_VS_QUALITY.test(l)) hits.push(`${f}:${i + 1} ${l.trim().slice(0, 140)}`); });
+  }
+  assert.deepEqual(hits, [],
+    `the headline and your-call weigh cost, quality and the auto-compact wall — these lines still say cost vs quality:\n  ${hits.join('\n  ')}`);
 });

@@ -1,7 +1,7 @@
 IDENTITY: **Reading** `(no repo)` · `cw-env-l` · Opus 4.8 (1M context) · `51k` ctx · rendered `0s` ago
 STALE: no
-HEADLINE_DIFF: + Plenty of room
-HEADLINE_BASIS: driver=both; quality=green (lvl 0); cost=next null (lvl 0)
+HEADLINE_DIFF: - Wind down soon
+HEADLINE_BASIS: driver=wall; quality=green (lvl 0); cost=next null (lvl 0); wall=near (lvl 2)
 COST_LEAD: each leg `~$?`
 COST_TOTAL: `$4.75` total
 COST_RECENT: (none)
@@ -12,10 +12,10 @@ COST_COLD_LEAD: (none)
 COLD: (omit)
 WARM_REWRITE_TAX: (none)
 QUALITY_LEAD: `51k`, green band — sharp
-QUALITY_SECONDARY: `5%` fill — well under the ~60% cliff
-QUALITY_HEADROOM: `44k` to compact
+QUALITY_SECONDARY: `5%` fill — near the auto-compact wall
+QUALITY_HEADROOM: `16k` to compact
 QUALITY_CAVEAT: stays sharp on recent work; only digging up details buried deep in a long history gets unreliable
 ACTIVITY: (omit)
 TRAJECTORY: flat, range `?`
-YOURCALL_POLARITY: +
-YOURCALL_BASIS: both axes fine — room to continue on recent context
+YOURCALL_POLARITY: -
+YOURCALL_BASIS: the auto-compact wall is near (`16k` to compact) — hand over / /clear before it compacts

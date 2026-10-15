@@ -28,4 +28,5 @@ the pickup check, and its start-up line says pickup is off, so the note stays pe
 ## /handover-check
 
 `/handover-check` reads the current status-line snapshot and gives a plain-language verdict on
-whether it's time to hand over — weighing cost-per-leg against context fill and quality signals.
+whether it's time to hand over — weighing cost-per-leg, context fill and quality signals, and the
+distance to the auto-compact wall.

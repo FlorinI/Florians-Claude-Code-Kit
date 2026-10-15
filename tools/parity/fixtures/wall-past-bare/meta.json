@@ -1,0 +1,4 @@
+{
+  "note": "1M window on `auto` at 975k used, no transcript, and a model label that does not say 1M: the estimated window follows the reported window size, not the label, so the session is 8k past the compaction point (1M − 33k = 967k) and the line reads `wall ~NOW` in red bold (the second past-the-wall fixture of the 2026-10-14 auto-compact-1m spec, A3b).",
+  "nowEpoch": 1781750000
+}

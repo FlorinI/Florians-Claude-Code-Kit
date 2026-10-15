@@ -24,7 +24,7 @@ import { WriteQuotaFile } from './quota-file.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.13.1';
+export const SL_VERSION = '6.1.14.1';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -86,8 +86,8 @@ function CacheWriteUnits(cw1h, cw5m, cwTotal) {
   return (cw1h + cw5m) > 0 ? cw1h * M_CACHE_WRITE_1H + cw5m * M_CACHE_WRITE_5M : cwTotal * M_CACHE_WRITE_5M;
 }
 
-// Auto-compact fires at `min(auto-compact window, model window)`. The window is NOT in the status-line
-// payload; we resolve it the way CC does. CC's resolver (function `KV`, extracted from the running
+// Auto-compact fires 33k short of `min(auto-compact window, model window)` (see `CompactPoint` below).
+// The window is NOT in the status-line payload; we resolve it the way CC does. CC's resolver (function `KV`, extracted from the running
 // binary 2.1.233 on 2026-08-16), first hit wins:
 //
 //   1. env CLAUDE_CODE_AUTO_COMPACT_WINDOW — when the string is non-empty. Parsed by CC's `Tg`:
@@ -97,18 +97,23 @@ function CacheWriteUnits(cw1h, cw5m, cwTotal) {
 //      > 1e6 → CAPPED to 1e6; then FLOORED at 1e5 (`Math.max(1e5, n)`), so `500k` → 500 → 100k.
 //      `/autocompact` reports "CLAUDE_CODE_AUTO_COMPACT_WINDOW is set and takes precedence" — the
 //      setting is ignored while the env var is valid.
-//   2. settings `autoCompactWindow` (USER settings.json; /autocompact PERSISTS the user's choice
-//      there the instant it changes — authoritative, no observer-effect). Read through zod
+//   2. settings `autoCompactWindow` (USER settings.json, top-level key — authoritative, no
+//      observer-effect; `/autocompact` on 2.1.299 writes the per-model key instead, see below). Read through zod
 //      `.int().min(1e5).max(1e6).optional().catch(undefined)`: an integer in [1e5, 1e6] is used;
 //      ANYTHING else (non-integer, string, out of range, `null`, absent) is `undefined` = auto. NOT
 //      clamped — it DROPS to auto (asymmetric with the env channel, which clamps).
-//   3. client-data / experiment / model-tuned default — server-delivered (~500k on the 1M models via
-//      the tengu_amber_redwood3 gate), invisible to us → we estimate it and flag the estimate.
+//   3. client-data / experiment / model-tuned default. Re-extracted 2026-10-14 from 2.1.299 (resolver
+//      `ev`): with no server client-data window and no experiment, a native 1M model on `auto` gets
+//      its FULL window (source "model-default"). The server channels stay invisible to us, so the
+//      value remains an estimate and is flagged as one. The earlier ~500k server default is gone.
 //
-// Blind channel: the `--autocompact` CLI flag has no payload field; we do not guess it.
-// The old behaviour (model window × 0.95) overstated 1M headroom by ~450k and never warned before
-// compaction (caught live 2026-07: compacted at 466k while to-compact read 484k).
-const AUTO_COMPACT_1M = 500000;   // model-tuned `auto` default for the 1M regime (estimate; drifts server-side)
+// Blind channels: the `--autocompact` CLI flag has no payload field; we do not guess it. 2.1.299 also
+// reads a per-model `modelSettings.<model>.autoCompactWindow` (what `/autocompact` now writes); we do
+// not read it.
+// Why the 1M branch stays separate from the 200k one: in 2026-07 (2.1.197) the server delivered a
+// ~500k default, and the model window then overstated headroom and never warned before compaction.
+// A server value can return with no CLI change; AUTO_COMPACT_1M is the one number to move when it does.
+const AUTO_COMPACT_1M = 1000000;  // model-tuned `auto` default for the 1M regime (estimate; drifts server-side)
 const CW_GROUPED = /^[+-]?\d{1,3}([_,\u00A0\u202F ])\d{3}(?:\1\d{3})*$/;
 const CW_EXPONENT = /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/;
 function ccParseInt(v) {   // CC's `Tg`
@@ -141,7 +146,20 @@ function CompactWindow(ctxSize) {
   if (ctxSize >= 700000) return { win: AUTO_COMPACT_1M, estimate: true };   // 1M on `auto` → estimated default
   return { win: ctxSize, estimate: false };                                 // 200k `auto` ≈ the model window
 }
-function CompactAt(ctxSize) { return psRound(CompactWindow(ctxSize).win * 0.95); }
+// The compaction point, as CC 2.1.299 computes it from the resolved window:
+//   `_5`: effective window = window − min(max output tokens, `hlr` = 20000)  (summary reservation)
+//   `N3`: threshold        = effective window − 13000                        (buffer)
+// Every current model's max output exceeds 20k, so the point is window − 33000 for every window and
+// every source. Blind channels — inputs that move the point without reaching the payload:
+//   - CLAUDE_CODE_MAX_OUTPUT_TOKENS below 20000 shrinks the reservation, so compaction fires LATER
+//     than this line says;
+//   - CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (`testPctOverride`, a percent in (0, 100]) sets the threshold
+//     to min(floor(effective window × pct/100), effective window − 13000), so compaction fires
+//     EARLIER than this line says.
+const COMPACT_SUMMARY_RESERVE = 20000;   // CC `hlr`
+const COMPACT_BUFFER = 13000;            // CC `N3`
+function CompactPoint(win) { return win - COMPACT_SUMMARY_RESERVE - COMPACT_BUFFER; }
+function CompactAt(ctxSize) { return CompactPoint(CompactWindow(ctxSize).win); }
 // Auto-compact can also be OFF entirely — then the countdown (and its red `NOW`) is a lie: compaction
 // never fires. CC checks THREE off switches, in this order, and so do we:
 //
@@ -796,7 +814,7 @@ if (!isNil(ctxUsed) && !isNil(ctxSize)) {
     wall = DarkGray('off');
   } else {
     const cw = CompactWindow(ctxSize);
-    const compactAt = psRound(cw.win * 0.95);
+    const compactAt = CompactPoint(cw.win);
     const remaining = compactAt - ctxUsed;
     // `~` = the window is an ESTIMATE (on `auto`, using the model-tuned default) — shown ONLY when it's also
     // near the bar (remaining < 200k), so a calm line never carries it and an authoritative

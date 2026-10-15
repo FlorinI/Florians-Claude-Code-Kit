@@ -1,0 +1,4 @@
+{
+  "note": "1M window on `auto` (no env, no settings window) at 975k used: past the estimated compaction point (the full 1M window − 33k = 967k) by 8k, so the line reads `wall ~NOW` in red bold and the fact sheet says the session is past the wall by `8k` — acceptance example A3b of the 2026-10-14 auto-compact-1m spec (re-frozen a58bb43). Synthetic: wall-estimate's transcript at a higher fill.",
+  "nowEpoch": 1781710000
+}

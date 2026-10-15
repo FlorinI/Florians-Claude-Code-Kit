@@ -1,5 +1,5 @@
 ---
-description: Read the current status-line snapshot and explain — in plain terms — whether it's time to hand over (cost vs quality), with the practical reads.
+description: Read the current status-line snapshot and explain — in plain terms — whether it's time to hand over (cost, quality and the auto-compact wall), with the practical reads.
 ---
 
 # /handover-check
@@ -47,7 +47,7 @@ The report lands in the **assistant message**, the one surface that never collap
 
 ## The renders (Phase 1)
 
-- **handover-facts** (`handover-facts.mjs`) — the deterministic fact sheet: resolves the headline verdict (cost rule = **the absolute next-leg `$`, on a three-rung dollar ladder** — plenty of room / wind down soon / time to hand over), the cold-band wording, the quality lead, activity keep/omit, trajectory shape, and the your-call lean; every number arrives backtick-wrapped. Tunable thresholds live at the top of the script.
+- **handover-facts** (`handover-facts.mjs`) — the deterministic fact sheet: resolves the headline verdict — the highest of quality, cost and the auto-compact wall (cost rule = **the absolute next-leg `$`, on a three-rung dollar ladder** — plenty of room / wind down soon / time to hand over; a near wall holds the headline at wind down soon or above, at or past the wall it is time to hand over), the cold-band wording, the quality lead, activity keep/omit, trajectory shape, and the your-call lean; every number arrives backtick-wrapped. Tunable thresholds live at the top of the script.
 - **legspark** (`render-legspark.mjs --mono`) — trailing-10-leg moving average of per-leg $, oldest→newest (smooths spikes to show the trend); header reports the raw peak.
 - **spikes** (`render-spikes.mjs --mono`) — up to TWO tables. First: the 3 priciest **main-thread legs**, each with **why** (loaded new context / generated output / re-read deep context); `❆` marks legs counted in the cold tax. Second (only when the session spawned sub-agents): the 3 **fattest agents** — whole-agent totals with task label, `$`, ×-median, legs, peak leg, and dominant cause (re-reading context / loading content / generating output). Sub-agent cost NEVER appears in the leg table (the leg scan covers the main transcript only; agents are kept aggregate-only by design), so heavy agent spend surfaces in the agents table, never as leg spikes. Complements legspark (shape vs. the worst + cause).
 
@@ -72,6 +72,6 @@ Copy legspark and spikes verbatim into their fenced blocks — do not redraw, re
     • **Quality** — a prose line: lead with QUALITY_LEAD, add QUALITY_SECONDARY as a secondary aside, state QUALITY_HEADROOM, and fold in QUALITY_CAVEAT.
     • **Activity** — if ACTIVITY starts with "(omit", skip this line ENTIRELY. Otherwise a prose line from it.
     • **Trajectory** — a prose line from TRAJECTORY (shape + range). Do NOT guess what caused spikes — the spike panel the main session appends carries the resolved cause per leg. In particular, never attribute per-leg spikes to "sub-agent work": agents never appear in the per-leg data (their cost is aggregate-only, in the agents table), so a main-leg spike is by construction NOT an agent.
-    • YOUR CALL — a one-line ```diff block starting with the YOURCALL_POLARITY sign ("+" or "-"), framing YOURCALL_BASIS as a crisp, human recommendation in your own words. The cost direction here MUST match TRAJECTORY — never call cost "climbing" if TRAJECTORY reports a flat shape (high-but-flat is not climbing). Never put backticks or bold inside the block.
+    • YOUR CALL — a one-line ```diff block starting with the YOURCALL_POLARITY sign ("+" or "-"), framing YOURCALL_BASIS as a crisp, human recommendation in your own words. The reason YOURCALL_BASIS gives is the lead reason this line states — never replace it with the headline's driver (the "driver=" the sheet records for the headline): at the auto-compact wall the reason is the wall, even when quality or cost drove the headline. The cost direction here MUST match TRAJECTORY — never call cost "climbing" if TRAJECTORY reports a flat shape (high-but-flat is not climbing). Never put backticks or bold inside the block.
 
     Output ONLY the blocks above — no preamble, and no trailing notes (the main session appends the charts and a follow-up line).

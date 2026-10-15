@@ -1,4 +1,4 @@
 {
-  "note": "an estimated compaction window with headroom inside the estimate marker's gate — the only fixture that renders the wall estimate marker",
+  "note": "1M window on `auto` at 800k used: the estimated compaction point (the full 1M window − 33k = 967k) is 167k away, inside the estimate marker's 200k gate, so the line reads `wall ~167.0k` (acceptance example A2 of the 2026-10-14 auto-compact-1m spec, re-frozen a58bb43) — the only fixture that renders the wall estimate marker short of the wall",
   "nowEpoch": 1781710000
 }

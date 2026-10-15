@@ -753,22 +753,34 @@ test('24 — the ordinary wall value, the estimate and `off` are all chrome gray
   assert.ok(states.off >= 5, `vacuity guard: ${states.off} 'wall off' fixtures`);
   assert.ok(states.plain >= 30, `vacuity guard: ${states.plain} plain-distance fixtures`);
   assert.ok(states.est >= 1, `vacuity guard: ${states.est} estimate-marker fixtures — wall-estimate must render it (A17)`);
+  // 800k used on a 1M `auto` window: the estimated compaction point (the full window − 33k = 967k) is
+  // 167k away, inside the marker's 200k gate (2026-10-14 auto-compact-1m spec, acceptance example A2).
+  assert.equal(wallOf('wall-estimate'), '~167.0k', 'wall-estimate renders the estimate marker short of the wall');
 });
 
 test('25 — past the wall, the field is red bold, tilde included (A18)', () => {
   // The coordinator's ruling on the spec's line-279-vs-283 ambiguity, 2026-08-22: `~NOW` renders
   // ENTIRELY red bold. Pinned here so the question cannot be silently re-opened.
   let seen = 0;
+  const swept = [];
   for (const f of blessed()) {
     const w = wallOf(f);
     if (w !== 'NOW' && w !== '~NOW') continue;
     seen++;
+    swept.push(f);
     const left = halves(rawRows(f)[1]).left;
     const m = /\x1b\[1;31m(~?NOW)\x1b\[0m/.exec(left);
     assert.ok(m, `${f}: the passed-the-wall field must be one red-bold run (A18): ${JSON.stringify(left.slice(-60))}`);
     assert.equal(m[1], w, `${f}: the whole value is inside the red-bold run — a gray tilde outside it splits the alarm`);
   }
   assert.ok(seen >= 2, `vacuity guard: only ${seen} past-the-wall fixtures`);
+  // The committed past-the-wall pair since the 2026-10-14 auto-compact-1m sprint (975k used on a 1M
+  // `auto` window, 8k past 967k: the estimate's `~NOW`); label-served-late and offtier-open sit under
+  // the wall now.
+  for (const f of ['wall-past-estimate', 'wall-past-bare']) {
+    assert.ok(swept.includes(f), `${f} must be swept as a past-the-wall fixture: ${swept.join(', ')}`);
+    assert.equal(wallOf(f), '~NOW', `${f}: the estimate marker rides inside the alarm`);
+  }
 });
 
 test('26 — the ctx token count keeps its band colour beside the quiet wall (A17)', () => {

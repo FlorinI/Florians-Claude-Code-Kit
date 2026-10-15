@@ -1,0 +1,7 @@
+{
+  "note": "env 2000000 capped to an explicit 1M window, filled to within 200k of the wall (1M − 33k = 967k, 800k used): the render reads `wall 167.0k` with no `~`, because an explicit window is authoritative. Ignoring the oversized env instead would fall back to the `auto` estimate and read `~167.0k`. Sibling of cw-env-high, which sits at 51k where cap and ignore render the same.",
+  "nowEpoch": 1781750000,
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "2000000"
+  }
+}

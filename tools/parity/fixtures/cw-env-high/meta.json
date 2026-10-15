@@ -1,4 +1,5 @@
 {
+  "note": "env 2000000 capped to 1M, at 51k used. On a native-1M model `auto` is also the full 1M window, so this fixture cannot tell the cap from ignoring the env; cw-env-high-near pins that distinction near the wall. Kept at 51k because its sidecar is in the frozen digest baseline.",
   "nowEpoch": 1781750000,
   "env": {
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "2000000"

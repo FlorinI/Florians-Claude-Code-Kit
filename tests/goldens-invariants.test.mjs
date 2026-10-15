@@ -76,6 +76,16 @@ const ladderCLevel = (nextUsd) =>
 const qLevelOf = (s) => Math.max(
   ({ pristine: 0, green: 0, yellow: 1, orange: 2, red: 3 })[String(s.ctxAbsState)] ?? 0,
   s.fillPct == null ? 0 : (Number(s.fillPct) < 50 ? 0 : (Number(s.fillPct) < 70 ? 2 : 3)));
+// The auto-compact wall's headline term (2026-10-14 auto-compact-1m spec, item 8): with auto-compact
+// on and the distance and window known, near (0 < toCompact ≤ 10% of the window) → level 2, at or
+// past (toCompact ≤ 0) → level 3; otherwise no wall term. Returns [state, level].
+const wallOf = (s) => {
+  const win = Number(s.windowSize);
+  if (s.autoCompactOff === true || typeof s.toCompact !== 'number' || !(win > 0)) return [null, 0];
+  if (s.toCompact < 0) return ['past', 3];
+  if (s.toCompact === 0) return ['at', 3];
+  return s.toCompact <= win * 0.10 ? ['near', 2] : [null, 0];
+};
 
 // ---- A: tier-weighted cost split -------------------------------------------------------------
 test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent ×0.2)', () => {
@@ -547,13 +557,15 @@ test('M2 — chip guard: the rendered `last N $x` equals MEDIAN(legCosts tail), 
     if (want) present++; else absent++;
   }
   // ABSENT is the exact pin, and it is pinned rather than PRESENT because it is the number that
-  // survives the corpus growing: 21 fixtures have no legs at all, one (agents-progressive) has a
+  // survives the corpus growing: 23 fixtures have no legs at all, one (agents-progressive) has a
   // single leg, and one (resume-pending-cold, sprint 3) has legs but no cost basis (base null →
   // legCosts []). Any fixture gaining or losing its chip moves this number, which is the defect this
   // row exists to catch. PRESENT is derived, so adding a fixture never forces a recount — the
-  // Dossier IV sprint added seven, every one of them a copy of a parent with ≥2 banked legs.
-  assert.equal(absent, 23, 'fixtures suppressing the chip (21 with no legs, 1 single-leg, 1 base:null)');
-  assert.equal(present, allFixtures().length - 23, 'every other fixture shows it');
+  // Dossier IV sprint added seven, every one of them a copy of a parent with ≥2 banked legs. A new
+  // fixture with no transcript does force the recount: the 2026-10-14 auto-compact-1m sprint's
+  // wall-past-bare took the no-legs count from 21 to 22, and cw-env-high-near from 22 to 23.
+  assert.equal(absent, 25, 'fixtures suppressing the chip (23 with no legs, 1 single-leg, 1 base:null)');
+  assert.equal(present, allFixtures().length - 25, 'every other fixture shows it');
 });
 
 test('M2b — spike guard: where the window holds a fat leg, the chip is strictly BELOW the window mean', () => {
@@ -585,22 +597,30 @@ test('M2b — spike guard: where the window holds a fat leg, the chip is strictl
 });
 
 test('M3 — verdict guard: HEADLINE_BASIS `cost=next N (lvl L)` follows D2a\'s three-rung dollar ladder', () => {
-  const seen = new Set();
+  const seen = new Set(), wallSeen = new Set();
   for (const f of allFixtures()) {
     const s = sidecar(f);
-    const m = /HEADLINE_BASIS: driver=(\w+); quality=\S+ \(lvl (\d)\); cost=next (\S+) \(lvl (\d)\)/.exec(facts(f));
-    assert.ok(m, `${f}: HEADLINE_BASIS not in the post-removal form (no froz5 term, cost=next only)`);
+    const m = /^HEADLINE_BASIS: driver=(\w+); quality=\S+ \(lvl (\d)\); cost=next (\S+) \(lvl (\d)\)(?:; wall=(near|at|past) \(lvl (\d)\))?$/m.exec(facts(f));
+    assert.ok(m, `${f}: HEADLINE_BASIS not in the post-removal form (no froz5 term, cost=next only, optional wall term)`);
     const qL = qLevelOf(s), cL = ladderCLevel(s.nextLegUsd);
+    const [wState, wL] = wallOf(s);
     assert.equal(Number(m[4]), cL, `${f}: cost level vs ladder(nextLegUsd ${s.nextLegUsd})`);
     assert.equal(Number(m[2]), qL, `${f}: quality level`);
-    const driver = cL > qL ? 'cost' : (qL > cL ? 'quality' : 'both');
+    // the wall term is present exactly when the wall is near, at or past, with its own level
+    assert.equal(m[5] ?? null, wState, `${f}: wall state`);
+    assert.equal(m[6] === undefined ? 0 : Number(m[6]), wL, `${f}: wall level`);
+    // the wall drives only when it strictly exceeds both other axes; otherwise the old cost/quality rule
+    const driver = wL > Math.max(qL, cL) ? 'wall' : (cL > qL ? 'cost' : (qL > cL ? 'quality' : 'both'));
     assert.equal(m[1], driver, `${f}: driver`);
-    // the headline rung is max(quality, cost), and its polarity follows
-    const hL = Math.max(qL, cL);
+    // the headline rung is max(quality, cost, wall), and its polarity follows
+    const hL = Math.max(qL, cL, wL);
     const rung = ['Plenty of room', 'Getting deeper', 'Wind down soon', 'Time to hand over'][hL];
     assert.ok(facts(f).includes(`HEADLINE_DIFF: ${hL <= 1 ? '+' : '-'} ${rung}`), `${f}: HEADLINE_DIFF should read "${hL <= 1 ? '+' : '-'} ${rung}"`);
     seen.add(cL);
+    if (wState) wallSeen.add(wState);
   }
+  // The wall branch must be exercised by real goldens: A8's near (cw-env-low) and the past-the-wall pair.
+  assert.deepEqual([...wallSeen].sort(), ['near', 'past'], `vacuity guard: wall states observed ${[...wallSeen]}`);
   // All three rungs must be reachable — a ladder that only ever returns 0 would pass every row above.
   assert.deepEqual([...seen].sort(), [0, 2, 3], `vacuity guard: cost levels actually observed ${[...seen]}`);
 });
@@ -637,8 +657,8 @@ test('M4 — sheet/line agreement: COST_RECENT reads `(none)` exactly where the 
     assert.ok(!/averag/i.test(m[1]), `${f}: the recent figure is a median and may not be called an average`);
   }
   // Same pinning choice as M2: the exact number is the ABSENT one, the other is derived.
-  assert.equal(none, 23);
-  assert.equal(valued, allFixtures().length - 23);
+  assert.equal(none, 25);
+  assert.equal(valued, allFixtures().length - 25);
 });
 
 test('M5 — key uniqueness (D7): no `KEY:` label appears twice in any fact sheet', () => {

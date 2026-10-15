@@ -154,6 +154,7 @@ const warmTaxUsdScan = nWarmScan > 0
 const COST_FLOOR_FINE = 0.28;
 const COST_FLOOR_STEEP = 0.45;
 const WINDOW_1M = 700000;       // windowSize at/above this is the 1M regime (token-count leads quality)
+const NEAR_WALL_LEAD = 0.10;    // fill band says "near the auto-compact wall" within this share of the window (ruling 2026-10-14)
 // The share of session spend at which the cold tax LEADS the Cost section (COST_COLD_LEAD). A
 // judgement call, not a measurement — tune it here; no doc quotes its value.
 const COLD_LEAD_SHARE = 1 / 3;
@@ -188,7 +189,23 @@ const nameSpan = sidecarName ? `${BT}${sidecarName}${BT} ${MID} ` : '';
 let identity = `**Reading** ${BT}${repo}${BT} ${MID} ${nameSpan}${BT}${sid8}${BT} ${MID} ${s.model} ${MID} ${FmtK(s.ctxTokens)} ctx ${MID} rendered ${BT}${ageF}${BT} ago`;
 if (stale) identity += ` ${BT}${WARN} snapshot looks stale${BT}`;
 
-// ---- HEADLINE (cost+quality only; cold never touches it). Cost rule: the dollar ladder. ----
+// ---- WALL (auto-compact on, distance and window known) ----
+// One reading of where the session stands against the auto-compact wall, shared by the headline,
+// the fill band and YOUR CALL so they never disagree. "near" = the distance is at most
+// NEAR_WALL_LEAD of the window (Florian's ruling 2026-10-14, "Yes, warn within 10% of the wall");
+// "at"/"past" = toCompact 0 / negative. null when there is no wall to read (auto-compact off, or the
+// distance or the window is missing).
+const winSize = Number(s.windowSize);
+const wallKnown = s.autoCompactOff !== true && typeof s.toCompact === 'number' && winSize > 0;
+const wallState = !wallKnown ? null
+  : s.toCompact < 0 ? 'past'
+    : s.toCompact === 0 ? 'at'
+      : s.toCompact <= winSize * NEAR_WALL_LEAD ? 'near' : 'clear';
+// Florian's ruling 2026-10-14 ("A, wall caps the headline"): a near wall holds the headline at
+// "Wind down soon" or above; at or past it the headline is "Time to hand over".
+const wLevel = ({ near: 2, at: 3, past: 3 })[wallState] ?? 0;
+
+// ---- HEADLINE (max of quality, cost and the wall; cold never touches it). Cost rule: the dollar ladder. ----
 const absState = String(s.ctxAbsState);
 const rotLevel = ({ pristine: 0, green: 0, yellow: 1, orange: 2, red: 3 })[absState] ?? 0;
 const fillLevel = s.fillPct == null ? 0 : (Number(s.fillPct) < 50 ? 0 : (Number(s.fillPct) < 70 ? 2 : 3));
@@ -211,9 +228,11 @@ if (nextUsd == null || nextUsd < COST_FLOOR_FINE) cLevelRaw = 0;
 else if (nextUsd < COST_FLOOR_STEEP) cLevelRaw = 1;
 else cLevelRaw = 2;
 const cLevel = ({ 0: 0, 1: 2 })[cLevelRaw] ?? 3;
-const hLevel = Math.max(qLevel, cLevel);
+const hLevel = Math.max(qLevel, cLevel, wLevel);
 const hPol = hLevel <= 1 ? '+' : '-';
-const hDriver = cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both');
+// The driver names the wall only when the wall alone raised the level; otherwise cost vs quality as before.
+const hDriver = wLevel > Math.max(qLevel, cLevel) ? 'wall'
+  : (cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both'));
 
 // Agent-spend prominence, proportional to share of session cost (denominator matches the status line's
 // agentsUsd/sessionCost): <1/3 = minor aside only (COST_DETAIL) · 1/3–1/2 = a headline tail · ≥1/2 = leads Cost.
@@ -325,18 +344,31 @@ if (nColdScan >= 1) {
 let fillBand = '';
 if (s.fillPct != null) {
   const f = Number(s.fillPct);
-  // The ≥85% band names the wall it is near — but with auto-compact off there IS no wall, and saying
-  // so here contradicted QUALITY_HEADROOM two lines down ("no compaction will fire"). The fact sheet
-  // never hands the composer a contradiction to smooth over. Cliff semantics below 85% are unchanged:
-  // the ~60% cliff is a quality effect of context depth, not a compaction artifact.
-  const topBand = s.autoCompactOff === true
-    ? ' fill — near the raw window limit'
-    : ' fill — near the auto-compact wall';
-  fillBand = f < 50 ? ' fill — well under the ~60% cliff'
+  // The wall bands say where the session stands relative to the wall, and must agree with
+  // QUALITY_HEADROOM below. The fact sheet never hands the composer a contradiction to smooth over:
+  // with auto-compact off there IS no wall ("no compaction will fire"), and at or past the wall
+  // (toCompact <= 0) the band says "at"/"past", never "near", using the headroom line's own split.
+  // With auto-compact on and the distance known, the band reads the shared wallState (WALL above):
+  // 10% is the lead the old 85%-fill band had under the old 95% wall (95 − 85). A fill threshold
+  // cannot do this job under the window − 33k wall: a 200k session compacts at 83.5% fill, before an
+  // 85% band could ever say "near". The wall bands take precedence over the cliff bands. Auto-compact
+  // off keeps "near the raw window limit" from 85% fill; a missing distance or window falls back to
+  // the fill-only bands. The ~60% cliff is a quality effect of context depth, not a compaction
+  // artifact, so its bands stay fill-based.
+  const atOrPastWall = typeof s.toCompact === 'number' && s.toCompact <= 0;
+  const wallBand = s.toCompact === 0 ? ' fill — at the auto-compact wall' : ' fill — past the auto-compact wall';
+  const nearWall = ' fill — near the auto-compact wall';
+  const cliffBand = f < 50 ? ' fill — well under the ~60% cliff'
     : f < 60 ? ' fill — approaching the ~60% cliff'
       : f < 70 ? ' fill — at/just past the ~60% cliff'
-        : f < 85 ? ' fill — well past the ~60% cliff'
-          : topBand;
+        : ' fill — well past the ~60% cliff';
+  if (wallKnown) {
+    fillBand = wallState === 'clear' ? cliffBand : (wallState === 'near' ? nearWall : wallBand);
+  } else {
+    fillBand = f < 85 ? cliffBand
+      : s.autoCompactOff === true ? ' fill — near the raw window limit'
+        : atOrPastWall ? wallBand : nearWall;
+  }
 }
 const tokSig = FmtK(s.ctxTokens) + ', ' + absState + ' band' + (qWord ? ' — ' + qWord : '');
 const fillSig = FmtPct(s.fillPct) + fillBand;
@@ -345,13 +377,15 @@ const qSecondary = is1M ? fillSig : tokSig;
 // Auto-compact off → never say "N to compact": compaction will not fire. (toCompact is null then.)
 // Past the wall (toCompact <= 0, the render's `wall NOW`) → say so; the sidecar keeps the true signed
 // measurement and only the prose branches, so a negative distance never reaches the reader.
+// A non-zero distance that rounds to 0k reads `<1k`: only toCompact === 0 is "at" the wall.
+const FmtDist = (t) => (t != null && psRound(Number(t) / 1000) === 0) ? BT + '<1k' + BT : FmtK(t);
 const qHeadroom = s.autoCompactOff === true
   ? 'auto-compact is off — no compaction will fire; the session runs to the raw window (manage context by hand)'
   : (typeof s.toCompact === 'number' && s.toCompact <= 0)
     ? (s.toCompact === 0
       ? 'at the auto-compact wall — compaction is due on the next turn'
-      : 'past the auto-compact wall by ' + FmtK(-s.toCompact) + ' — compaction is due on the next turn')
-    : FmtK(s.toCompact) + ' to compact';
+      : 'past the auto-compact wall by ' + FmtDist(-s.toCompact) + ' — compaction is due on the next turn')
+    : FmtDist(s.toCompact) + ' to compact';
 
 // ---- ACTIVITY (omit when sub-agents ran — activity% is agent-polluted) ----
 let act;
@@ -391,7 +425,11 @@ if (lc.length >= 3) {
 // ---- YOUR CALL (polarity deterministic from the headline) ----
 const ycPol = hPol;
 let ycBasis;
-if (hLevel === 0) ycBasis = 'both axes fine — room to continue on recent context';
+// The wall, whenever it is near, at or past, is the reason — and the line carries no continue-advice,
+// whatever cost and quality say (Florian's ruling 2026-10-14, "A, wall caps the headline").
+if (wallState === 'near') ycBasis = 'the auto-compact wall is near (' + FmtDist(s.toCompact) + ' to compact) — hand over / /clear before it compacts';
+else if (wallState === 'at' || wallState === 'past') ycBasis = wallState + ' the auto-compact wall — compaction is due on the next turn; hand over now';
+else if (hLevel === 0) ycBasis = 'both axes fine — room to continue on recent context';
 else if (hLevel === 1) ycBasis = 'getting deeper but still fine — recent work stays sharp; only reaching back for details buried deep in old context softens, so hand over / /clear only if that is next';
 else if (hDriver === 'cost') ycBasis = 'cost is the pressure — hand over / /clear if cost matters; a few more legs are fine on recent context';
 else if (hDriver === 'quality') ycBasis = 'quality is the pressure (deep-history recall) — hand over / /clear if you need reliable old-context recall; fine to continue on recent work';
@@ -406,7 +444,8 @@ else ycBasis = 'both cost and quality are climbing — lean toward handing over'
 emit(`IDENTITY: ${identity}`);
 emit(`STALE: ${stale ? 'yes — tell the user to press Enter on an empty prompt in the session they mean, then re-run' : 'no'}`);
 emit(`HEADLINE_DIFF: ${hPol} ${hText}`);
-emit(`HEADLINE_BASIS: driver=${hDriver}; quality=${absState} (lvl ${qLevel}); cost=next ${nextUsd} (lvl ${cLevel})`);
+// The wall term is appended only when the wall is near, at or past, so the cost/quality prefix keeps its shape.
+emit(`HEADLINE_BASIS: driver=${hDriver}; quality=${absState} (lvl ${qLevel}); cost=next ${nextUsd} (lvl ${cLevel})${wLevel > 0 ? `; wall=${wallState} (lvl ${wLevel})` : ''}`);
 emit(`COST_LEAD: ${costLead}`);
 emit(`COST_TOTAL: ${costTotal}`);
 emit(`COST_RECENT: ${costRecent}`);

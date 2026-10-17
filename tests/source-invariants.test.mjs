@@ -594,13 +594,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.14 (PATCH: the `auto` compaction window on native-1M models and the compaction point follow Claude Code 2.1.299)', () => {
+test('D4-5 — SL_VERSION is 6.1.15 (PATCH: the version badges move off the repo row)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.14',
-    'X.Y.Z is 6.1.14 (auto-compact-1m spec, item 2): the `auto` compaction window on a native-1M model follows Claude Code 2.1.299 — the full window, not ~500k — and the compaction point is the window − 33k, not × 0.95, for every source; a behaviour-affecting fix. Not X: what the wall distance means is unchanged and no calibration era opens. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.15',
+    'X.Y.Z is 6.1.15 (2026-10-17, Florian\'s ruling): `v<ccVersion>` moves to the end of the model row and `bsl<ver>` to the end of the flags row, so the repo identity gets the whole right column; a discrete layout change. Not X: no displayed number changes meaning. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would

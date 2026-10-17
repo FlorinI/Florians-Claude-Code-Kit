@@ -24,7 +24,7 @@ import { WriteQuotaFile } from './quota-file.mjs';
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.14.1';
+export const SL_VERSION = '6.1.15.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -795,10 +795,19 @@ const fastMode = fast === true;
 const thinking = d?.thinking?.enabled;
 
 // The name is neutral (no SGR, no bold) and is one of the two unbounded strings in the left column,
-// so it truncates at its 30-cell budget. `v<version>` moved to the repo cluster and the serving-tier
-// chip to the flags cluster, so nothing else lands in this field.
+// so it truncates at its 30-cell budget — less when the field would otherwise push `v<version>` out.
+// `v<version>` (Claude Code's) is right-aligned one cell short of the divider and never cut: the name
+// gives way first. The serving-tier chip lives in the flags cluster.
 const MODEL_NAME_W = 30;
-const modelValue = truncTo(model, MODEL_NAME_W) + '  ' + DarkGray('effort ') + ColorEffort(effort);
+const MODEL_ROW_W = LEFT_VALUE_W - 1;
+const effortPart = DarkGray('effort ') + ColorEffort(effort);
+const ccVersionBadge = version ? DarkGray('v' + version) : '';
+const modelNameW = Math.min(MODEL_NAME_W,
+  MODEL_ROW_W - 2 - visLen(effortPart) - (ccVersionBadge ? 2 + visLen(ccVersionBadge) : 0));
+const modelHead = truncTo(model, Math.max(4, modelNameW)) + '  ' + effortPart;
+const modelValue = ccVersionBadge
+  ? modelHead + ' '.repeat(Math.max(2, MODEL_ROW_W - visLen(modelHead) - visLen(ccVersionBadge))) + ccVersionBadge
+  : modelHead;
 
 // === Row 2 left: context window ============================================
 // `fillPct` / `fillState` still feed the sidecar; the `%` fill chip that displayed them is gone, as
@@ -1524,18 +1533,25 @@ if (SHOW_DOLLAR_GATE_CALIBRATION_CHIP && !isNil(costUsd) && (mainTier === 'sonne
   flagChips.push(DarkGray('⚠ $-gates Fable/Opus-calibrated'));
 }
 if (tierMismatch) flagChips.push(DarkGray('⚠ serving:' + tierMismatch.serving));
-const flagsValue = flagChips.join('  ');
+// `bsl<SL_VERSION>` (our build) closes the flags row, right-aligned at the end of the column; when
+// the chips run long it follows them after the usual two-space gap instead. It is always present, so
+// the flags row always renders; with no chips the row carries no `flags` label, since a bare label
+// is noise.
+const slVersionBadge = DarkGray('bsl' + SL_VERSION);
+const flagsHead = flagChips.join('  ');
+const flagsValue = flagsHead
+  + ' '.repeat(Math.max(flagsHead ? 2 : 0, RIGHT_VALUE_W - visLen(flagsHead) - visLen(slVersionBadge)))
+  + slVersionBadge;
 
-// `no repo` is two words, not the label alone: the label alone would leave the version badges
-// sitting directly after `repo` and reading as the repo's own name.
-const versionBadges = (version ? DarkGray('v' + version) + '  ' : '') + DarkGray('bsl' + SL_VERSION);
+// `no repo` is two words, not the label alone: a bare `repo` label reads as a cluster that forgot
+// its value.
 // The right column never truncates its own driver (see the note on SpotlightValue above), but a
 // long owner/repo name can still overrun the terminal — and an external cut lands wherever the
-// line happens to end, which is the sync glyph and version badges: the two most actionable bits
-// (dirty/ahead-behind, which build produced this line). So the repo identity is clipped in-code,
-// most-interesting-first: sync glyph and version badges are reserved and never touched; within
-// what's left, the org is the first thing dropped (usually the same across every session), then
-// the branch is truncated (which line of work), and the project name goes last (which project).
+// line happens to end, which is the sync glyph (dirty/ahead-behind), the most actionable bit. So
+// the repo identity is clipped in-code, most-interesting-first: the sync glyph is reserved and
+// never touched; within what's left, the org is the first thing dropped (usually the same across
+// every session), then the branch is truncated (which line of work), and the project name goes
+// last (which project).
 function clipRepoIdentity(owner, name, branch, budget) {
   if (!name) return truncTo(branch, budget);
   const full = owner ? `${owner}/${name}@${branch}` : `${name}@${branch}`;
@@ -1546,10 +1562,10 @@ function clipRepoIdentity(owner, name, branch, budget) {
   if (branchBudget >= 4) return `${name}@${truncTo(branch, branchBudget)}`;
   return truncTo(noOwner, budget);
 }
-const repoReserved = 1 + visLen(gitSync || '') + 2 + visLen(versionBadges);
+const repoReserved = 1 + visLen(gitSync || '');
 const repoBudget = Math.max(8, RIGHT_VALUE_W - repoReserved);
 const repoIdentity = repo ? clipRepoIdentity(gitOwner, gitName, gitBranch, repoBudget) : null;
-const repoValue = (repoIdentity ? repoIdentity + ' ' + gitSync : DarkGray('no repo')) + '  ' + versionBadges;
+const repoValue = repoIdentity ? rtrim(repoIdentity + ' ' + gitSync) : DarkGray('no repo');
 
 const rows = [];
 rows.push(gridRow(DarkGray('model'), modelValue, DarkGray('cost'), costValue));
@@ -1557,7 +1573,7 @@ rows.push(gridRow(DarkGray('ctx'), ctxValue, DarkGray('trend'), trendValue));
 rows.push(gridRow(DarkGray('5h'), QuotaGaugeValue(q5), DarkGray('7d'), QuotaGaugeValue(q7)));
 rows.push(gridRow('', QuotaDetailValue(q5, LEFT_VALUE_W), '', QuotaDetailValue(q7, RIGHT_VALUE_W)));
 rows.push(gridRow(DarkGray('⁂'), agentsValue, DarkGray('repo'), repoValue));
-rows.push(gridRow(DarkGray('cold'), coldValue, DarkGray('flags'), flagsValue));
+rows.push(gridRow(DarkGray('cold'), coldValue, flagsHead ? DarkGray('flags') : '', flagsValue));
 // Newest leg first, left before right. On an odd count the last row's right half stays empty — the
 // block never borrows the free half beside a fixed row and never promotes a leg into it.
 for (let i = 0; i < bigLegCells.length; i += 2) {

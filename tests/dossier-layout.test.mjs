@@ -454,7 +454,7 @@ test('32 — over pace but still young: gauge and resets, and NO negative spare'
   assert.ok(!under.runway.includes('-'), `and its spare is positive: ${under.runway}`);
 });
 
-test('33 — a model name past its budget truncates at 29 code points plus an ellipsis (spec §4)', () => {
+test('33 — a model name past its budget truncates with an ellipsis, and the version badge stays whole', () => {
   const f = 'model-name-long';
   // Loud, never silent: a single-fixture row that RETURNED while its fixture was unblessed would
   // pass vacuously, which is the failure mode these edge rows exist to rule out.
@@ -464,9 +464,15 @@ test('33 — a model name past its budget truncates at 29 code points plus an el
   assert.ok([...NAME].length > 30, `the fixture's name must exceed the 30-cell budget (got ${[...NAME].length})`);
   const value = leftValue(halves(plainRows(f)[0]).left);
   const shown = value.split('  ')[0];               // the name field, before the 2-cell gap
-  assert.equal([...shown].length, 30, `the name field is 30 cells: ${JSON.stringify(shown)}`);
+  // The row is the left value field less one cell before the divider (44). Claude Code's version is
+  // right-aligned at its end and never cut, so the name gets what effort and the badge leave over.
+  const effortField = `effort ${stdinOf(f).effort.level}`;
+  const badge = `v${stdinOf(f).version}`;
+  const budget = Math.min(30, 44 - 2 - effortField.length - 2 - badge.length);
+  assert.equal([...shown].length, budget, `the name field is ${budget} cells: ${JSON.stringify(shown)}`);
   assert.ok(shown.endsWith('…'), `it must end in the ellipsis: ${JSON.stringify(shown)}`);
-  assert.equal(shown, [...NAME].slice(0, 29).join('') + '…', 'exactly 29 code points of the name, then the ellipsis');
+  assert.equal(shown, [...NAME].slice(0, budget - 1).join('') + '…', 'the name up to its budget, then the ellipsis');
+  assert.ok(value.trimEnd().endsWith(badge), `the version badge closes the field whole: ${value}`);
   // The truncation exists so the left column still positions the divider — the consequence, asserted
   // here on the one fixture that can actually reach it.
   assert.equal(halves(plainRows(f)[0]).left.length, LEFT_CELLS);

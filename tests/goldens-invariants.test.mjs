@@ -340,7 +340,9 @@ test('K3 — resumed-nohistory: flagged, never faked (legs stay CC-anchored at $
   // right is the one field allowed to run long, so the caveat keeps its full text.
   const flagsRow = rowByLabel(stdout('resumed-nohistory'), 'flags');
   assert.ok(flagsRow && flagsRow.includes('flags'), `flags row present: ${JSON.stringify(flagsRow)}`);
-  assert.ok(flagsRow.trimEnd().endsWith('⚠ leg $ suspect: base far below list (resumed without history?)'),
+  // The `bsl<ver>` badge closes the flags row; the caveat is the last chip before it.
+  assert.ok(flagsRow.replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+bsl[\d.]+\s*$/, '')
+    .endsWith('⚠ leg $ suspect: base far below list (resumed without history?)'),
     `chip on the flags row: ${JSON.stringify(flagsRow)}`);
   const f = facts('resumed-nohistory');
   // D7 (froz5-removal): its own label, so it can co-occur with the resume note without the sheet

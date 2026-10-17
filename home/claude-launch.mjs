@@ -199,7 +199,13 @@ const RESUME_FLAGS = new Set(['-r', '--resume', '-c', '--continue', '--from-pr',
 const isFork = flags.rest.includes('--fork-session');
 const isResume = !isFork && flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')[0]));
 
+// CC_ALLOW_BYPASS truthy → every launch offers bypass-permissions mode in the shift+tab cycle without
+// starting in it (`--allow-dangerously-skip-permissions`). Off by default; not repeated when the user
+// typed the flag.
 const cli = [];
+if (EnvTruthy(process.env.CC_ALLOW_BYPASS) && !flags.rest.includes('--allow-dangerously-skip-permissions')) {
+  cli.push('--allow-dangerously-skip-permissions');
+}
 if (idModel) cli.push('--model', idModel);
 if (idEffort) cli.push('--effort', idEffort);
 if (title && !isResume) cli.push('--name', title);   // fresh launch (a fork included) — a resume keeps its own name

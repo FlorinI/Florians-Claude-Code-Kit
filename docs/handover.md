@@ -14,12 +14,15 @@ the directory sorted chronologically, the slug says what that handover is about.
 The installer adds a small block to your `~/.claude/CLAUDE.md` instructing Claude, at the start of
 every session, to:
 
-1. Look in `<cwd>/.desk/handovers/` for a `*.md` file that is **not** `*.consumed.md`.
-2. Pick the most recent (ISO timestamps sort lexicographically).
-3. Rename it to insert `.consumed` before `.md` (the consumed marker) **before** reading it.
+1. Look in `<cwd>/.desk/handovers/` for `*.md` files that are **not** `*.consumed.md`, newest first.
+2. Let your first message choose: `take` (the newest), `take 2`, `take 1 3`, `take all`, `peek` / `peek 2` (read
+   without consuming) or `skip` (none). Any other first message loads the note when there is one, and
+   none when there are several.
+3. Rename each note it loads to insert `.consumed` before `.md` (the consumed marker) **before** reading it.
 4. Read it and use it as orientation for the session, then defer to the project's own conventions.
 
-A matching `SessionStart` hook (`session-start-handover.mjs`) surfaces a pending handover at launch.
+A matching `SessionStart` hook (`session-start-handover.mjs`) surfaces pending handovers at launch: one by
+name, several as a numbered list with the keywords.
 
 A launcher that starts a session not meant to continue the work (a search, an always-on helper) sets
 `CC_SKIP_HANDOVER_PICKUP=1` in that session's environment: the hook then reports no pending note to

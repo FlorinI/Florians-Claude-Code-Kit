@@ -42,14 +42,19 @@ const FCCK_BLOCK_BODY = `## Session handover pickup (runs first, every session)
 
 Before any other on-session-start behavior, check the working directory for a pending handover:
 
-1. List files in \`<cwd>/.desk/handovers/\` matching \`*.md\` but NOT \`*.consumed.md\`.
-2. If one or more exist, pick the most recent by filename (ISO timestamps sort lexicographically).
-3. **Rename the file** to insert \`.consumed\` before \`.md\` — do this BEFORE reading it. That's the consumed marker.
-4. Read the renamed file and use it as orientation for this session.
-5. Open the first turn by acknowledging the resume in one sentence and summarizing what was loaded
-   (3–4 lines max), then defer to the project's own conventions. If the note has an \`## Intent\`
-   section, quote it verbatim first — it is the user's own message to this session.
-6. After the first turn, treat the handover as one-time orientation — don't re-quote it as a source of truth.
+1. List files in \`<cwd>/.desk/handovers/\` matching \`*.md\` but NOT \`*.consumed.md\`, newest first by
+   filename (ISO timestamps sort lexicographically). Note 1 is the newest — the order the banner numbers them.
+2. The user's first message chooses, by a keyword that is the whole message (any case): \`take\` loads the
+   newest, \`take 2\` note 2, \`take 1 3\` those, \`take all\` every one; \`peek\` reads every note without
+   consuming it, \`peek 2\` only note 2; \`skip\` loads none. Any other first message: with one note pending,
+   load it; with several, load none — open the reply with the numbered list and the keywords, then do what
+   was asked.
+3. **To load a note, rename it first** to insert \`.consumed\` before \`.md\` — BEFORE reading it. That's the
+   consumed marker. Then read it and use it as orientation. **To peek, read without renaming.**
+4. Open the first turn by acknowledging the resume and summarizing each note loaded or peeked (3–4 lines
+   each), then defer to the project's own conventions. If a note has an \`## Intent\` section, quote it
+   verbatim first — it is the user's own message to that session.
+5. After the first turn, treat the handovers as one-time orientation — don't re-quote them as a source of truth.
 
 If no unconsumed handover exists, proceed normally.`;
 

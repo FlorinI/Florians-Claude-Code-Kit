@@ -145,12 +145,29 @@ if (flags.rest.includes('--print-title')) {
 function termWrite(seq) { try { if (process.stdout.isTTY) process.stdout.write(seq); } catch {} }
 if (title) termWrite(`${ESC}]2;${title}${BEL}`);
 
-// Identity color names (Claude Code's /color palette) -> RGB.
+// Identity color names -> RGB. The first eight are Claude Code's /color palette. The fourteen after
+// them extend it for the terminal tab (2026-10-15): chosen to keep every pair of the 22
+// as far apart as possible by CIEDE2000, among colours that are neither grey nor near-black, with the eight
+// fixed. Claude Code's own /color takes only the eight, so /identity echoes the nearest of them for an
+// extended name. Another tool that draws identity colours may copy this table; keep any copy equal.
 const COLORS = {
   red: [204, 51, 51], orange: [217, 122, 30], yellow: [217, 194, 46], green: [60, 168, 75],
   blue: [47, 116, 208], purple: [138, 79, 196], pink: [209, 95, 156], cyan: [54, 168, 184],
+  olive: [108, 96, 0], periwinkle: [192, 192, 252], pine: [0, 108, 84], shell: [252, 180, 180],
+  aqua: [0, 228, 192], rust: [144, 72, 0], khaki: [156, 144, 96], plum: [132, 72, 96],
+  celery: [180, 204, 156], lime: [120, 228, 0], peach: [240, 192, 144], orchid: [252, 156, 252],
+  azure: [36, 168, 252], lilac: [144, 132, 180],
   gray: [122, 122, 122], grey: [122, 122, 122], white: [204, 204, 204],
 };
+// The built-in /color name for each extended colour, for the "/color <name>" initial prompt below and
+// for /identity's paste line. Mostly the nearest by CIEDE2000; olive, periwinkle, aqua, rust and peach
+// take their hue family instead (yellow, purple, cyan, orange, orange), which reads truer on a prompt.
+const COLOR_BASE = {
+  olive: 'yellow', periwinkle: 'purple', pine: 'green', shell: 'pink', aqua: 'cyan', rust: 'orange',
+  khaki: 'yellow', plum: 'pink', celery: 'green', lime: 'green', peach: 'orange', orchid: 'pink',
+  azure: 'blue', lilac: 'purple',
+};
+const slashColor = idColor ? (COLOR_BASE[idColor.toLowerCase()] || idColor) : '';
 const rgb = idColor ? COLORS[idColor.toLowerCase()] : null;
 const hx = (n) => n.toString(16).padStart(2, '0');
 // Windows Terminal paints the tab background via OSC 4 palette index 264. Computed once, then used
@@ -273,7 +290,7 @@ for (let i = 0; i < userArgs.length; i++) {
 const lastArg = userArgs[userArgs.length - 1];
 const lastIsBareOptional = lastArg !== undefined && lastArg.startsWith('-')
   && !lastArg.includes('=') && OPTIONAL_VALUE_FLAGS.has(lastArg);
-if (!userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor) cli.push(`/color ${idColor}`);
+if (!userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor) cli.push(`/color ${slashColor}`);
 
 // --- resolve + launch claude ------------------------------------------------------------------
 // CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are

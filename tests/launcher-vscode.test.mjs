@@ -248,15 +248,15 @@ function coreTitle(extra = {}) {
   return runLauncher({ workspaces: [], identity: IDENT, ...extra }).plan.launch.title;
 }
 
-test('L1 — no launcher flags: the launch block is inert and the child env gains nothing but cleared markers', () => {
+test('L1 — no launcher flags: the launch block is inert and the child env gains nothing but cleared markers and the launch name', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT });
   assert.equal(res.status, 0);
   assert.equal(plan.launch.configDir, null);
   assert.equal(plan.launch.titlePrefix, '');
   assert.equal(plan.launch.titleSuffix, '');
   assert.equal(plan.launch.noVsCode, false);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
-    'the markers are cleared (every launch owns them); no CLAUDE_CONFIG_DIR, nothing else added');
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
+    'the markers are cleared (every launch owns them), the launch name is recorded; no CLAUDE_CONFIG_DIR, nothing else added');
   assert.equal(plan.launch.title, plan.tile.titleMatch);
 });
 
@@ -279,7 +279,7 @@ test('L3 — --config-dir sets the child env delta and never leaks into the clau
     const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir', dir] });
     assert.equal(plan.launch.configDir, resolve(dir));
     assert.deepEqual(plan.claude.envDelta,
-      { CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+      { CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
       'the config home plus the always-cleared markers — delta only, never the whole env');
     assert.ok(!plan.claude.argv.includes('--config-dir'), 'flag stripped from the claude argv');
     assert.ok(!plan.claude.argv.includes(dir), 'its VALUE is stripped too (never a stray positional)');
@@ -312,8 +312,8 @@ test('L5 — all four flags at once: every effect holds simultaneously', () => {
     });
     assert.equal(plan.launch.title, `P ${core} ·s`);
     assert.deepEqual(plan.claude.envDelta, {
-      CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s',
-    }, 'config-dir + markers → all three keys, delta only');
+      CLAUDE_CONFIG_DIR: resolve(dir), CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s', CC_LAUNCH_NAME: plan.launch.title,
+    }, 'config-dir + markers + the launch name → all four keys, delta only');
     assert.equal(plan.launch.noVsCode, true);
     assert.equal(plan.vscode.action, 'off');
     assert.equal(plan.tile.enabled, false);
@@ -369,7 +369,7 @@ test('L10 — malformed input is inert: a dangling value-flag is stripped, never
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--config-dir'] });
   assert.equal(res.status, 0);
   assert.equal(plan.launch.configDir, null);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
     'no CLAUDE_CONFIG_DIR from a valueless flag — only the markers every launch clears');
   assert.ok(!plan.claude.argv.includes('--config-dir'), 'still stripped from the claude argv');
   assert.ok(plan.claude.argv.length > 0, 'claude still launches');
@@ -431,32 +431,32 @@ test('L13 — the tile reason taxonomy is unchanged by the new flags', () => {
 // The delta stays the DELTA ONLY — a key with an empty value names something this launch sets and
 // leaks nothing of the inherited environment.
 
-test('L14 — markers without --config-dir: the env delta is exactly the two marker keys', () => {
+test('L14 — markers without --config-dir: the env delta is exactly the two marker keys and the launch name', () => {
   const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P', '--title-suffix', '·s'] });
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s' },
-    'two keys, no CLAUDE_CONFIG_DIR — delta only, never the whole env');
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s', CC_LAUNCH_NAME: plan.launch.title },
+    'the two markers and CC_LAUNCH_NAME, no CLAUDE_CONFIG_DIR — delta only, never the whole env');
 });
 
 test('L15 — a one-sided marker: its own key carries the value, the other is cleared', () => {
   const pre = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P'] });
-  assert.deepEqual(pre.plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(pre.plan.claude.envDelta, { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: pre.plan.launch.title },
     'prefix alone → prefix set, suffix cleared');
   const suf = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-suffix', '·s'] });
-  assert.deepEqual(suf.plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '·s' },
+  assert.deepEqual(suf.plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '·s', CC_LAUNCH_NAME: suf.plan.launch.title },
     'suffix alone → suffix set, prefix cleared');
 });
 
 test('L16 — an empty-string marker value is a cleared marker, indistinguishable from an absent flag', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', ''] });
   assert.equal(res.status, 0);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
     'an explicitly empty marker clears its key, and nothing else applies');
 });
 
 test('L17 — a dangling --title-prefix is inert: stripped, marker cleared, never fatal', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix'] });
   assert.equal(res.status, 0);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
     'a valueless flag adds no marker value — the keys are the cleared pair');
   assert.ok(!plan.claude.argv.includes('--title-prefix'), 'still stripped from the claude argv');
   assert.ok(plan.claude.argv.length > 0, 'claude still launches');
@@ -465,7 +465,7 @@ test('L17 — a dangling --title-prefix is inert: stripped, marker cleared, neve
 test('L18 — a non-ASCII marker round-trips into the env delta unchanged', () => {
   const glyph = '🧪';
   const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', glyph] });
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph, CC_TITLE_SUFFIX: '' });
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: glyph, CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title });
 });
 
 // L19/L20 are the regression pair for the inherited-marker bug: CC_TITLE_PREFIX / CC_TITLE_SUFFIX are
@@ -479,7 +479,7 @@ const INHERITED = { CC_TITLE_PREFIX: 'P', CC_TITLE_SUFFIX: '·s' };
 test('L19 — a plain launch in a shell carrying inherited markers clears them (never adopts them)', () => {
   const { res, plan } = runLauncher({ workspaces: [], identity: IDENT, env: INHERITED });
   assert.equal(res.status, 0);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
     'both markers overwritten with empty — the child cannot read the ambient pair');
   // The same clearing shows in the title this launch composes: unmarked, exactly as in a clean shell.
   assert.equal(plan.launch.titlePrefix, '');
@@ -498,7 +498,7 @@ test('L20 — a marked launch in that same shell still marks its session, from i
     workspaces: [], identity: IDENT, env: INHERITED,
     args: ['--title-prefix', 'Q', '--title-suffix', '·q'],
   });
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'Q', CC_TITLE_SUFFIX: '·q' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: 'Q', CC_TITLE_SUFFIX: '·q', CC_LAUNCH_NAME: 'Q ' + core + ' ·q' },
     'the flags win over the inherited pair — exported for the in-session title consumer');
   assert.equal(plan.launch.title, `Q ${core} ·q`, 'and the composed title carries both');
 });
@@ -1303,6 +1303,71 @@ test('SE4 — CLAUDE_CONFIG_DIR keeps its own rule for the Claude child, and nei
   } finally { rmTree(proj); rmTree(cfg); }
 });
 
+// LN-1–LN-4 — the launch name (CC_LAUNCH_NAME). A fresh launch exports the exact `--name` it passed,
+// a resume exports '', and the key is always written, so an in-session hook can tell the launch name
+// from a name chosen later and a launch never inherits another launch's value. VS Code never gets it.
+// The values here are the file's generic projx / P / ·s.
+
+test('LN-1 — a fresh launch records its exact --name in CC_LAUNCH_NAME, unmarked and marked', () => {
+  // Red if: the recorded value differs from the --name argv value by a single byte (markers included).
+  for (const args of [[], ['--title-prefix', 'P', '--title-suffix', '·s']]) {
+    const { plan } = runLauncher({ workspaces: [], identity: IDENT, args });
+    const at = plan.claude.argv.indexOf('--name');
+    assert.ok(at > 0, `${args.join(' ') || 'bare cc'}: --name is passed`);
+    assert.equal(plan.claude.envDelta.CC_LAUNCH_NAME, plan.claude.argv[at + 1], `${args.join(' ') || 'bare cc'}: CC_LAUNCH_NAME is the --name value`);
+  }
+  const core = coreTitle();
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--title-prefix', 'P', '--title-suffix', '·s'] });
+  assert.equal(plan.claude.envDelta.CC_LAUNCH_NAME, `P ${core} ·s`, 'the markers are part of the recorded name');
+});
+
+test('LN-2 — a resume records an empty CC_LAUNCH_NAME: the key is present, and no --name is passed', () => {
+  // Red if: a resume leaves the key out (the child would inherit an ambient value) or records a name.
+  for (const args of [['-r', 'abc'], ['--resume=abc'], ['-c'], ['--continue']]) {
+    const { plan } = runLauncher({ workspaces: [], identity: IDENT, args });
+    assert.ok(Object.hasOwn(plan.claude.envDelta, 'CC_LAUNCH_NAME'), `${args.join(' ')}: the key is written`);
+    assert.equal(plan.claude.envDelta.CC_LAUNCH_NAME, '', `${args.join(' ')}: empty`);
+    assert.ok(!plan.claude.argv.includes('--name'), `${args.join(' ')}: no --name`);
+  }
+});
+
+const STALE_LAUNCH = { CC_LAUNCH_NAME: 'stale/name' };
+
+test('LN-3 — an inherited CC_LAUNCH_NAME is overwritten: in the delta, and in the real child environment', () => {
+  // Red if: the launcher reads or keeps the ambient value (the L19 bug, for the launch name).
+  const fresh = runLauncher({ workspaces: [], identity: IDENT, env: STALE_LAUNCH }).plan;
+  assert.equal(fresh.claude.envDelta.CC_LAUNCH_NAME, fresh.launch.title, 'a fresh launch: its own title');
+  const resumed = runLauncher({ workspaces: [], identity: IDENT, env: STALE_LAUNCH, args: ['-r', 'abc'] }).plan;
+  assert.equal(resumed.claude.envDelta.CC_LAUNCH_NAME, '', 'a resume: empty');
+  const proj = newProj();
+  try {
+    const live = runRecorded({ proj, args: ['--no-vscode'], env: STALE_LAUNCH });
+    assert.equal(live.res.status, 0, live.res.stderr);
+    assert.ok(live.seen.claude, 'the claude stub ran');
+    assert.equal(live.seen.claude.env.get(winFold('CC_LAUNCH_NAME')), IDENT.name, 'the child sees this launch\'s own name (a non-git folder: the identity name)');
+    const liveResume = runRecorded({ proj, args: ['--no-vscode', '-r', 'abc'], env: STALE_LAUNCH });
+    assert.equal(liveResume.res.status, 0, liveResume.res.stderr);
+    assert.ok(liveResume.seen.claude, 'the claude stub ran (resume)');
+    const v = liveResume.seen.claude.env.get(winFold('CC_LAUNCH_NAME'));
+    assert.notEqual(v, 'stale/name', 'never the inherited value');
+    assert.equal(v ?? '', '', 'empty (a shell may drop an empty variable altogether)');
+  } finally { rmTree(proj); }
+});
+
+test('LN-4 — VS Code never receives CC_LAUNCH_NAME: it is on the VS Code scrub list, and the code stub\'s env lacks it', () => {
+  // Red if: the scrub list for VS Code omits CC_LAUNCH_NAME (a `claude` typed in its terminal would
+  // inherit a launch name that is not its own).
+  const { plan } = runLauncher({ workspaces: [], identity: IDENT, args: ['--pair-vscode'] });
+  assert.ok(plan.vscode.envScrub && plan.vscode.envScrub.names.includes('CC_LAUNCH_NAME'), `the VS Code scrub names include CC_LAUNCH_NAME: ${JSON.stringify(plan.vscode.envScrub)}`);
+  const proj = newProj();
+  try {
+    const pair = runRecorded({ proj, args: ['--pair-vscode'], env: { CC_LAUNCH_NAME: 'x' }, waitFor: ['code'] });
+    assert.equal(pair.res.status, 0, pair.res.stderr);
+    assert.ok(pair.seen.code, 'the code stub ran (detached) within 10 s');
+    assert.ok(!pair.seen.code.env.has(winFold('CC_LAUNCH_NAME')), 'CC_LAUNCH_NAME must not reach VS Code');
+  } finally { rmTree(proj); }
+});
+
 test('SE5 — no valid list: the launch proceeds exactly as with one, removes nothing, and prints one stderr line', () => {
   // Red if: a missing/invalid list fails the launch, changes the claude argv, removes anything, or
   // prints zero or two lines (or a different line).
@@ -1408,7 +1473,7 @@ process.on('exit', () => { try { rmSync(LT_ROOT, { recursive: true, force: true 
 function ltEnv(extra = {}) {
   const env = { ...process.env };
   for (const k of Object.keys(env)) {
-    if (/^(CC_TITLE_PREFIX|CC_TITLE_SUFFIX|CLAUDE_PROJECT_DIR|CC_LAUNCH_DRYRUN|GIT_DIR|GIT_WORK_TREE|GIT_CEILING_DIRECTORIES)$/i.test(k)) delete env[k];
+    if (/^(CC_TITLE_PREFIX|CC_TITLE_SUFFIX|CC_LAUNCH_NAME|CLAUDE_PROJECT_DIR|CC_LAUNCH_DRYRUN|GIT_DIR|GIT_WORK_TREE|GIT_CEILING_DIRECTORIES)$/i.test(k)) delete env[k];
   }
   return { ...env, GIT_CONFIG_NOSYSTEM: '1', HOME: LT_HOME, USERPROFILE: LT_HOME, GIT_CEILING_DIRECTORIES: LT_ROOT, ...extra };
 }
@@ -1507,9 +1572,12 @@ test('LT2 — the tab title is unchanged by the move, except the intended identi
     ['no repo', ltDir('v-norepo')],
     ['detached HEAD', (() => { const d = ltRepo('v-det'); ltGit(d, 'checkout', '-q', '--detach'); return d; })()],
   ];
+  // The base/branch separator changed from `@` to `/` after this freeze ref (2026-10-23), so the
+  // pre-change title's one `@` (no fixture base contains one) is mapped to `/` before the compare.
+  const sepNow = (s) => s.replace('@', '/');
   for (const [label, dir] of same) {
     for (const args of [[], ['--title-prefix', '[P]', '--title-suffix', '[S]']]) {
-      assert.equal(printTitle(launcher, dir, args), printTitle(before, dir, args), `${label} ${args.join(' ')}: byte-identical to the pre-change title`);
+      assert.equal(printTitle(launcher, dir, args), sepNow(printTitle(before, dir, args)), `${label} ${args.join(' ')}: byte-identical to the pre-change title, separator aside`);
     }
   }
   for (const raw of ['"hello"', '42', '[1,2]']) {

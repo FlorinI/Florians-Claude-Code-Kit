@@ -8,7 +8,7 @@
 //
 // Reads the current project's remembered session identity (the read rule, the name fallbacks, the
 // branch and the title composition all live in the sibling session-title.mjs):
-//   name   -> session name/title via `--name <name>@<branch>` on a FRESH launch; omitted when the
+//   name   -> session name/title via `--name <name>/<branch>` on a FRESH launch; omitted when the
 //             user's argv is resume-shaped, so Claude Code restores that session's own stored name.
 //             Falls back through three tiers: identity name -> repo name (origin slug, else git
 //             top-level folder) -> cwd folder leaf. --name is a flag, so it sets the prompt box /
@@ -19,7 +19,7 @@
 //   model  -> `--model <model>`  if set
 //   effort -> `--effort <level>` if set
 //
-// Title/name = [<title-prefix>] <identity name | repo name | folder leaf>@<branch> [<title-suffix>].
+// Title/name = [<title-prefix>] <identity name | repo name | folder leaf>/<branch> [<title-suffix>].
 //
 // Exit title: a session renamed during its life leaves the tab on its FINAL name. The launcher
 // follows its child's live registry entry while it runs, reads the final name from that session's
@@ -343,7 +343,13 @@ const claudeArgv = pair ? [] : shimVector(claudePath, cli);
 // so it is DELETED from the child env, unconditionally, never keyed on the ambient value. A bare `cc`
 // typed in a shell descended from a second-home launch therefore runs on the primary home, as its
 // title says. The deletion is not part of envDelta: the delta names keys this launch WRITES.
-const envDelta = { CC_TITLE_PREFIX: flags.titlePrefix, CC_TITLE_SUFFIX: flags.titleSuffix };
+//
+// CC_LAUNCH_NAME is the `--name` this launch passed — '' on a resume, which passes none — so an
+// in-session hook can tell the launch name from a name chosen later. Always written, like the markers.
+const envDelta = {
+  CC_TITLE_PREFIX: flags.titlePrefix, CC_TITLE_SUFFIX: flags.titleSuffix,
+  CC_LAUNCH_NAME: title && !isResume ? title : '',
+};
 if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
 
 // --- inherited session variables (the sibling session-env-scrub.json) ---------------------------
@@ -354,7 +360,8 @@ if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
 //     launch that set them. The `names` are Claude Code's own markers, which it reads to recognise a
 //     launch from inside one of its sessions, so they are left for it to see.
 //   - VS Code loses every listed name and every prefix match, plus this launcher's two title markers
-//     (see scrubRule): a `cc` or `claude` typed in one of its terminals must start an ordinary session.
+//     and its launch name (see scrubRule): a `cc` or `claude` typed in one of its terminals must
+//     start an ordinary session.
 // Matching is case-insensitive on Windows (environment names are case-insensitive there, and a spread
 // of process.env keeps whatever casing a variable was set with), exact elsewhere. A missing or
 // invalid file removes nothing extra and costs one stderr line on the paths that spawn; the launch
@@ -387,14 +394,14 @@ const childEnv = { ...(scrubList ? withoutVars(process.env, [], scrubList.prefix
 if (!flags.configDir) delete childEnv.CLAUDE_CONFIG_DIR;
 // The rule each spawn applies, for the dry-run plan: the rule, never the variables that happened to
 // be present, so the plan does not depend on the shell it runs in. null = no valid list file.
-// VS Code also loses this launcher's own two title markers. They describe the session this launcher
-// starts, and VS Code is not that session: a bare `claude` typed in one of its terminals runs on the
+// VS Code also loses this launcher's own two title markers and CC_LAUNCH_NAME. They describe the
+// session this launcher starts, and VS Code is not that session: a bare `claude` typed in one of its terminals runs on the
 // primary home (the list removes CLAUDE_CONFIG_DIR), so it must not see another home's markers
 // either. They are launcher-owned, not list entries, and travel with CLAUDE_CONFIG_DIR: removed
 // exactly when the list is valid, so a missing list still changes nothing.
 const scrubRule = {
   claude: scrubList ? { names: [], prefixes: scrubList.prefixes } : null,
-  vscode: scrubList ? { names: [...scrubList.names, 'CC_TITLE_PREFIX', 'CC_TITLE_SUFFIX'], prefixes: scrubList.prefixes } : null,
+  vscode: scrubList ? { names: [...scrubList.names, 'CC_TITLE_PREFIX', 'CC_TITLE_SUFFIX', 'CC_LAUNCH_NAME'], prefixes: scrubList.prefixes } : null,
 };
 
 // --- VS Code co-launch (env-gated; default off) -------------------------------------------------
@@ -485,7 +492,7 @@ function tileOutcome(r) {
 }
 
 // Inline-PowerShell plumbing: encode as base64(UTF-16LE) and run via -EncodedCommand — sidesteps all
-// quoting of the HWND / name@branch title, and is ExecutionPolicy-proof.
+// quoting of the HWND / name/branch title, and is ExecutionPolicy-proof.
 // NOTE: NO `detached: true`. DETACHED_PROCESS gives powershell.exe no console at all, and the console
 // host then fails to initialize and never runs the script. `windowsHide` (CREATE_NO_WINDOW) gives it
 // a HIDDEN console instead — which works. The tiler finishes within ~5s while the launcher is still
@@ -762,7 +769,8 @@ if (dryRun) {
     vscode: { action: vsPlan.action, target: vsPlan.target, spawnOpts: { ...VS_SPAWN_OPTS, unref: true }, envScrub: scrubRule.vscode },
     // envDelta is the DELTA ONLY — never the inherited environment, so a dry-run captured in a CI
     // log can't spill anything. Always carries both title markers (empty when the flag was absent —
-    // every launch is authoritative over them); CLAUDE_CONFIG_DIR only when --config-dir was given.
+    // every launch is authoritative over them) and CC_LAUNCH_NAME ('' on a resume); CLAUDE_CONFIG_DIR
+    // only when --config-dir was given.
     // envScrub is the removal rule from the list file (null when it is missing or invalid).
     claude: { argv: claudeArgv, envDelta, envScrub: scrubRule.claude },
     tile: {

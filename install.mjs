@@ -224,7 +224,7 @@ function launcherProfile(claudeHome, shellHome, platform = process.platform) {
       path: join(home, 'Documents', 'PowerShell', 'profile.ps1'),  // pwsh 7 CurrentUserAllHosts
       // After the launch returns, pwsh re-owns BOTH the tab title and its color: Windows Terminal
       // reverts a child-set title (to the shell's own) and a child-set tab color the moment the child
-      // exits, so only the shell re-asserting them makes <name@branch> and the identity color stick past
+      // exits, so only the shell re-asserting them makes <name/branch> and the identity color stick past
       // CC. `--print-title` echoes the resolved title; `--print-tabcolor` echoes the OSC tab-color
       // escape (empty on non-WT); the launch itself paints both while CC runs. Wrapped in try/catch so a
       // headless/no-console host can't error the prompt.

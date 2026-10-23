@@ -117,7 +117,7 @@ test('L22 — that same shell with --config-dir <other>: the child sees exactly 
 test('L24 — dry run with a poisoned parent env: the delta stays the delta (no CLAUDE_CONFIG_DIR key), configDir null', () => {
   const { plan } = runLauncher({ env: { CLAUDE_CONFIG_DIR: tmpdir() } });
   assert.equal(plan.launch.configDir, null);
-  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '' },
+  assert.deepEqual(plan.claude.envDelta, { CC_TITLE_PREFIX: '', CC_TITLE_SUFFIX: '', CC_LAUNCH_NAME: plan.launch.title },
     'the delta names keys this launch WRITES; the deletion is proven by L21, not exposed here (spec fork 8)');
 });
 
@@ -182,14 +182,17 @@ test('R9 — every --fork-session form pushes --name <title>, whatever else the 
     const at = argv.indexOf('--name');
     assert.ok(at > 0, `${args.join(' ')} must push --name: ${argv.join(' ')}`);
     assert.equal(argv[at + 1], plan.launch.title, `${args.join(' ')}: named with the ONE computed title`);
-    assert.ok(plan.launch.title.startsWith(IDENT.name), 'the fresh name for this project (AE-15: `env@main`, not the stored topic)');
+    assert.ok(plan.launch.title.startsWith(IDENT.name), 'the fresh name for this project (AE-15: `env/main`, not the stored topic)');
+    assert.equal(plan.claude.envDelta.CC_LAUNCH_NAME, plan.launch.title, `${args.join(' ')}: a fork is a fresh name, recorded in CC_LAUNCH_NAME`);
     for (const a of args) assert.ok(argv.includes(a), `${args.join(' ')}: ${a} forwarded to claude`);
   }
 });
 
 test('R9b — the same forms WITHOUT --fork-session still omit --name (a plain resume keeps its stored name)', () => {
   for (const args of [['--resume', '0f3a'], ['-r', '0f3a'], ['-c'], ['--continue'], ['--resume=0f3a']]) {
-    assert.ok(!hasName(argvFor(args)), `${args.join(' ')} must not push --name`);
+    const plan = planFor(args);
+    assert.ok(!hasName(plan.claude.argv), `${args.join(' ')} must not push --name`);
+    assert.equal(plan.claude.envDelta.CC_LAUNCH_NAME, '', `${args.join(' ')}: a resume records an empty launch name`);
   }
 });
 

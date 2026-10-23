@@ -76,20 +76,20 @@ If a clause is malformed or you can't tell what to change, ask one short questio
    on its own line in a fenced block:
 
    ```
-   /rename <name>@<branch>
+   /rename <name>/<branch>
    /color <color>
    /model <id>
    /effort <level>
    ```
 
-   **The `/rename` line must append the current git branch** — `<name>@<branch>` — so the pasted name
-   matches what the `cc` launcher titles the session (`base@branch`). Resolve `<branch>` with
+   **The `/rename` line must append the current git branch** — `<name>/<branch>` — so the pasted name
+   matches what the `cc` launcher titles the session (`base/branch`). Resolve `<branch>` with
    `git branch --show-current`, falling back to the short HEAD (`git rev-parse --short HEAD`) when
    detached; if the project isn't a git repo or has no branch, emit the bare `/rename <name>`. `/color`
    takes no suffix.
 
    **Title markers:** wrap the `/rename` name with `CC_TITLE_PREFIX` / `CC_TITLE_SUFFIX` —
-   `<prefix> <name>@<branch> <suffix>`, single-space joins, empty/unset parts dropped — so the pasted
+   `<prefix> <name>/<branch> <suffix>`, single-space joins, empty/unset parts dropped — so the pasted
    name matches the tab title exactly. The `cc` launcher always exports both, carrying the text it was
    given via `--title-prefix` / `--title-suffix` and the **empty string** when it was given neither;
    an empty part is dropped, so a launch with no markers composes an unmarked name. That is also what
@@ -156,7 +156,7 @@ to choose by.
 A blank "type a name" prompt is low value. Derive **2–3 candidate names** from repo signals — the
 project folder name, the project `CLAUDE.md` H1 title, the current git branch, the theme of recent
 work — and offer them via `AskUserQuestion`, plus the auto-"Other" and an explicit **"Leave unset"** so
-skipping is one tap. On a pick: persist `name` (steps 4–5) and echo `/rename <name>@<branch>` (step 6).
+skipping is one tap. On a pick: persist `name` (steps 4–5) and echo `/rename <name>/<branch>` (step 6).
 On "Leave unset": write nothing for `name`.
 
 ## Notes

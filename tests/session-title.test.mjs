@@ -106,15 +106,15 @@ test('ST1 — no repo, no identity: the title is the folder leaf; --topic append
 });
 
 // ── ST2 — a named repo on main ───────────────────────────────────────────────────────────────────
-test('ST2 — repo on main, identity name `env`: `env@main`; markers wrap it with single spaces', () => {
-  // Red if: the branch is dropped, `@main` is special-cased away (there is no default-branch
+test('ST2 — repo on main, identity name `env`: `env/main`; markers wrap it with single spaces', () => {
+  // Red if: the branch is dropped, `/main` is special-cased away (there is no default-branch
   // exception), or a marker is dropped or joined without a space.
   const d = makeRepo('named');
   writeIdentity(d, '.desk', { name: 'env' });
-  assert.equal(line(d), '/rename env@main');
-  assert.equal(line(d, { env: { CC_TITLE_PREFIX: '[P]', CC_TITLE_SUFFIX: '[S]' } }), '/rename [P] env@main [S]');
+  assert.equal(line(d), '/rename env/main');
+  assert.equal(line(d, { env: { CC_TITLE_PREFIX: '[P]', CC_TITLE_SUFFIX: '[S]' } }), '/rename [P] env/main [S]');
   assert.equal(line(d, { args: ['--topic', 'foo'], env: { CC_TITLE_PREFIX: '[P]', CC_TITLE_SUFFIX: '[S]' } }),
-    '/rename [P] env@main: foo [S]', 'the topic joins the core, inside the markers');
+    '/rename [P] env/main: foo [S]', 'the topic joins the core, inside the markers');
 });
 
 // ── ST3 — the base-name chain ────────────────────────────────────────────────────────────────────
@@ -122,34 +122,34 @@ test('ST3 — the base chain: origin slug (https and scp forms), trailing-slash 
   // Red if: any tier is reordered, `.git` is not stripped, the scp `host:a/proj` form is not split on
   // `:`/`/`, the trailing-slash origin produces an empty base, or a subfolder's own leaf is used.
   const https = makeRepo('top-https', { origin: 'https://x/y/proj.git' });
-  assert.equal(line(https), '/rename proj@main');
+  assert.equal(line(https), '/rename proj/main');
   const scp = makeRepo('top-scp', { origin: 'git@host:a/proj' });
-  assert.equal(line(scp), '/rename proj@main');
+  assert.equal(line(scp), '/rename proj/main');
   const slash = makeRepo('top-slash', { origin: 'https://x/y/proj/' });
-  assert.equal(line(slash), '/rename top-slash@main', 'no slug match: falls through to the top-level leaf, as the launcher does today');
+  assert.equal(line(slash), '/rename top-slash/main', 'no slug match: falls through to the top-level leaf, as the launcher does today');
   const none = makeRepo('top-none');
-  assert.equal(line(none), '/rename top-none@main');
+  assert.equal(line(none), '/rename top-none/main');
   const sub = join(none, 'deeper', 'sub');
   mkdirSync(sub, { recursive: true });
-  assert.equal(line(sub), '/rename top-none@main', 'run from a subfolder: the top-level leaf, not the subfolder');
+  assert.equal(line(sub), '/rename top-none/main', 'run from a subfolder: the top-level leaf, not the subfolder');
 });
 
 // ── ST4 — detached HEAD ──────────────────────────────────────────────────────────────────────────
-test('ST4 — detached HEAD: `<base>@<short sha>`', () => {
-  // Red if: the short-HEAD fallback is dropped (title would lose its @ part) or the full sha is used.
+test('ST4 — detached HEAD: `<base>/<short sha>`', () => {
+  // Red if: the short-HEAD fallback is dropped (title would lose its / part) or the full sha is used.
   const d = makeRepo('detached');
   git(d, 'checkout', '-q', '--detach');
   const short = git(d, 'rev-parse', '--short', 'HEAD');
   const out = line(d);
-  assert.match(out, /^\/rename detached@[0-9a-f]{7,}$/);
-  assert.equal(out, `/rename detached@${short}`);
+  assert.match(out, /^\/rename detached\/[0-9a-f]{7,}$/);
+  assert.equal(out, `/rename detached/${short}`);
 });
 
 // ── ST5 — unborn branch ──────────────────────────────────────────────────────────────────────────
 test('ST5 — a repo with no commits: the unborn branch name', () => {
   // Red if: the branch read requires a commit (rev-parse first), so a fresh repo shows no branch.
   const d = makeRepo('unborn', { branch: 'trunk', commit: false });
-  assert.equal(line(d), '/rename unborn@trunk');
+  assert.equal(line(d), '/rename unborn/trunk');
 });
 
 // ── ST6 — a git worktree ─────────────────────────────────────────────────────────────────────────
@@ -158,12 +158,12 @@ test('ST6 — a worktree on branch feat: its own branch; base the origin slug, e
   const withRemote = makeRepo('wt-main-r', { origin: 'https://x/y/proj.git' });
   const wtR = join(dirname(withRemote), 'wt-feat-r');
   git(withRemote, 'worktree', 'add', '-q', '-b', 'feat', wtR);
-  assert.equal(line(wtR), '/rename proj@feat');
+  assert.equal(line(wtR), '/rename proj/feat');
 
   const noRemote = makeRepo('wt-main');
   const wt = join(dirname(noRemote), 'wt-feat');
   git(noRemote, 'worktree', 'add', '-q', '-b', 'feat', wt);
-  assert.equal(line(wt), '/rename wt-feat@feat');
+  assert.equal(line(wt), '/rename wt-feat/feat');
 });
 
 // ── ST7 — the identity read ──────────────────────────────────────────────────────────────────────
@@ -245,12 +245,12 @@ test('ST10 — CLI: a spaced topic, CLAUDE_PROJECT_DIR over the cwd, a missing o
   const proj = makeRepo('projdir');
   writeIdentity(proj, '.desk', { name: 'pd' });
   const other = freshDir('elsewhere');
-  assert.equal(line(proj, { args: ['--topic', 'a b'] }), '/rename pd@main: a b');
-  assert.equal(line(other, { env: { CLAUDE_PROJECT_DIR: proj } }), '/rename pd@main', 'CLAUDE_PROJECT_DIR outranks the cwd');
+  assert.equal(line(proj, { args: ['--topic', 'a b'] }), '/rename pd/main: a b');
+  assert.equal(line(other, { env: { CLAUDE_PROJECT_DIR: proj } }), '/rename pd/main', 'CLAUDE_PROJECT_DIR outranks the cwd');
   assert.equal(line(other), '/rename elsewhere', 'without it, the cwd');
-  assert.equal(line(proj, { args: ['--topic'] }), '/rename pd@main', '--topic with no value: no topic');
-  assert.equal(line(proj, { args: ['--topic', ''] }), '/rename pd@main', 'an empty topic: no topic');
-  assert.equal(line(proj, { args: ['--topic', '   '] }), '/rename pd@main', 'a blank topic: no topic');
+  assert.equal(line(proj, { args: ['--topic'] }), '/rename pd/main', '--topic with no value: no topic');
+  assert.equal(line(proj, { args: ['--topic', ''] }), '/rename pd/main', 'an empty topic: no topic');
+  assert.equal(line(proj, { args: ['--topic', '   '] }), '/rename pd/main', 'a blank topic: no topic');
 });
 
 // ── ST11 — source invariants (the public half) ───────────────────────────────────────────────────
@@ -431,7 +431,7 @@ test('XT5 — read boundaries: a name with an emoji and Romanian letters comes b
 
 test('XT6 — the exit-title rule over the matrix: transcript beats registry; markers added once, never doubled; no candidate → the launch title', () => {
   // Red if: a marker is doubled or dropped, or the order of sources is swapped.
-  const LAUNCH_BY = { '': 'proj@main', P: '[P] proj@main', S: 'proj@main [S]', PS: '[P] proj@main [S]' };
+  const LAUNCH_BY = { '': 'proj/main', P: '[P] proj/main', S: 'proj/main [S]', PS: '[P] proj/main [S]' };
   for (const prefix of ['', '[P]']) {
     for (const suffix of ['', '[S]']) {
       const launchTitle = LAUNCH_BY[(prefix ? 'P' : '') + (suffix ? 'S' : '')];
@@ -457,20 +457,20 @@ test('XT6 — the exit-title rule over the matrix: transcript beats registry; ma
       const emptyReg = ST.composeExitTitle({ transcriptName: null, registryName: '', launchTitle, prefix, suffix });
       assert.deepEqual(emptyReg, { title: launchTitle, renamed: false }, 'an empty registry name (nameSource not "user") is no candidate');
       // A name that is the launch title once the markers are applied is NOT a rename (spec rule 2.5).
-      const same = ST.composeExitTitle({ transcriptName: 'proj@main', registryName: null, launchTitle, prefix, suffix });
+      const same = ST.composeExitTitle({ transcriptName: 'proj/main', registryName: null, launchTitle, prefix, suffix });
       assert.deepEqual(same, { title: launchTitle, renamed: false }, `prefix=${prefix} suffix=${suffix}: the launch name is not a rename`);
     }
   }
   // The nudge's line in the generic markers, and a hand rename (AE-1.2, AE-1.3 shapes).
-  assert.deepEqual(ST.composeExitTitle({ transcriptName: '[P] proj@main: topic [S]', launchTitle: '[P] proj@main [S]', prefix: '[P]', suffix: '[S]' }),
-    { title: '[P] proj@main: topic [S]', renamed: true });
-  assert.deepEqual(ST.composeExitTitle({ transcriptName: 'notes', launchTitle: '[P] proj@main [S]', prefix: '[P]', suffix: '[S]' }),
+  assert.deepEqual(ST.composeExitTitle({ transcriptName: '[P] proj/main: topic [S]', launchTitle: '[P] proj/main [S]', prefix: '[P]', suffix: '[S]' }),
+    { title: '[P] proj/main: topic [S]', renamed: true });
+  assert.deepEqual(ST.composeExitTitle({ transcriptName: 'notes', launchTitle: '[P] proj/main [S]', prefix: '[P]', suffix: '[S]' }),
     { title: '[P] notes [S]', renamed: true });
 });
 
 test('XT7 — sanitising: escapes-only falls through to the registry name; control bytes stripped; 100 code points → 80 ending in …', () => {
   // Red if: the composer skips sanitizeSessionName, or an empty result stops the fallthrough.
-  const launchTitle = 'proj@main';
+  const launchTitle = 'proj/main';
   assert.deepEqual(ST.composeExitTitle({ transcriptName: '\x1b[31m\x1b[0m\x07', registryName: 'from-registry', launchTitle }),
     { title: 'from-registry', renamed: true }, 'a transcript name that sanitises to empty falls through to the registry name (ruling 1.2)');
   assert.deepEqual(ST.composeExitTitle({ transcriptName: '\x1b[31m', registryName: '\x07\x1b[0m', launchTitle }),
@@ -533,5 +533,59 @@ test('XT9 — source: the module imports only node: built-ins and ./sanitize-nam
   assert.ok(!/['"`]sessions['"`]/.test(launcher), 'the launcher composes no sessions/ path of its own');
   for (const fn of ['readRegistryEntry', 'findTranscript', 'lastCustomTitle', 'composeExitTitle', 'writeExitTitleFile', 'readExitTitleFile']) {
     assert.match(launcher, new RegExp(`\\b${fn}\\b`), `the launcher uses the module's ${fn}`);
+  }
+});
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// ST-SEP1–ST-SEP4 — the session-name separator is `/` (session-name separator sprint, item 1)
+// Spec:      .claude/plans/261023-session-name-separator-spec.md item 1 (frozen at [G1], 56613a4)
+// Test plan: .claude/plans/261023-session-name-separator-test-plan.md, session-title rows
+// Claude Code's SendMessage refuses a recipient containing `@`, so a composed title joins base and
+// branch with `/`. Generic names only: this file ships in the public kit.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+test('ST-SEP1 — the module exports the separator, `/`, and composeTitle joins base and branch with it', () => {
+  // Red if: the separator is inlined again (the rename-apply hook imports it to rebuild the shape),
+  // or composeTitle uses a character other than the exported one.
+  assert.equal(ST.BRANCH_SEP, '/', 'BRANCH_SEP is exported and is `/`');
+  assert.equal(ST.composeTitle({ base: 'b', branch: 'm' }), 'b/m');
+  assert.equal(ST.composeTitle({ base: 'b', branch: 'm' }), 'b' + ST.BRANCH_SEP + 'm', 'composed with the exported constant');
+});
+
+test('ST-SEP2 — a branch that contains `/`: the title is the plain concatenation, no escaping, no quoting', () => {
+  // Red if: a `/` inside the branch is escaped, quoted, replaced, or doubled into a second separator.
+  const d = makeRepo('slashbr', { branch: 'feature/x' });
+  writeIdentity(d, '.desk', { name: 'env' });
+  assert.equal(line(d), '/rename env/feature/x');
+  assert.equal(line(d, { args: ['--topic', 'a-b'] }), '/rename env/feature/x: a-b');
+});
+
+test('ST-SEP3 — composeTitle boundaries: no branch, markers, topic, and an empty-string branch is no branch', () => {
+  // Red if: a missing or empty branch leaves a trailing `/`, or the topic or markers move relative to it.
+  assert.equal(ST.composeTitle({ base: 'b', topic: 't' }), 'b: t', 'no branch, a topic');
+  assert.equal(ST.composeTitle({ base: 'b', prefix: '[P]', suffix: '[S]' }), '[P] b [S]', 'no branch, no topic, markers');
+  assert.equal(ST.composeTitle({ base: 'b', branch: 'm', topic: 't', prefix: '[P]', suffix: '[S]' }), '[P] b/m: t [S]', 'all parts');
+  assert.equal(ST.composeTitle({ base: 'b', branch: '' }), 'b', 'an empty-string branch is no branch');
+  assert.equal(ST.composeTitle({ base: 'b', branch: '', topic: 't' }), 'b: t', 'an empty-string branch with a topic');
+});
+
+test('ST-SEP4 — no `@` reaches a composed title, across every repository shape ST2–ST6 builds', () => {
+  // Red if: any path through the module still joins with `@` (a second copy of the separator).
+  const named = makeRepo('sep4-named');
+  writeIdentity(named, '.desk', { name: 'env' });
+  const https = makeRepo('sep4-https', { origin: 'https://x/y/proj.git' });
+  const scp = makeRepo('sep4-scp', { origin: 'git@host:a/proj' });
+  const detached = makeRepo('sep4-detached');
+  git(detached, 'checkout', '-q', '--detach');
+  const unborn = makeRepo('sep4-unborn', { branch: 'trunk', commit: false });
+  const main = makeRepo('sep4-wt-main', { origin: 'https://x/y/proj.git' });
+  const wt = join(dirname(main), 'sep4-wt-feat');
+  git(main, 'worktree', 'add', '-q', '-b', 'feat', wt);
+  const markers = { CC_TITLE_PREFIX: '[P]', CC_TITLE_SUFFIX: '[S]' };
+  for (const d of [named, https, scp, detached, unborn, wt]) {
+    for (const opts of [{}, { args: ['--topic', 'x'] }, { env: markers }]) {
+      const out = line(d, opts);
+      assert.ok(out.includes('/', '/rename'.length), `the title carries the / separator: ${out}`);
+      assert.ok(!out.includes('@'), `no @ in ${JSON.stringify(out)}`);
+    }
   }
 });

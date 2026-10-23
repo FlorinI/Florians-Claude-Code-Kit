@@ -90,7 +90,7 @@ The installer also adds a tiny **`cc`** shell function (to your PowerShell `$PRO
 Set it up with the **`/identity`** command — it shows a color swatch, suggests names from the repo,
 and writes the file for you — or edit the JSON directly. The launcher then:
 
-- **Names the tab** `name@branch` — falling back to the repo name, then the folder leaf, when `name`
+- **Names the tab** `name/branch` — falling back to the repo name, then the folder leaf, when `name`
   is unset — so your terminal title bar and Claude's `/resume` picker tell sessions apart.
 - **Colors the session.** This is the part that pays off when you keep several sessions open at once.
   It works in two layers:

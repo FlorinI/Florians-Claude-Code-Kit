@@ -13,9 +13,9 @@
 //      of the git top-level folder; else the leaf of <dir>.
 //   3. Branch. The current branch; else the short HEAD (detached); else none. Every git call runs in
 //      <dir> with stderr discarded; a failed call is an empty result.
-//   4. Title. The core is `<base>@<branch>`, or `<base>` with no branch (a topic appends
-//      `: <topic>` to the core). The title is [prefix, core, suffix] with empty parts dropped,
-//      joined by single spaces.
+//   4. Title. The core is `<base>/<branch>` (BRANCH_SEP), or `<base>` with no branch (a topic
+//      appends `: <topic>` to the core). The title is [prefix, core, suffix] with empty parts
+//      dropped, joined by single spaces.
 //
 // Command-line entry: `node session-title.mjs [--topic <slug>]` prints one line, `/rename <title>`.
 // The directory is CLAUDE_PROJECT_DIR, else the current directory; the markers are CC_TITLE_PREFIX /
@@ -92,9 +92,13 @@ export function currentBranch(dir) {
   return git(dir, ['branch', '--show-current']) || git(dir, ['rev-parse', '--short', 'HEAD']);
 }
 
+// The separator between base and branch in a composed title. Exported so a reader of the title shape
+// (the rename-apply hook) finds the same character this module writes.
+export const BRANCH_SEP = '/';
+
 // Rule 4, from parts already resolved.
 export function composeTitle({ base, branch = '', topic = '', prefix = '', suffix = '' }) {
-  let core = branch ? `${base}@${branch}` : base;
+  let core = branch ? `${base}${BRANCH_SEP}${branch}` : base;
   if (topic) core += `: ${topic}`;
   return [prefix, core, suffix].filter(Boolean).join(' ');
 }

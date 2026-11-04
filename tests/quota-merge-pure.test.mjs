@@ -34,6 +34,9 @@
 // AE-6 — A narrow payload never wipes the other window
 //   The stored file holds both windows; a render carries only the 5h one. The 7d reading in the
 //   file is byte-identical afterwards, while the 5h one advanced.
+//   One exception: a write flagged `fiveHourAbsent` (an API response that carried no 5-hour window)
+//   whose 7-day observation came more than the grace after the stored 5-hour window ended removes
+//   that ended 5-hour window. A running 5-hour window is never removed.
 //
 // ── Row map ─────────────────────────────────────────────────────────────────────────────────────
 //   P1  schema constants                        P7  argument-order symmetry (AE-1, AE-2)
@@ -45,14 +48,20 @@
 //   P13  rule 3: a higher figure never carries the row's date backwards (clamp)
 //   P13b rule 3: higher AND newer → incoming by reference, its own stamp (copy only when clamping)
 //   P13c rule 3: stored stamp missing/non-numeric → incoming by reference, no clamp, no throw
-//   P14  writer: returns one verdict per incoming window ('written' | 'kept'); {} when nothing decided
+//   P14  writer: returns one verdict per incoming window ('written' | 'kept' | 'dropped'); {} when nothing decided
+//   P15  writer: the drop rule — an ended 5h window leaves the file only on flagged evidence (AE-6's exception)
+//   P16  pure tables: FiveHourGone (the drop predicate) and QuotaAbsence (the status line's absent label); arities
+//   P17  ReadQuotaFile: the parsed schema-2 object or null, never a throw
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { MergeQuotaWindow, WriteQuotaFile, QUOTA_SCHEMA, QUOTA_FILE_NAME } from '../home/quota-file.mjs';
+import {
+  MergeQuotaWindow, WriteQuotaFile, QUOTA_SCHEMA, QUOTA_FILE_NAME,
+  FiveHourGone, QuotaAbsence, ReadQuotaFile, FIVE_HOUR_DROP_GRACE_SEC,
+} from '../home/quota-file.mjs';
 
 const NOW = 1788051200;
 const OPEN = NOW + 3600;
@@ -517,6 +526,307 @@ test('P14 — writer: returns one verdict per window the payload carried, as the
     assert.deepEqual(r, {}, 'an unwritable target (config home is a file) returns {} from the catch — no `written` for bytes that never landed');
     for (const bad of [undefined, null, 42, {}]) {
       assert.deepEqual(WriteQuotaFile(bad, { fiveHour: FIVE }), {}, `configHome=${String(bad)}: the catch path returns {}`);
+    }
+  } finally { h2.cleanup(); }
+});
+// ── P15: the drop rule — an ended 5h window leaves only on flagged evidence (five-hour-display spec §3.1) ──
+//
+// The file holds a 5h window that ended at END. A write flagged `fiveHourAbsent` (the caller observed an
+// API response with no 5-hour window) whose INCOMING 7d reading was observed more than
+// FIVE_HOUR_DROP_GRACE_SEC after END removes that 5h window and reports `fiveHour: 'dropped'`. Nothing
+// else removes a window: no flag, a stored stamp, a running window, the 7d window — all leave it.
+
+const END = NOW - 2 * 86400;                 // the stored 5h window ended two days before NOW (the live Ultra shape)
+const DEAD5 = { usedPercentage: 12, resetsAt: END, reportedAt: END - 600 };
+const OLD7 = { usedPercentage: 50, resetsAt: NOW + 3 * 86400, reportedAt: END - 600 };   // observed BEFORE the 5h end
+const seven = (reported, used = 54) => ({ usedPercentage: used, resetsAt: NOW + 3 * 86400, reportedAt: reported });
+const fileText = (o) => JSON.stringify({ schema: 2, ...o }, null, 2);
+const VERDICT_WORDS = new Set(['written', 'kept', 'dropped']);
+const seenVerdicts = [];
+const W = (dir, windows, opts) => {
+  const r = (opts === undefined) ? WriteQuotaFile(dir, windows) : WriteQuotaFile(dir, windows, opts);
+  for (const v of Object.values(r)) seenVerdicts.push(v);
+  return r;
+};
+
+test('P15a — the drop fires at +901 s past the 5h end, not at +900 or +899; the verdict is `dropped`; the file keeps 7d only', () => {
+  for (const [delta, drops] of [[901, true], [900, false], [899, false], [86400, true]]) {
+    const h = tempHome();
+    try {
+      writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+      const inc = seven(END + delta);
+      const r = W(h.dir, { sevenDay: inc }, { fiveHourAbsent: true });
+      const f = JSON.parse(readText(h));
+      if (drops) {
+        assert.equal(f.fiveHour, undefined, `+${delta}: the ended 5h window is gone`);
+        assert.deepEqual(r, { fiveHour: 'dropped', sevenDay: 'written' }, `+${delta}: verdict fiveHour 'dropped', and 7d as its merge decided`);
+        assert.equal(readText(h), fileText({ sevenDay: inc }), `+${delta}: the file is schema 2 + the 7d reading, exactly these bytes`);
+      } else {
+        assert.deepEqual(f.fiveHour, DEAD5, `+${delta}: within the grace the 5h window stays, byte for byte`);
+        assert.equal(r.fiveHour, undefined, `+${delta}: no 5h verdict — nothing happened to it`);
+      }
+      assert.ok(f.sevenDay, `+${delta}: sevenDay is never dropped`);
+    } finally { h.cleanup(); }
+  }
+});
+
+test('P15b — the evidence is the INCOMING 7d stamp: a stored 7d observed before the 5h end does not stop it (AE-2), and the incoming reading need not win its merge', () => {
+  // AE-2's mechanism: the stored 7d was observed before END (OLD7); the render's own observation drops.
+  const h = tempHome();
+  try {
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+    W(h.dir, { sevenDay: seven(END + 5 * 3600) }, { fiveHourAbsent: true });
+    assert.equal(JSON.parse(readText(h)).fiveHour, undefined, 'dropped on the incoming observation alone');
+
+    // The incoming 7d LOSES its merge (lower figure, same window) — its stamp still dates the response.
+    const hi7 = { ...seven(END - 600), usedPercentage: 90 };
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: hi7 }), 'utf8');
+    const r = W(h.dir, { sevenDay: seven(END + 5 * 3600, 54) }, { fiveHourAbsent: true });
+    const f = JSON.parse(readText(h));
+    assert.equal(f.fiveHour, undefined, 'the drop reads the incoming stamp whether or not the incoming reading won');
+    assert.deepEqual(f.sevenDay, hi7, 'and the 7d merge is untouched by the drop: the stored, higher reading stands');
+    assert.deepEqual(r, { fiveHour: 'dropped', sevenDay: 'kept' }, 'verdicts: 5h dropped, 7d kept');
+  } finally { h.cleanup(); }
+});
+
+test('P15c — no flag, no drop: third argument omitted, or `fiveHourAbsent: false`, leaves the ended 5h window byte-identical', () => {
+  for (const opts of [undefined, { fiveHourAbsent: false }, {}]) {
+    const h = tempHome();
+    try {
+      writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+      const r = W(h.dir, { sevenDay: seven(END + 901) }, opts);
+      const f = JSON.parse(readText(h));
+      assert.equal(JSON.stringify(f.fiveHour), JSON.stringify(DEAD5), `opts=${JSON.stringify(opts)}: fiveHour byte-identical`);
+      assert.equal(r.fiveHour, undefined, `opts=${JSON.stringify(opts)}: no 5h verdict`);
+    } finally { h.cleanup(); }
+  }
+});
+
+test('P15d — the stored 7d stamp is never evidence: stored 7d past the 5h end + grace, flagged incoming 7d BEFORE the end → 5h stays', () => {
+  // A stored 7d may carry a render-clock stamp from a render with no banked leg (spec §3.2). It must not
+  // count. The incoming, flagged reading was observed before the 5h window ended, so nothing drops.
+  const h = tempHome();
+  try {
+    const stored7 = seven(END + 3 * 3600, 60);           // stamped well past END + 900
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: stored7 }), 'utf8');
+    W(h.dir, { sevenDay: seven(END - 600, 61) }, { fiveHourAbsent: true });
+    const f = JSON.parse(readText(h));
+    assert.equal(JSON.stringify(f.fiveHour), JSON.stringify(DEAD5), 'fiveHour stays: only this write\'s incoming stamp can drop it');
+  } finally { h.cleanup(); }
+});
+
+test('P15e — a running 5h window is never dropped: flagged 7d-only write against it, or a flagged write that carries one', () => {
+  const RUN5 = { usedPercentage: 30, resetsAt: NOW + 600, reportedAt: NOW - 300 };
+  const h = tempHome();
+  try {
+    // AE-6 holds for running windows: a flagged 7d-only write leaves a running 5h window byte-identical.
+    writeFileSync(h.path, fileText({ fiveHour: RUN5, sevenDay: OLD7 }), 'utf8');
+    const r = W(h.dir, { sevenDay: seven(NOW) }, { fiveHourAbsent: true });
+    assert.equal(JSON.stringify(JSON.parse(readText(h)).fiveHour), JSON.stringify(RUN5), 'running 5h byte-identical');
+    assert.equal(r.fiveHour, undefined, 'and no 5h verdict');
+
+    // The same write carries a running 5h window (a newer one than the stored dead window): it is stored, not dropped.
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+    const r2 = W(h.dir, { fiveHour: RUN5, sevenDay: seven(NOW) }, { fiveHourAbsent: true });
+    assert.deepEqual(JSON.parse(readText(h)).fiveHour, RUN5, 'the carried running window is in the file');
+    assert.equal(r2.fiveHour, 'written', 'its verdict is written, not dropped');
+  } finally { h.cleanup(); }
+});
+
+test('P15f — after a drop, a second identical flagged write writes nothing and reports no 5h verdict', async () => {
+  const h = tempHome();
+  try {
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+    const inc = seven(END + 86400);
+    assert.equal(W(h.dir, { sevenDay: inc }, { fiveHourAbsent: true }).fiveHour, 'dropped', 'vacuity guard: the first write dropped');
+    const before = statSync(h.path).mtimeMs;
+    const bytes = readText(h);
+    await new Promise((res) => setTimeout(res, 25));
+    const r = W(h.dir, { sevenDay: { ...inc } }, { fiveHourAbsent: true });
+    assert.deepEqual(r, { sevenDay: 'kept' }, 'the second write drops nothing — `dropped` appears only on the write that removed the window');
+    assert.equal(readText(h), bytes, 'bytes unchanged');
+    assert.equal(statSync(h.path).mtimeMs, before, 'mtime still: the byte-identical skip still applies after a drop');
+  } finally { h.cleanup(); }
+});
+
+test('P15g — an incoming ENDED 5h window without the flag is stored under rule 1 and not dropped; the flag never drops sevenDay', () => {
+  const h = tempHome();
+  try {
+    writeFileSync(h.path, fileText({ sevenDay: OLD7 }), 'utf8');
+    for (const opts of [undefined, { fiveHourAbsent: false }]) {
+      const r = W(h.dir, { fiveHour: DEAD5, sevenDay: seven(END + 86400) }, opts);
+      assert.deepEqual(JSON.parse(readText(h)).fiveHour, DEAD5, `opts=${JSON.stringify(opts)}: the ended window wins rule 1 against an empty slot and stays`);
+      assert.notEqual(r.fiveHour, 'dropped', 'no drop without the flag');
+    }
+
+    // The 7d window has no drop rule (spec §3.6): a flagged write never removes it, even an ended one.
+    const DEAD7 = { usedPercentage: 99, resetsAt: END, reportedAt: END - 60 };
+    writeFileSync(h.path, fileText({ fiveHour: { ...DEAD5, resetsAt: NOW + 600 }, sevenDay: DEAD7 }), 'utf8');
+    W(h.dir, { fiveHour: { ...DEAD5, resetsAt: NOW + 600, reportedAt: NOW } }, { fiveHourAbsent: true });
+    assert.deepEqual(JSON.parse(readText(h)).sevenDay, DEAD7, 'an ended sevenDay stays in the file');
+
+    // A flagged write with no usable incoming window keeps the early return: nothing decided, nothing written.
+    writeFileSync(h.path, fileText({ fiveHour: DEAD5, sevenDay: OLD7 }), 'utf8');
+    const mt = statSync(h.path).mtimeMs;
+    assert.deepEqual(W(h.dir, {}, { fiveHourAbsent: true }), {}, 'no window → {} even when flagged');
+    assert.equal(statSync(h.path).mtimeMs, mt, 'and no write');
+    assert.deepEqual(JSON.parse(readText(h)).fiveHour, DEAD5, 'the dead window is still there: no evidence arrived');
+  } finally { h.cleanup(); }
+});
+
+test('P15h — the drop keeps the writer\'s guarantees: schema-2 refusal, never throws, {} from the catch', () => {
+  const h = tempHome();
+  try {
+    // A foreign-schema file reads as {}: nothing stored, so nothing to drop — the incoming 7d is written.
+    writeFileSync(h.path, JSON.stringify({ schema: 1, fiveHour: DEAD5 }), 'utf8');
+    assert.deepEqual(W(h.dir, { sevenDay: seven(END + 86400) }, { fiveHourAbsent: true }), { sevenDay: 'written' },
+      'a schema-1 file is discarded whole; no `dropped` for a window that was never read');
+    for (const bad of [undefined, null, 42, {}]) {
+      assert.deepEqual(WriteQuotaFile(bad, { sevenDay: seven(END + 86400) }, { fiveHourAbsent: true }), {}, `configHome=${String(bad)}: {} from the catch`);
+    }
+  } finally { h.cleanup(); }
+});
+
+test('P14b — the verdict vocabulary is exactly written | kept | dropped', () => {
+  // Collected from every P15 write above (node:test runs a file's tests in order).
+  assert.ok(seenVerdicts.length > 0, 'vacuity guard: the P15 rows recorded verdicts');
+  for (const v of seenVerdicts) assert.ok(VERDICT_WORDS.has(v), `verdict ${JSON.stringify(v)} is one of written | kept | dropped`);
+  for (const w of VERDICT_WORDS) assert.ok(seenVerdicts.includes(w), `and ${w} occurs at least once`);
+});
+
+// ── P16: the pure rules as tables ───────────────────────────────────────────────────────────────
+
+test('P16a — FiveHourGone(fiveHour, sevenDay): true only past the 5h end + 900 s; false for anything it cannot place in time', () => {
+  assert.equal(FIVE_HOUR_DROP_GRACE_SEC, 900, 'the grace is 900 s');
+  const f = { usedPercentage: 1, resetsAt: END, reportedAt: END - 60 };
+  const s = (rep) => ({ usedPercentage: 5, resetsAt: NOW + 86400, reportedAt: rep });
+  assert.equal(FiveHourGone(f, s(END + 901)), true, '+901 → true');
+  assert.equal(FiveHourGone(f, s(END + 900)), false, '+900 → false (strictly more than the grace)');
+  assert.equal(FiveHourGone(f, s(END + 899)), false, '+899 → false');
+  assert.equal(FiveHourGone(f, s(END - 1)), false, 'before the end → false');
+  for (const [label, a, b] of [
+    ['fiveHour undefined', undefined, s(END + 901)], ['fiveHour null', null, s(END + 901)],
+    ['sevenDay undefined', f, undefined], ['sevenDay null', f, null],
+    ['fiveHour primitive', 5, s(END + 901)], ['sevenDay primitive', f, 'x'],
+  ]) assert.equal(FiveHourGone(a, b), false, `${label} → false`);
+  for (const bad of [undefined, null, 'x', String(END), NaN, Infinity]) {
+    assert.equal(FiveHourGone({ ...f, resetsAt: bad }, s(END + 9999)), false, `fiveHour.resetsAt=${String(bad)} → false`);
+    assert.equal(FiveHourGone(f, { ...s(END + 9999), resetsAt: bad }), false, `sevenDay.resetsAt=${String(bad)} → false (not a usable reading)`);
+    assert.equal(FiveHourGone(f, s(bad)), false, `sevenDay.reportedAt=${String(bad)} → false`);
+  }
+  // Pure: no clock (a stubbed Date.now changes nothing), no mutation.
+  const fc = { ...f }; const sc = s(END + 901); const scc = { ...sc };
+  const realNow = Date.now;
+  try {
+    Date.now = () => 0;
+    assert.equal(FiveHourGone(fc, sc), true, 'the answer does not depend on the clock');
+    Date.now = () => 9e15;
+    assert.equal(FiveHourGone(fc, s(END + 900)), false, 'in either direction');
+  } finally { Date.now = realNow; }
+  assert.deepEqual(fc, f, 'fiveHour not mutated'); assert.deepEqual(sc, scc, 'sevenDay not mutated');
+});
+
+test('P16b — QuotaAbsence: `none` reads the file\'s shape — a usable 7d and no usable 5h — whatever the stamps', () => {
+  const run7 = { usedPercentage: 54, resetsAt: NOW + 86400, reportedAt: NOW - 60 };
+  const end7 = { usedPercentage: 54, resetsAt: NOW - 60, reportedAt: NOW - 3600 };
+  const files = [
+    { schema: 2, sevenDay: run7 },
+    { schema: 2, sevenDay: end7 },
+    { schema: 2, sevenDay: { ...run7, reportedAt: 'x' } },
+    { schema: 2, sevenDay: run7, fiveHour: { usedPercentage: 1, resetsAt: 'soon', reportedAt: NOW } },
+    { schema: 2, sevenDay: run7, fiveHour: null },
+    { schema: 2, sevenDay: run7, fiveHour: 5 },
+  ];
+  for (const file of files) {
+    for (const other of [true, false]) {
+      for (const now of [NOW, NOW + 10 * 86400]) {
+        assert.equal(QuotaAbsence('fiveHour', other, file, now), 'none',
+          `fiveHour, other=${other}, file=${JSON.stringify(file)}: none`);
+      }
+    }
+  }
+  // No mirror for the 7d window (spec §3.6): a file with 5h and no 7d never says `none` for 7d.
+  const only5 = { schema: 2, fiveHour: { usedPercentage: 1, resetsAt: NOW + 600, reportedAt: NOW } };
+  for (const other of [true, false]) assert.equal(QuotaAbsence('sevenDay', other, only5, NOW), null, `sevenDay, 5h-only file, other=${other}: null`);
+});
+
+test('P16c — QuotaAbsence: `reset` from each trigger alone, `null` otherwise', () => {
+  const run5 = { usedPercentage: 30, resetsAt: NOW + 600, reportedAt: NOW - 60 };
+  const run7 = { usedPercentage: 54, resetsAt: NOW + 86400, reportedAt: NOW - 60 };
+  const both = { schema: 2, fiveHour: run5, sevenDay: run7 };
+  // Trigger 1: the other window is in this payload, the stored window still running.
+  assert.equal(QuotaAbsence('fiveHour', true, both, NOW), 'reset', '5h: other in payload, stored running → reset');
+  assert.equal(QuotaAbsence('sevenDay', true, both, NOW), 'reset', '7d: other in payload, stored running → reset');
+  // Neither trigger: stored running, other not in payload → null (a session before its first response).
+  assert.equal(QuotaAbsence('fiveHour', false, both, NOW), null, '5h: running, other absent → null');
+  assert.equal(QuotaAbsence('sevenDay', false, both, NOW), null, '7d: running, other absent → null');
+  // Trigger 2: the stored window has ended (resetsAt <= now), nothing in the payload.
+  for (const key of ['fiveHour', 'sevenDay']) {
+    const R = both[key].resetsAt;
+    assert.equal(QuotaAbsence(key, false, both, R + 60), 'reset', `${key}: ended 60 s ago, other absent → reset`);
+    assert.equal(QuotaAbsence(key, false, both, R), 'reset', `${key}: resetsAt === now → reset (the edge is inclusive)`);
+    assert.equal(QuotaAbsence(key, false, both, R - 1), null, `${key}: one second before the end → null`);
+  }
+  // Ultra after a weekly reset: 7d ended, no 5h → 5h none, 7d reset.
+  const ultraEnded = { schema: 2, sevenDay: { ...run7, resetsAt: NOW - 60 } };
+  assert.equal(QuotaAbsence('fiveHour', false, ultraEnded, NOW), 'none', 'Ultra weekly reset: 5h none');
+  assert.equal(QuotaAbsence('sevenDay', false, ultraEnded, NOW), 'reset', 'Ultra weekly reset: 7d reset');
+  // A stored window that cannot be placed in time is not a reading.
+  const badReset = { schema: 2, fiveHour: { ...run5, resetsAt: 'x' } };
+  assert.equal(QuotaAbsence('fiveHour', true, badReset, NOW), null, 'a 5h with non-numeric resetsAt and no 7d → null');
+  // Files with no window at all.
+  for (const file of [null, undefined, {}, { schema: 2 }]) {
+    for (const key of ['fiveHour', 'sevenDay']) {
+      for (const other of [true, false]) {
+        assert.equal(QuotaAbsence(key, other, file, NOW), null, `${key}, other=${other}, file=${JSON.stringify(file)}: null`);
+      }
+    }
+  }
+});
+
+test('P16d — arity pins: FiveHourGone(2), QuotaAbsence(4), WriteQuotaFile(2, the options argument has a default)', () => {
+  assert.equal(FiveHourGone.length, 2, 'FiveHourGone(fiveHour, sevenDay): two parameters and no clock');
+  assert.equal(QuotaAbsence.length, 4, 'QuotaAbsence(key, otherInPayload, file, now)');
+  assert.equal(WriteQuotaFile.length, 2, 'WriteQuotaFile(configHome, windows, { fiveHourAbsent } = {})');
+});
+
+// ── P17: ReadQuotaFile ──────────────────────────────────────────────────────────────────────────
+
+test('P17 — ReadQuotaFile: the parsed object for a schema-2 file, null for anything else, never a throw', () => {
+  const h = tempHome();
+  try {
+    assert.equal(ReadQuotaFile(h.dir), null, 'missing file → null');
+    WriteQuotaFile(h.dir, { fiveHour: FIVE, sevenDay: SEVEN });
+    assert.deepEqual(ReadQuotaFile(h.dir), JSON.parse(BOTH_BYTES), 'reads back exactly what the writer wrote');
+    for (const [label, text] of [
+      ['not json', 'not json'], ['truncated', '{"schema":2,"fiveHour":{'], ['empty', ''],
+      ['array', '[]'], ['null', 'null'], ['number', '5'], ['string', '"x"'],
+      ['schema 1', JSON.stringify({ schema: 1, sevenDay: SEVEN })],
+      ['schema 3', JSON.stringify({ schema: 3, sevenDay: SEVEN })],
+      ['schema "2"', JSON.stringify({ schema: '2', sevenDay: SEVEN })],
+      ['no schema', JSON.stringify({ sevenDay: SEVEN })],
+    ]) {
+      writeFileSync(h.path, text, 'utf8');
+      let r;
+      assert.doesNotThrow(() => { r = ReadQuotaFile(h.dir); }, `${label}: no throw`);
+      assert.equal(r, null, `${label}: null`);
+    }
+    writeFileSync(h.path, JSON.stringify({ schema: 2, sevenDay: SEVEN }), 'utf8');
+    assert.deepEqual(ReadQuotaFile(h.dir), { schema: 2, sevenDay: SEVEN }, 'a 7d-only schema-2 file reads back as itself');
+  } finally { h.cleanup(); }
+
+  // The quota path is a directory; the home is a file; the home is not a string.
+  const h2 = tempHome();
+  try {
+    mkdirSync(h2.path);
+    assert.equal(ReadQuotaFile(h2.dir), null, 'quota path is a directory → null');
+    const asFile = join(h2.dir, 'not-a-dir');
+    writeFileSync(asFile, 'i am a file', 'utf8');
+    assert.equal(ReadQuotaFile(asFile), null, 'config home is a file → null');
+    for (const bad of [undefined, null, 42, {}]) {
+      let r;
+      assert.doesNotThrow(() => { r = ReadQuotaFile(bad); }, `configHome=${String(bad)}: no throw`);
+      assert.equal(r, null, `configHome=${String(bad)}: null`);
     }
   } finally { h2.cleanup(); }
 });

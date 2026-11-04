@@ -594,13 +594,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.15 (PATCH: the version badges move off the repo row)', () => {
+test('D4-5 — SL_VERSION is 6.1.16 (PATCH: an absent quota window names why it is absent)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.15',
-    'X.Y.Z is 6.1.15 (2026-10-17, Florian\'s ruling): `v<ccVersion>` moves to the end of the model row and `bsl<ver>` to the end of the flags row, so the repo identity gets the whole right column; a discrete layout change. Not X: no displayed number changes meaning. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.16',
+    'X.Y.Z is 6.1.16 (2026-11-05, five-hour display spec 261104 §4.6 and §7): an absent quota window reads `none on this plan`, `reset · next message measures it` or `n/a`, and the quota writer drops a 5-hour window that ended without a successor; a behavior-affecting display fix. Not X: no displayed number changes meaning. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would

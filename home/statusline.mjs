@@ -19,12 +19,12 @@ import {
 } from './leg-driver.mjs';
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
-import { WriteQuotaFile } from './quota-file.mjs';
+import { WriteQuotaFile, ReadQuotaFile, QuotaAbsence } from './quota-file.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.15.0';
+export const SL_VERSION = '6.1.16.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the global sidecar, the rollup caches)
@@ -1158,10 +1158,15 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
 // can produce the same reading from its own request's rate-limit headers. What stays here is the
 // rendering of those cells and the resolution of the two moments this render observes.
 //
-// An absent window states the fact in ONE token, rather than leaving a half-empty row that reads as
-// a rendering bug.
-function QuotaGaugeValue(c) {
-  if (!c) return DarkGray('n/a');
+// An absent window says WHY it is absent, in chrome, rather than leaving a half-empty row that reads
+// as a rendering bug. `absence` is QuotaAbsence's answer (home/quota-file.mjs): 'none' — the home's
+// quota file holds a 7-day reading and no 5-hour reading, so this plan has no 5-hour window; 'reset'
+// — the window reset and no newer reading has reached this session, so the next message measures it;
+// null — nothing is known, the plain `n/a`. Row 4 stays blank in all three: an absent window has no
+// runway.
+const QUOTA_ABSENT_TEXT = { none: 'none on this plan', reset: 'reset · next message measures it' };
+function QuotaGaugeValue(c, absence) {
+  if (!c) return DarkGray(QUOTA_ABSENT_TEXT[absence] ?? 'n/a');
   let s = (c.col ? `${ESC}[${c.col}m${c.mid}${ESC}[0m` : c.mid) + DarkGray(' time');
   if (c.verdict) s += '  ' + (c.col ? `${ESC}[${c.col}m${c.verdict}${ESC}[0m` : DarkGray(c.verdict));
   return s;
@@ -1194,7 +1199,8 @@ const q7 = QuotaCells(d?.rate_limits?.seven_day, 604800, NOW);
 // the leg's timestamp (epoch SECONDS, same unit as `resets_at` and NOW; see parseUtcEpoch) is when
 // this payload was observed. A session with no leg — no transcript, or a transcript with nothing
 // banked yet — falls back to the render clock, which is the closest thing to an observation moment
-// a render with no evidence of one has.
+// a render with no evidence of one has. A render-clock stamp is never drop evidence: the quota
+// file's drop rule (quota-file.mjs, FiveHourGone) acts only on a write whose stamp is a banked leg.
 //
 // TWO LIMITS OF THE LEG AS A PROXY, BOTH IN THE SAFE DIRECTION. A payload refreshed by an API call
 // that banks no leg is dated by the previous leg; a turn still streaming is not yet banked. In both
@@ -1203,7 +1209,12 @@ const q7 = QuotaCells(d?.rate_limits?.seven_day, 604800, NOW);
 // QuotaWindow clamps whatever arrives here at NOW and at the window's end — see quota-ladder.mjs
 // for why both halves of that clamp are load-bearing.
 const legTs = (rollup && !isNil(rollup.lastLegTs)) ? Number(rollup.lastLegTs) : null;
-const quotaObservedAt = (legTs !== null && Number.isFinite(legTs) && legTs > 0) ? legTs : NOW;
+const quotaFromLeg = legTs !== null && Number.isFinite(legTs) && legTs > 0;
+const quotaObservedAt = quotaFromLeg ? legTs : NOW;
+// This render's write is evidence for the drop rule only when its stamp is a banked leg (a real API
+// observation) AND that API call's payload carried no 5-hour window at all. The flag reads the
+// payload's shape, never the window's age.
+const fiveHourAbsent = quotaFromLeg && (d?.rate_limits?.five_hour === undefined || d?.rate_limits?.five_hour === null);
 // The windows this render observed, for the quota file (home/quota-file.mjs). A window appears only
 // when QuotaCells returned one AND the payload carried a `resets_at` — so a payload with no reading
 // yields {} and the writer leaves the file exactly as it found it.
@@ -1441,7 +1452,14 @@ try {
 // rewritten in phase 2, which refreshes only gitRepo and would otherwise double the merge's race
 // window for no gain. It carries its own try/catch inside WriteQuotaFile, so a sidecar failure above
 // does not cost the home its quota update and vice versa.
-WriteQuotaFile(ConfigHome, quotaWindows);
+//
+// Read back directly after the write, so this render's own observation (and any drop it caused) is
+// already in what names an absent window. ReadQuotaFile never throws; a missing or foreign file is
+// null and every absent window then reads `n/a`.
+WriteQuotaFile(ConfigHome, quotaWindows, { fiveHourAbsent });
+const quotaFile = ReadQuotaFile(ConfigHome);
+const q5Absence = q5 ? null : QuotaAbsence('fiveHour', q7 !== null, quotaFile, NOW);
+const q7Absence = q7 ? null : QuotaAbsence('sevenDay', q5 !== null, quotaFile, NOW);
 
 // === Cluster 6: git ========================================================
 // The sync glyph is hoisted out of the porcelain parse so the repo cluster can render it during
@@ -1570,7 +1588,7 @@ const repoValue = repoIdentity ? rtrim(repoIdentity + ' ' + gitSync) : DarkGray(
 const rows = [];
 rows.push(gridRow(DarkGray('model'), modelValue, DarkGray('cost'), costValue));
 rows.push(gridRow(DarkGray('ctx'), ctxValue, DarkGray('trend'), trendValue));
-rows.push(gridRow(DarkGray('5h'), QuotaGaugeValue(q5), DarkGray('7d'), QuotaGaugeValue(q7)));
+rows.push(gridRow(DarkGray('5h'), QuotaGaugeValue(q5, q5Absence), DarkGray('7d'), QuotaGaugeValue(q7, q7Absence)));
 rows.push(gridRow('', QuotaDetailValue(q5, LEFT_VALUE_W), '', QuotaDetailValue(q7, RIGHT_VALUE_W)));
 rows.push(gridRow(DarkGray('⁂'), agentsValue, DarkGray('repo'), repoValue));
 rows.push(gridRow(DarkGray('cold'), coldValue, flagsHead ? DarkGray('flags') : '', flagsValue));

@@ -1,0 +1,4 @@
+{
+  "note": "AE-7: a Team session idle 20 minutes past its 5h reset, its last banked leg 10 minutes before the reset, payload 7d only. Past the grace, and still `reset · next message measures it`: the leg predates the reset, so it is no evidence that the plan has no 5h window.",
+  "nowEpoch": 1781700000
+}

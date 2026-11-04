@@ -1,0 +1,4 @@
+{
+  "note": "AE-2: the stored 5h window ended two days ago and the stored 7d was observed before that end; this render has a banked leg long after the end + 900 s and a 7d-only payload, so its own write drops the 5h window and the same render reads `none on this plan`.",
+  "nowEpoch": 1781700000
+}

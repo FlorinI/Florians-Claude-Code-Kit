@@ -1,0 +1,4 @@
+{
+  "note": "AE-9: a Team session whose 7d window reset a minute ago, payload 5h only. The 7d half reads `reset · next message measures it` and the 5h gauge is unchanged.",
+  "nowEpoch": 1781700000
+}

@@ -18,9 +18,16 @@
 // which of two readings to keep; the one stamp it ever adjusts is a clamp UP to the stored stamp at
 // rule 3 (below), never a clock reading.
 //
-// Two functions, and the split is deliberate: MergeQuotaWindow is pure and holds the whole ordering
-// rule, so every branch of it is reachable offline without a render; WriteQuotaFile does the I/O
-// around it and decides nothing.
+// The split is deliberate: MergeQuotaWindow and FiveHourGone are pure and hold the whole ordering
+// and drop rules, so every branch of them is reachable offline without a render; WriteQuotaFile does
+// the I/O around them and decides nothing. ReadQuotaFile is the read-only half the status line uses
+// to name an absent window, and QuotaAbsence is that naming rule, pure.
+//
+// THE ONE WAY A WINDOW LEAVES THE FILE. A 5-hour window that ended without a successor is removed
+// when an API response that carried no 5-hour window was observed more than the grace after it
+// ended — the shape of a plan that has no 5-hour window at all. Only a real API observation counts
+// as evidence (the caller says so with `fiveHourAbsent`); a stored stamp is never evidence, because
+// it may be a render-clock stand-in written by a render that had no banked leg.
 //
 // It lives in its own module rather than inside statusline.mjs because statusline.mjs RENDERS on
 // import — it reads stdin at module scope — so nothing can import a function out of it. Being
@@ -46,6 +53,65 @@ const WINDOW_KEYS = ['fiveHour', 'sevenDay'];
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const numOrNull = (x) => (isNum(x) ? x : null);
+// A usable reading: an object with a finite numeric `resetsAt`. The same test MergeQuotaWindow's
+// rule 1 applies to a stored window.
+const usable = (w) => !!w && typeof w === 'object' && isNum(w.resetsAt);
+
+// The one parse of the file's text, shared by the writer and the reader: the object when the text
+// parses to a schema-2 object, else null. Never throws.
+function parseQuotaText(text) {
+  if (!text) return null;
+  try {
+    const p = JSON.parse(text);
+    return (p && typeof p === 'object' && !Array.isArray(p) && p.schema === QUOTA_SCHEMA) ? p : null;
+  } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// FiveHourGone(fiveHour, sevenDay) — true when `sevenDay`, a reading from an API response that
+// carried no 5-hour window, was observed more than FIVE_HOUR_DROP_GRACE_SEC after `fiveHour` ended.
+// PURE; takes no clock — it compares two epochs, as the merge rules do.
+//
+// WHY THE GRACE. A session dates its reading by its last transcript leg, which can land a little
+// after the moment the headers arrived — a long response straddling a 5-hour reset. Claude Code
+// drops the ended window from that payload, and without a grace the straddle would remove a real
+// window. A single response streaming longer than the grace across a reset still would; the next
+// response brings the window back under merge rule 1, so the error lasts one message.
+export const FIVE_HOUR_DROP_GRACE_SEC = 900;
+
+export function FiveHourGone(fiveHour, sevenDay) {
+  if (!usable(fiveHour) || !usable(sevenDay)) return false;
+  const seen = numOrNull(sevenDay.reportedAt);
+  return seen !== null && seen > fiveHour.resetsAt + FIVE_HOUR_DROP_GRACE_SEC;
+}
+
+// ---------------------------------------------------------------------------
+// QuotaAbsence(key, otherInPayload, file, now) — why a window the payload did not carry is absent.
+// `key`: 'fiveHour' | 'sevenDay'. `otherInPayload`: the OTHER window is in this render's payload.
+// `file`: ReadQuotaFile's result (or null). `now`: the render clock — the display may read a clock;
+// the writer's rules may not.
+//
+//   'none'  — the file holds a 7-day reading and no 5-hour reading: the writer dropped the 5-hour
+//             window, or the home never had one. Reads the file's SHAPE, never a stamp: a stored
+//             stamp may be a render-clock stand-in and proves nothing.
+//   'reset' — the stored window is usable and either the other window is in this payload (this
+//             session made an API call and Claude Code has since removed this window, which it does
+//             only once the window's `resets_at` passes) or the stored window has ended.
+//   null    — nothing known: the plain `n/a`.
+export function QuotaAbsence(key, otherInPayload, file, now) {
+  if (key === 'fiveHour' && usable(file?.sevenDay) && !usable(file?.fiveHour)) return 'none';
+  const stored = file?.[key];
+  if (usable(stored) && (otherInPayload || stored.resetsAt <= now)) return 'reset';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// ReadQuotaFile(configHome) — the parsed file when it parses and its `schema` is 2, else null.
+// Never throws, including for a non-string home.
+export function ReadQuotaFile(configHome) {
+  try { return parseQuotaText(readFileSync(join(configHome, QUOTA_FILE_NAME), 'utf8')); }
+  catch { return null; }
+}
 
 // ---------------------------------------------------------------------------
 // MergeQuotaWindow(stored, incoming) — which of two readings of ONE window survives. PURE: both
@@ -136,11 +202,22 @@ export function MergeQuotaWindow(stored, incoming) {
 }
 
 // ---------------------------------------------------------------------------
-// WriteQuotaFile(configHome, windows) — read, merge each window key independently, write.
+// WriteQuotaFile(configHome, windows, { fiveHourAbsent }) — read, merge each window key
+// independently, drop an ended 5-hour window when this write is evidence, write.
 //
 // A window the payload did not carry is LEFT IN THE FILE UNTOUCHED: a session whose payload holds
 // only `five_hour` must never wipe a good `sevenDay`. A render carrying no usable window writes
 // nothing at all and never clears the file.
+//
+// THE ONE EXCEPTION: THE DROP. The caller passes `fiveHourAbsent: true` only when this write's
+// stamps are a real API observation (a session's banked leg, or the probe's own request) AND that
+// response carried no 5-hour window at all. Then, after the merge, a stored `fiveHour` for which
+// FiveHourGone(stored, incoming sevenDay) holds is deleted and its verdict is `'dropped'`. The
+// evidence is THIS WRITE'S OWN incoming `sevenDay`, never the stored one: a stored stamp may be a
+// render-clock stand-in written by a render that had no banked leg, and proves nothing about any
+// response. The incoming reading wins or loses its own merge independently; the drop reads its stamp
+// either way, because that stamp is the moment of the response this write observed. A caller that
+// passes no options never drops.
 //
 // A FILE WHOSE `schema` IS NOT 2 READS AS {} — the stored object is discarded WHOLE, not projected
 // window by window. A schema-1 window carries no `reportedAt`, and there is no honest way to derive
@@ -173,12 +250,13 @@ export function MergeQuotaWindow(stored, incoming) {
 // stale reading can never win at all. The pathological case — a nine-day-old snapshot overwriting a
 // live one — is excluded by the rule regardless of timing.
 //
-// RETURNS ONE VERDICT PER WINDOW THE PAYLOAD CARRIED: `{ fiveHour?, sevenDay? }`, each `'written'`
-// or `'kept'`. The two windows merge independently, so one file-wide answer would be one answer to two
-// questions. Every path that decided nothing — no usable window, or the catch — returns `{}`.
+// RETURNS ONE VERDICT PER WINDOW THE PAYLOAD CARRIED, plus `fiveHour: 'dropped'` when the drop
+// fired: `{ fiveHour?, sevenDay? }`, each `'written'`, `'kept'` or `'dropped'`. The two windows merge
+// independently, so one file-wide answer would be one answer to two questions. Every path that
+// decided nothing — no usable window, or the catch — returns `{}`.
 //
 // Never throws: a failure loses one render's update and nothing else.
-export function WriteQuotaFile(configHome, windows) {
+export function WriteQuotaFile(configHome, windows, { fiveHourAbsent = false } = {}) {
   try {
     const incoming = windows && typeof windows === 'object' ? windows : {};
     if (!WINDOW_KEYS.some((k) => incoming[k])) return {};
@@ -187,13 +265,7 @@ export function WriteQuotaFile(configHome, windows) {
     try { text = readFileSync(path, 'utf8'); } catch { text = null; }
     // A missing, unparseable or foreign-schema file reads as {} and is replaced — none of them
     // carries a reading this build can vouch for.
-    let cur = {};
-    if (text) {
-      try {
-        const p = JSON.parse(text);
-        if (p && typeof p === 'object' && !Array.isArray(p) && p.schema === QUOTA_SCHEMA) cur = p;
-      } catch { cur = {}; }
-    }
+    const cur = parseQuotaText(text) || {};
     const out = { schema: QUOTA_SCHEMA };
     const verdicts = {};
     for (const k of WINDOW_KEYS) {
@@ -206,6 +278,10 @@ export function WriteQuotaFile(configHome, windows) {
         // survive the merge.
         verdicts[k] = (out[k] === stored) ? 'kept' : 'written';
       } else if (stored) out[k] = stored;
+    }
+    if (fiveHourAbsent && out.fiveHour && FiveHourGone(out.fiveHour, incoming.sevenDay)) {
+      delete out.fiveHour;
+      verdicts.fiveHour = 'dropped';
     }
     const json = JSON.stringify(out, null, 2);
     // A skipped write cannot make a `written` verdict lie: every merge branch in which the incoming

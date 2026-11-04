@@ -1,0 +1,4 @@
+{
+  "note": "AE-1: an Ultra home — the quota file holds a 7d reading and no 5h reading; a 7d-only payload. The 5h half reads `none on this plan`.",
+  "nowEpoch": 1781700000
+}

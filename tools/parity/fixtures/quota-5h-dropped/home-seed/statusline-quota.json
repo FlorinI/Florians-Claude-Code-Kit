@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "fiveHour": {
+    "usedPercentage": 12,
+    "resetsAt": 1781527200,
+    "reportedAt": 1781526600
+  },
+  "sevenDay": {
+    "usedPercentage": 10,
+    "resetsAt": 1782123360,
+    "reportedAt": 1781526000
+  }
+}

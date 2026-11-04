@@ -1,0 +1,4 @@
+{
+  "note": "AE-6: a Team session; its 5h window reset 2 minutes ago, its last banked leg came before the reset, and its payload now carries only 7d. The 5h half reads `reset · next message measures it`.",
+  "nowEpoch": 1781700000
+}

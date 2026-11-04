@@ -33,8 +33,9 @@ col 1                                    53 54 55 56                            
 **Empty clusters keep their address.** A cluster with nothing to say still renders its **label**;
 only the value is absent. Nothing collapses and no row goes missing, so the grid holds its shape on
 every session — which is the point: a reader can tell "calm" from "no data", and every cluster sits
-at a predictable screen position. The quota gauges are the one variation: they state the absence in
-one token (`n/a`) rather than leaving a half-empty row that reads as a rendering bug.
+at a predictable screen position. The quota gauges are the one variation: they state why the window
+is absent, in one of three phrases — `none on this plan`, `reset · next message measures it` or
+`n/a` — rather than leaving a half-empty row that reads as a rendering bug.
 
 ### The six fixed rows
 
@@ -99,7 +100,16 @@ const QUOTA_PROJECTION_MIN_ELAPSED_PCT = 10; // below it, the calm-case projecti
 | consumed < 50, elapsed ≥ 10 | gauge + `time` | `ends ~N% · M% spare` + `resets <t>` | all chrome |
 | consumed < 50, elapsed < 10 | gauge + `time` | `resets <t>` alone | all chrome |
 | consumed ≥ 50 | gauge + `time` + a verdict | the runway detail + `resets <t>` | the rung's colour |
-| window absent | label + `n/a` | blank | chrome |
+| window absent: the quota file holds a 7-day reading and no 5-hour reading (5h row only) | label + `none on this plan` | blank | chrome |
+| window absent: the window reset and no newer reading has reached this session | label + `reset · next message measures it` | blank | chrome |
+| window absent: nothing else is known | label + `n/a` | blank | chrome |
+
+**An absent window says why.** Each render writes the per-config-home quota file
+(`statusline-quota.json`) and reads it back. `none on this plan` means the file holds a 7-day
+reading and no 5-hour one: the writer removes a stored 5-hour window once a real API response with no
+5-hour window was observed more than 15 minutes after that window ended, which is what a plan without
+a 5-hour window looks like. `reset · next message measures it` means the window reset and this
+session has not seen a newer reading. `n/a` means nothing is known.
 
 **Below `QUOTA_VERDICT_MIN_PCT` the blackout-projection machinery does not run at all** — no
 projected blackout, no runway, no rung colour, no imperative. The projection is genuinely unstable

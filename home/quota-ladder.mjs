@@ -147,8 +147,8 @@ export function QuotaCells(rl, winSec, now) {
 }
 
 // One window's quota reading, as the quota file carries it for the fleet tray (docs/fleet-tray.md).
-// ELEVEN KEYS, AND EVERY ONE HAS A READER (spec §4.2): `usedPercentage` orders the merge and ranks
-// the tray's `next`; `resetsAt` orders the merge, drives the countdown and decides whether a window
+// ELEVEN KEYS, AND EVERY ONE HAS A READER (spec §4.2): `usedPercentage` orders the merge and is
+// validated by the tray's liveness tests; `resetsAt` orders the merge, drives the countdown and decides whether a window
 // has reset; `reportedAt` is the age; the remaining eight are drawn.
 //
 // THE LADDER IS NOT RE-DERIVED ANYWHERE: everything below is what QuotaCells already computed, plus

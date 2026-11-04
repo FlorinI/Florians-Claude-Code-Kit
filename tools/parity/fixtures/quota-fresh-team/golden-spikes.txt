@@ -1,0 +1,1 @@
+(no transcript path in the snapshot — render the status line once after deploying, then re-run)

@@ -1,0 +1,4 @@
+{
+  "note": "AE-9: an Ultra session after a weekly reset with no message since — no rate_limits in the payload, the stored 7d window ended a minute ago, no stored 5h. Reads `none on this plan` and `reset · next message measures it`.",
+  "nowEpoch": 1781700000
+}

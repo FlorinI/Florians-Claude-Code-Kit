@@ -342,8 +342,44 @@ test('11 — the gauge row always renders; the runway row renders when a window 
     `vacuity guard: both states must occur in the corpus (with ${withRunway}, without ${without})`);
 });
 
+// An absent window names WHY it is absent (five-hour display spec 261104 §4.2, acceptance examples
+// AE-1, AE-2, AE-6, AE-7, AE-9, AE-10, AE-11): `none on this plan` when the home's quota file holds a
+// 7d reading and no 5h reading, `reset · next message measures it` when the stored window has ended or
+// the other window is in this payload, else `n/a`. The phrase depends on the fixture's seeded quota
+// file, which this file does not model — so it is a name-keyed table, like test 31's, and every
+// fixture not named in it expects `n/a` (no fixture before this sprint seeds a quota file).
+const ABSENT_NONE = 'none on this plan';
+const ABSENT_RESET = 'reset · next message measures it';
+const ABSENT_NA = 'n/a';
+const ABSENT_EXPECT = {
+  'quota-5h-none': { five_hour: ABSENT_NONE },
+  'quota-5h-dropped': { five_hour: ABSENT_NONE },
+  'quota-5h-reset': { five_hour: ABSENT_RESET },
+  'quota-5h-reset-late': { five_hour: ABSENT_RESET },
+  'quota-5h-noleg-late': { five_hour: ABSENT_RESET },
+  'quota-7d-reset': { seven_day: ABSENT_RESET },
+  'quota-7d-reset-ultra': { five_hour: ABSENT_NONE, seven_day: ABSENT_RESET },
+};
+// The visible characters of a raw (escapes intact) half that are NOT drawn in chrome gray
+// (`DarkGray`, ESC[38;5;240m). The near-black pad dot (ESC[38;5;234m) is the row's own lead, not text.
+function offChrome(rawHalf) {
+  let sgr = '';
+  const bad = [];
+  for (const m of rawHalf.matchAll(/\x1b\[([0-9;]*)m|([^\x1b])/g)) {
+    if (m[1] !== undefined) { sgr = (m[1] === '0' || m[1] === '') ? '' : m[1]; continue; }
+    if (m[2] === ' ' || (m[2] === '.' && sgr === '38;5;234')) continue;
+    if (sgr !== '38;5;240') bad.push(m[2]);
+  }
+  return bad.join('');
+}
+
 test('12 — the three quota regimes are distinguishable, per window, per fixture (A5, A6, A7)', () => {
   const counts = { absent: 0, 'calm-bare': 0, 'calm-overpace': 0, 'calm-projecting': 0, verdict: 0, cap: 0 };
+  const phrases = { [ABSENT_NONE]: 0, [ABSENT_RESET]: 0, [ABSENT_NA]: 0 };
+  // The table names fixtures, so a deletion would silently narrow it (same reason as test 31).
+  for (const f of Object.keys(ABSENT_EXPECT)) {
+    assert.ok(existsSync(join(FIX, f, 'stdin.json')), `tools/parity/fixtures/${f} is missing — test 12 pins its absent-window phrase`);
+  }
   for (const f of blessed()) {
     for (const win of ['five_hour', 'seven_day']) {
       const r = regimeOf(f, win);
@@ -352,11 +388,20 @@ test('12 — the three quota regimes are distinguishable, per window, per fixtur
       const hasImperative = IMPERATIVES.some((v) => gauge.includes(v));
       const hasProjection = /ends ~\d+% · -?\d+% spare/.test(runway);
       const hasResets = /resets /.test(runway);
+      const named = ABSENT_EXPECT[f]?.[win];
       if (r === 'absent') {
-        assert.match(gauge, /^n\/a\b/, `${f}/${win}: an absent window states the fact in one token (A9)`);
+        const want = named ?? ABSENT_NA;
+        assert.equal(gauge.trimEnd(), want, `${f}/${win}: an absent window states why it is absent — expected \`${want}\``);
+        phrases[want]++;
         assert.equal(runway.trim(), '', `${f}/${win}: an absent window's runway half is blank (A9)`);
+        // Is chrome: every visible character of the absent half, label and phrase, is DarkGray.
+        const gi = plainRows(f).findIndex((row) => labelPair(row)[0] === '5h');
+        const rawH = halves(rawRows(f)[gi]);
+        const rawHalf = win === 'five_hour' ? rawH.left : rawH.right;
+        assert.equal(offChrome(rawHalf), '', `${f}/${win}: the absent half is drawn in chrome gray throughout: ${JSON.stringify(rawHalf)}`);
         continue;
       }
+      assert.equal(named, undefined, `${f}/${win}: ABSENT_EXPECT names a window the payload carries — the table is wrong`);
       assert.match(gauge, /→\d+%.*\d*%?←/, `${f}/${win}: the gauge must render in every present regime`);
       if (r === 'calm-bare') {
         assert.ok(!hasImperative, `${f}/${win}: below the verdict floor no imperative may render (A6): ${gauge}`);
@@ -379,6 +424,10 @@ test('12 — the three quota regimes are distinguishable, per window, per fixtur
   // Every regime must actually occur, or the row above proves nothing.
   for (const k of Object.keys(counts)) {
     assert.ok(counts[k] >= 1, `vacuity guard: regime ${k} never occurs in the corpus (${JSON.stringify(counts)})`);
+  }
+  // And so must every absent phrase. Red until the five-hour display fixtures are blessed (test 29).
+  for (const k of Object.keys(phrases)) {
+    assert.ok(phrases[k] >= 1, `vacuity guard: the absent phrase \`${k}\` never occurs in the blessed corpus (${JSON.stringify(phrases)})`);
   }
 });
 

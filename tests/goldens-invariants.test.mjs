@@ -565,9 +565,10 @@ test('M2 — chip guard: the rendered `last N $x` equals MEDIAN(legCosts tail), 
   // row exists to catch. PRESENT is derived, so adding a fixture never forces a recount — the
   // Dossier IV sprint added seven, every one of them a copy of a parent with ≥2 banked legs. A new
   // fixture with no transcript does force the recount: the 2026-10-14 auto-compact-1m sprint's
-  // wall-past-bare took the no-legs count from 21 to 22, and cw-env-high-near from 22 to 23.
-  assert.equal(absent, 25, 'fixtures suppressing the chip (23 with no legs, 1 single-leg, 1 base:null)');
-  assert.equal(present, allFixtures().length - 25, 'every other fixture shows it');
+  // wall-past-bare took the no-legs count from 21 to 22, and cw-env-high-near from 22 to 23; the
+  // 2026-11-05 five-hour display sprint's quota-5h-noleg-late and quota-fresh-team from 23 to 25.
+  assert.equal(absent, 27, 'fixtures suppressing the chip (25 with no legs, 1 single-leg, 1 base:null)');
+  assert.equal(present, allFixtures().length - 27, 'every other fixture shows it');
 });
 
 test('M2b — spike guard: where the window holds a fat leg, the chip is strictly BELOW the window mean', () => {
@@ -659,8 +660,8 @@ test('M4 — sheet/line agreement: COST_RECENT reads `(none)` exactly where the 
     assert.ok(!/averag/i.test(m[1]), `${f}: the recent figure is a median and may not be called an average`);
   }
   // Same pinning choice as M2: the exact number is the ABSENT one, the other is derived.
-  assert.equal(none, 25);
-  assert.equal(valued, allFixtures().length - 25);
+  assert.equal(none, 27);
+  assert.equal(valued, allFixtures().length - 27);
 });
 
 test('M5 — key uniqueness (D7): no `KEY:` label appears twice in any fact sheet', () => {

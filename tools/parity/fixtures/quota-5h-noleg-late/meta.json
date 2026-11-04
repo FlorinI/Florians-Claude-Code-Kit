@@ -1,0 +1,4 @@
+{
+  "note": "AE-7: a Team session with no banked leg (cleared before the reset), rendered 20 minutes past its 5h reset, payload 7d only. Its stamp is the render clock, which is never drop evidence, so the 5h half reads `reset · next message measures it`.",
+  "nowEpoch": 1781700000
+}

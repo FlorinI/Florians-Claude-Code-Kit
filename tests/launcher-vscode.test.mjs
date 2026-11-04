@@ -1381,7 +1381,10 @@ test('SE5 — no valid list: the launch proceeds exactly as with one, removes no
         const run = runRecorded({ launcherPath: copy.path, proj, args: ['--no-vscode'], env: OPTOUTS_ON });
         assert.equal(run.res.status, ref.res.status, `${what}: same exit code as with a valid list`);
         assert.ok(run.seen.claude, `${what}: claude is still launched`);
-        assert.equal(run.seen.claude.argv, ref.seen.claude.argv, `${what}: same claude argv`);
+        // The in-repo launcher loads the drop-file mod beside it (home/drop-file), which this
+        // copy has no folder for; that pair is the only difference the folder makes. Re-pinned on purpose.
+        const noDrop = (a) => String(a).replace(/ --plugin-dir "?[^"\s]*[\\/]drop-file"?/, '');
+        assert.equal(noDrop(run.seen.claude.argv), noDrop(ref.seen.claude.argv), `${what}: same claude argv`);
         assert.equal(run.seen.claude.env.get(winFold('CC_SKIP_ONE')), '1', `${what}: nothing is removed — the opt-out still reaches claude`);
         const lines = run.res.stderr.split(/\r?\n/).filter(Boolean);
         assert.equal(lines.length, 1, `${what}: exactly one stderr line, got ${JSON.stringify(run.res.stderr)}`);

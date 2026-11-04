@@ -1,0 +1,1 @@
+{ "name": "drop-file", "version": "1.0.0", "description": "Submits or fills text that another local program drops in a file named after this session, under the config home's drop-file folder." }

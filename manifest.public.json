@@ -18,6 +18,8 @@
     { "source": "home/claude-launch.mjs", "dest": "claude-launch.mjs" },
     { "source": "home/session-title.mjs", "dest": "session-title.mjs" },
     { "source": "home/session-env-scrub.json", "dest": "session-env-scrub.json" },
+    { "source": "home/launch-color", "dest": "launch-color", "dir": true },
+    { "source": "home/drop-file", "dest": "drop-file", "dir": true },
     { "source": "home/dialogue-protocol.md", "dest": "dialogue-protocol.md" },
     { "source": "home/commands/handover.md", "dest": "commands/handover.md" },
     { "source": "home/commands/handover-check.md", "dest": "commands/handover-check.md" },

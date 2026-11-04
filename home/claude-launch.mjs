@@ -15,7 +15,10 @@
 //             /resume picker / terminal title without ever colliding with a user prompt.
 //   color  -> the terminal tab background (best-effort, per terminal: Windows Terminal & iTerm2) AND
 //             the Claude session color via a "/color <color>" initial prompt — but the initial-prompt
-//             slot holds one thing, so /color is injected only when the user supplied no prompt.
+//             slot holds one thing, so /color is injected only when the user supplied no prompt;
+//             otherwise the sibling launch-color mod (--plugin-dir) runs /color at session start.
+//   drop-file -> the sibling drop-file mod (--plugin-dir), loaded on every launch when installed: it
+//             submits text another local program drops in <config home>/drop-file/<session id>.json.
 //   model  -> `--model <model>`  if set
 //   effort -> `--effort <level>` if set
 //
@@ -35,7 +38,12 @@
 //   --pair-vscode          PAIR MODE: run the VS Code co-launch + tiling for the session already
 //                          running in this terminal, then exit — no claude is launched (the /vscode
 //                          command). Implies VS Code on; contradicts --no-vscode (usage error).
+//   --skip <NAME>          repeatable: CC_SKIP_<NAME>=1 for this one session (a malformed NAME is a
+//                          usage error)
 //   --print-title / --print-tabcolor   the shell-function seams (see below)
+//
+// A caller's own `--name` (or `-n`) is forwarded as the session's only name: the launcher then pushes
+// none of its own.
 
 import { readFileSync, existsSync, statSync, readdirSync, appendFileSync, rmSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
@@ -53,11 +61,11 @@ const BEL = '\x07';
 const loc = process.cwd();
 
 // --- launcher's own flags (self-consumed) -------------------------------------------------------
-// Five flags belong to the LAUNCHER, not to claude. They are stripped from the argv forwarded to
+// Six flags belong to the LAUNCHER, not to claude. They are stripped from the argv forwarded to
 // claude AND from the prompt scan, so `cc --config-dir <d> "do X"` still detects "do X" as the
 // user's prompt (and therefore still suppresses the /color injection). Because they never reach the
-// scan they need no VALUE_FLAGS entry. Malformed input is inert, never fatal: a value-taking flag
-// given as the last element is ignored and still stripped.
+// scan they need no VALUE_FLAGS entry. Malformed input is inert, never fatal, except for --skip: a
+// value-taking flag given as the last element is ignored and still stripped.
 //
 //   --config-dir <path>    launch claude against a different config home (CLAUDE_CONFIG_DIR in the
 //                          SPAWNED CHILD's env only; without the flag the child gets NO such variable,
@@ -67,6 +75,11 @@ const loc = process.cwd();
 //   --no-vscode            force the VS Code co-launch (and hence tiling) off, whatever CC_VSCODE says
 //   --pair-vscode          pair mode: VS Code co-launch + tiling only, for a session that is already
 //                          running in this terminal; claude is not launched (see the pair branch below)
+//   --skip <NAME>          repeatable: CC_SKIP_<NAME>=1 in the claude child's env, applied after the
+//                          CC_SKIP_ scrub, so a caller can turn one session-start step off for this one
+//                          session. <NAME> must match ^[A-Z][A-Z0-9_]*$; anything else, `--skip=NAME`
+//                          and a `--skip` with no value are usage errors (one stderr line, nothing
+//                          spawned): a dropped opt-out would silently start a different session.
 //
 // Prefix/suffix are deliberately generic: `--config-dir` alone changes NOTHING visually. A caller
 // that wants a visual marker for a second subscription opts into it explicitly.
@@ -74,12 +87,22 @@ function expandTilde(p) {
   const s = String(p);
   return (s === '~' || s.startsWith('~/') || s.startsWith('~\\')) ? join(homedir(), s.slice(1)) : s;
 }
+const SKIP_NAME = /^[A-Z][A-Z0-9_]*$/;
 function parseLauncherFlags(argv) {
-  const o = { configDir: null, titlePrefix: '', titleSuffix: '', noVsCode: false, pairVsCode: false, rest: [] };
+  const o = { configDir: null, titlePrefix: '', titleSuffix: '', noVsCode: false, pairVsCode: false, skips: [], usage: null, rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-vscode') { o.noVsCode = true; continue; }
     if (a === '--pair-vscode') { o.pairVsCode = true; continue; }
+    if (a === '--skip') {
+      const v = argv[i + 1];
+      i++;
+      if (v == null) o.usage ??= '--skip needs a NAME (letters A-Z, digits and _, starting with a letter).';
+      else if (!SKIP_NAME.test(v)) o.usage ??= `--skip ${v}: the NAME must match ^[A-Z][A-Z0-9_]*$.`;
+      else o.skips.push(v);
+      continue;
+    }
+    if (a.startsWith('--skip=')) { o.usage ??= `${a}: write --skip NAME, with a space.`; continue; }
     if (a === '--config-dir' || a === '--title-prefix' || a === '--title-suffix') {
       const v = argv[i + 1];
       i++;                                       // consume the value (or fall off the end — inert)
@@ -94,6 +117,11 @@ function parseLauncherFlags(argv) {
   return o;
 }
 const flags = parseLauncherFlags(process.argv.slice(2));
+// A malformed --skip is refused before any side effect, the dry-run seam included: one stderr line.
+if (flags.usage) {
+  console.error(flags.usage);
+  process.exit(2);
+}
 // Pair mode exists to open VS Code, so forbidding VS Code in the same invocation is a contradiction,
 // not a preference to resolve. Refused before any side effect — and before the dry-run seam, so no
 // plan is printed for an invocation that cannot run. One static line: byte-identical in both orders.
@@ -219,13 +247,17 @@ const isResume = !isFork && flags.rest.some((a) => RESUME_FLAGS.has(a.split('=')
 // CC_ALLOW_BYPASS truthy → every launch offers bypass-permissions mode in the shift+tab cycle without
 // starting in it (`--allow-dangerously-skip-permissions`). Off by default; not repeated when the user
 // typed the flag.
+// A caller that passes its own name (`-n X`, `--name X`, `--name=X`) gets exactly that one: the launcher
+// pushes none of its own, and CC_LAUNCH_NAME stays '' so the rename hook never takes the caller's name
+// for the launch name.
+const callerName = flags.rest.some((a) => a === '-n' || a === '--name' || a.startsWith('--name='));
 const cli = [];
 if (EnvTruthy(process.env.CC_ALLOW_BYPASS) && !flags.rest.includes('--allow-dangerously-skip-permissions')) {
   cli.push('--allow-dangerously-skip-permissions');
 }
 if (idModel) cli.push('--model', idModel);
 if (idEffort) cli.push('--effort', idEffort);
-if (title && !isResume) cli.push('--name', title);   // fresh launch (a fork included) — a resume keeps its own name
+if (title && !isResume && !callerName) cli.push('--name', title);   // fresh launch (a fork included) — a resume keeps its own name
 const userArgs = flags.rest;                     // the launcher's own flags never reach claude
 cli.push(...userArgs);
 
@@ -290,7 +322,28 @@ for (let i = 0; i < userArgs.length; i++) {
 const lastArg = userArgs[userArgs.length - 1];
 const lastIsBareOptional = lastArg !== undefined && lastArg.startsWith('-')
   && !lastArg.includes('=') && OPTIONAL_VALUE_FLAGS.has(lastArg);
-if (!userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor) cli.push(`/color ${slashColor}`);
+const slashColorPrompt = !userHasPrompt && !lastIsBareOptional && !lastGroupVariadic && idColor;
+if (slashColorPrompt) cli.push(`/color ${slashColor}`);
+
+// When the slot is taken (a prompt given, the bare picker, an argv ending in a list), the sibling
+// launch-color mod sets the color instead: `--plugin-dir <launcher dir>/launch-color`, before the
+// user's arguments so it never joins a list or fills an optional value, and the color in
+// CC_LAUNCH_COLOR, which the mod's session.start hook passes to /color. Not for --cloud (the session
+// runs elsewhere), not in pair mode (no claude is launched), and only when the mod is installed.
+const MOD_DIR = join(dirname(fileURLToPath(import.meta.url)), 'launch-color');
+const colorMod = Boolean(idColor) && !slashColorPrompt && !pair
+  && !userArgs.some((a) => a.split('=')[0] === '--cloud')
+  && existsSync(join(MOD_DIR, '.claude-plugin', 'plugin.json'));
+if (colorMod) cli.splice(cli.length - userArgs.length, 0, '--plugin-dir', MOD_DIR);
+
+// The sibling drop-file mod loads on every launch: `--plugin-dir <launcher dir>/drop-file`, before the
+// user's arguments (and the appended `/color` prompt), after launch-color's when both load. Not for
+// --cloud, not in pair mode, and only when the mod is installed.
+const DROP_DIR = join(dirname(fileURLToPath(import.meta.url)), 'drop-file');
+const dropMod = !pair
+  && !userArgs.some((a) => a.split('=')[0] === '--cloud')
+  && existsSync(join(DROP_DIR, '.claude-plugin', 'plugin.json'));
+if (dropMod) cli.splice(cli.length - userArgs.length - (slashColorPrompt ? 1 : 0), 0, '--plugin-dir', DROP_DIR);
 
 // --- resolve + launch claude ------------------------------------------------------------------
 // CC's own env-truthiness convention: only '1' / 'true' / 'yes' / 'on' (lowercased, trimmed) are
@@ -344,13 +397,17 @@ const claudeArgv = pair ? [] : shimVector(claudePath, cli);
 // typed in a shell descended from a second-home launch therefore runs on the primary home, as its
 // title says. The deletion is not part of envDelta: the delta names keys this launch WRITES.
 //
-// CC_LAUNCH_NAME is the `--name` this launch passed — '' on a resume, which passes none — so an
-// in-session hook can tell the launch name from a name chosen later. Always written, like the markers.
+// CC_LAUNCH_NAME is the `--name` this launch passed — '' on a resume, which passes none, and '' when the
+// caller passed its own — so an in-session hook can tell the launch name from a name chosen later.
+// Always written, like the markers. Each `--skip <NAME>` adds CC_SKIP_<NAME>=1; the delta is applied
+// after the scrub below, so the opt-out reaches the child although the prefix is scrubbed.
 const envDelta = {
   CC_TITLE_PREFIX: flags.titlePrefix, CC_TITLE_SUFFIX: flags.titleSuffix,
-  CC_LAUNCH_NAME: title && !isResume ? title : '',
+  CC_LAUNCH_NAME: title && !isResume && !callerName ? title : '',
 };
+for (const n of flags.skips) envDelta[`CC_SKIP_${n}`] = '1';
 if (flags.configDir) envDelta.CLAUDE_CONFIG_DIR = flags.configDir;
+if (colorMod) envDelta.CC_LAUNCH_COLOR = slashColor;   // read by the launch-color mod (see above)
 
 // --- inherited session variables (the sibling session-env-scrub.json) ---------------------------
 // A Claude Code session leaves markers in the environment of everything it starts, and a launch can

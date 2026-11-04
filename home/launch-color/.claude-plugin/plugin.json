@@ -1,0 +1,1 @@
+{ "name": "launch-color", "version": "1.0.0", "description": "Sets the session color at start from CC_LAUNCH_COLOR, which the cc launcher passes when it cannot append its own /color prompt." }

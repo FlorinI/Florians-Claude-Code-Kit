@@ -1,41 +1,58 @@
 ---
-description: Dump the in-head topics of this session, triage each into a bucket (handover / memory / project-docs / do-now), act on them, and write a handover file for the next session to pick up. Say "/handover ok" to run non-interactively with default buckets; any further text is a note to the next session ("/handover ok resume once the env is prepared").
+description: Dump the in-head topics of this session, triage each into a bucket (handover / memory / project-docs / do-now), act on them, and write a handover file for the next session to pick up. Leading keywords, any order — "ok" runs non-interactively with default buckets, "push" commits and pushes at the very end, "light" writes no handover file; any further text is a note to the next session ("/handover ok push resume once the env is prepared").
 ---
 
 # /handover — deliberate session handover
 
 You are about to do a clean session handover. Don't `/clear` yet; the user will do that after the handover file is written.
 
-## Invocation — `/handover` vs `/handover ok`
+## Invocation — keywords, then the intent note
 
-If the command was invoked with the argument **`ok`** (case-insensitive — `ok`, `OK`, `Ok` all count), run the flow **with the proposed default buckets and no confirmation prompt** — but NOT silently. Specifically, in this order:
+The arguments open with zero or more **keywords**, in any order and any case, each a whole word:
 
-1. Draft the eight coordinates (Step 1) internally. You do not need to print the long-form draft.
-2. **Print the Step-2 triage summary table** — the compact `N. [bucket] item` list, defaults already filled in, in the exact format the interactive flow uses (see Step 2). Show it BEFORE acting on or writing anything. This is the recap the user reacts to: because it lands before any M/D/X action or file write, the user can scan it and hit Esc to interrupt and correct course if a bucket is wrong.
-3. Do NOT pause for triage adjustments and do NOT ask for confirmation. After printing the table, continue straight on in the same turn — act on the M, D, and X items (Step 3), write the handover file (Step 4), and report (Step 5).
+| Keyword | Effect |
+|---|---|
+| `ok` | Non-interactive: default buckets, no triage prompt (see below). |
+| `push` | Commit and push everything this session changed, as the very last step (Step 5). |
+| `light` | No handover file: Step 4 is skipped. Everything else runs — the triage and the M, D and X items. |
 
-The only pauses still permitted are the deliberate-action confirmations in Step 3 for outward-facing or hard-to-reverse X items (commits, pushes, deletes, sends) — those are never auto-run off defaults.
-
-Otherwise (plain `/handover`), run the full interactive flow below: present the draft, take the user's triage adjustments, then act.
-
-### The intent note — any other text in the arguments
-
-Everything in the arguments except a leading `ok` is the **intent note**: the user's message to the session that picks this handover up — why they are stopping and what they plan to do next. No keyword introduces it, and quotes are optional (strip one pair of surrounding quotes if present).
+Keywords combine freely, and repeating one changes nothing. Keyword reading stops at the first word that is not a keyword; that word and everything after it is the **intent note**.
 
 | Invocation | Mode | Intent note |
 |---|---|---|
 | `/handover ok I'll get back to this on my other computer.` | non-interactive | `I'll get back to this on my other computer.` |
 | `/handover This is step two of five; the plan lives in another repo.` | interactive | the whole argument |
-| `/handover ok` or `/handover` | as above | none |
+| `/handover ok push` | non-interactive, then commit and push | none |
+| `/handover light ok push` | non-interactive, no file, then commit and push | none |
+| `/handover push Back on Monday.` | interactive, then commit and push | `Back on Monday.` |
+| `/handover` | interactive | none |
 
-`ok` counts as the mode switch only as the first whole word (`okay, later…` is a note, not a mode). If an interactive note must itself start with the word "ok", the user quotes it: `/handover "ok so the plan is…"`.
+`okay, later…` is a note: `okay,` is not a keyword. If a note must itself start with a keyword word, the user quotes it: `/handover "push the release tomorrow"`.
+
+### `ok` — non-interactive
+
+With `ok`, run the flow **with the proposed default buckets and no confirmation prompt** — but NOT silently. Specifically, in this order:
+
+1. Draft the eight coordinates (Step 1) internally. You do not need to print the long-form draft.
+2. **Print the Step-2 triage summary table** — the compact `N. [bucket] item` list, defaults already filled in, in the exact format the interactive flow uses (see Step 2). Show it BEFORE acting on or writing anything. This is the recap the user reacts to: because it lands before any M/D/X action or file write, the user can scan it and hit Esc to interrupt and correct course if a bucket is wrong.
+3. Do NOT pause for triage adjustments and do NOT ask for confirmation. After printing the table, continue straight on in the same turn — act on the M, D, and X items (Step 3), write the handover file (Step 4), push if asked (Step 5), and report (Step 6).
+
+The only pauses still permitted are the deliberate-action confirmations in Step 3 for outward-facing or hard-to-reverse X items (deletes, sends, and commits or pushes other than Step 5's) — those are never auto-run off defaults. Every such question is asked **right after the table, all together, before any action** — never after the file is written or the push is done, because whatever its answer changes must land before the push.
+
+Otherwise (no `ok`), run the full interactive flow below: present the draft, take the user's triage adjustments, then act.
+
+### The intent note — any other text in the arguments
+
+The intent note is the user's message to the session that picks this handover up — why they are stopping and what they plan to do next. No keyword introduces it, and quotes are optional (strip one pair of surrounding quotes if present).
+
+With `light` there is no file to carry a note, so leftover text is not an intent note: record it nowhere, and quote it in the Step-6 report as "not recorded: `light` writes no handover file".
 
 When an intent note is present:
 
 - Record it **verbatim** at the top of the handover file, under `## Intent`, above Goal (Step 4). Never paraphrase, correct, or merge it into the eight coordinates — it is the user's own words and outranks the drafted sections.
 - Show it at the top of the Step-2 triage, above item 1, in both modes (see Step 2).
 - Lead the slug with it (Step 4).
-- Echo it back in the Step-5 report so the user sees exactly what was recorded.
+- Echo it back in the Step-6 report so the user sees exactly what was recorded.
 
 ## Step 1 — draft the eight coordinates
 
@@ -91,6 +108,7 @@ Every numbered item gets a disposition — the triage is a **1:1 echo of the dra
 - **D — Project docs.** A durable fact about *the project itself* — a decision ("X over Y because Z"), a constraint, an architectural choice, a convention, a roadmap item. Persist now into the repo's own documentation (`SPEC.md`, `docs/…`, `CLAUDE.md`, an ADR/roadmap — whatever the project uses). Audience: **anyone working on the project**; it's version-controlled and ships with the code.
 - **X — Execute now.** Do it before exiting — run the command, make the edit, commit, file the issue.
 - **— — Drop.** Not worth any bucket (e.g. already-persisted noise, resolved trivia).
+**With `light`, H is not a bucket** — there is no file to carry it. An item that would default to H defaults to — instead, unless it is worth persisting as M or D. The legend omits H.
 
 **M vs D — which target?** The split is about *audience and ownership*, not importance. Three tests, any one decides it:
 - **Audience** — would a new human teammate, with no access to Claude's memory, need this to work on the project? Yes → **D**. It only helps *Claude* serve the user better → **M**.
@@ -127,13 +145,15 @@ Accept item-suffix shorthand (`2X`), ranges (`7-9M`), or bucket-grouped (`H 1 2 
 
 Do these first so the handover file can record their outcomes.
 
-- **X items** — execute now, in a sensible order. For anything outward-facing or hard to reverse (commits, pushes, deletes, sends), confirm with the user first per the usual deliberate-action rules. Report what each did.
+- **X items** — execute now, in a sensible order. For anything outward-facing or hard to reverse (commits, pushes, deletes, sends), confirm with the user first per the usual deliberate-action rules. Report what each did. With `push`, the session's own commit and push are Step 5, not X items.
 - **M items** — persist now to Claude memory, following the memory-file conventions (frontmatter + a one-line `MEMORY.md` pointer). Show the user the memory slug.
 - **D items** — write or append to the right project doc (`SPEC.md`, `docs/…`, `CLAUDE.md`, roadmap, or a new ADR); create the doc if the project has no home for it yet. Show the user each destination path.
 
 If a D item lands in a project doc, it no longer needs to live in the handover body — a one-line pointer ("documented in `docs/X`") is enough.
 
 ## Step 4 — write the handover file (H items)
+
+With `light`, skip this step.
 
 Compute the timestamp as `<YYYY-MM-DDTHH-MM-SS>` (local time, hyphens not colons so it's a filesystem-safe filename on every OS — colons are invalid on Windows).
 
@@ -145,7 +165,7 @@ Write to `<cwd>/.desk/handovers/<timestamp>-<slug>.md`. Create the `.desk/handov
 
 **Scaffold `.desk/.gitignore` when it is missing** — one line, `handovers/*.consumed.md`, plus a comment saying consumed notes are spent and only unconsumed ones belong in the repo. Only unconsumed handovers live in the repo; a consumed one is a note some session already loaded. The rule sits *inside* `.desk/` rather than in the repo's root `.gitignore` because `.desk/` is this env's own directory — so it needs no entry in a file the project owns, no per-machine git config, and it survives a fresh clone. Never add a `.desk` rule to the repo's root `.gitignore`.
 
-`.desk/` is the project's own store for what this env persists — the handover notes and `session-identity.json`. It sits outside `.claude/`, which repos routinely blanket-ignore, so a handover written here is visible to git by default and can travel to another machine. Whether and when to commit it is the user's call: never offer to commit, and never nudge. A repo that still has notes under the old `.claude/handovers/` is still picked up at session start; new ones go to `.desk/`.
+`.desk/` is the project's own store for what this env persists — the handover notes and `session-identity.json`. It sits outside `.claude/`, which repos routinely blanket-ignore, so a handover written here is visible to git by default and can travel to another machine. Whether and when to commit it is the user's call: never offer to commit, and never nudge. The `push` keyword is that call. A repo that still has notes under the old `.claude/handovers/` is still picked up at session start; new ones go to `.desk/`.
 
 The timestamp stays the leading component so the files still sort chronologically by name (which is how session pickup finds the most recent one); the slug is what makes a directory listing readable months later.
 
@@ -207,8 +227,19 @@ model: <current model display name>
 
 Omit any section (including "Resolved before clear") that has nothing in it.
 
-## Step 5 — report and stop
+## Step 5 — commit and push (only with `push`)
 
-Tell the user the path you wrote to, quote the intent note if one was recorded, and remind them: "Run `/clear` when ready. Your next session in this directory will auto-load the handover and mark it consumed."
+This step runs last, after every step that writes a file, so nothing the handover changes lands after the push. The keyword is the user's authorization for this commit and push; ask nothing more.
+
+1. For each git repository this session changed files in, run git from the repository root.
+2. Stage by explicit path: the files this session changed and, without `light`, the new handover file. Never `git add -A` or `git add .` — other sessions may have uncommitted work in the same repository.
+3. Commit with a message naming what the session did, then push.
+4. If the push fails (no remote, rejected, hook refusal), stop and report the error. Never force-push and never skip hooks.
+
+## Step 6 — report and stop
+
+Tell the user the path you wrote to, quote the intent note if one was recorded, and remind them: "Run `/clear` when ready. Your next session in this directory will auto-load the handover and mark it consumed." With `push`, add each commit hash and push result.
+
+With `light`, there is no path: list what was done instead (X, M, D, and the other Step-3 results), and omit the `/clear` reminder.
 
 Do not run `/clear` yourself — that's for the user.

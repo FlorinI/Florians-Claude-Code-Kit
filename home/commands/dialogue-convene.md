@@ -46,15 +46,17 @@ The prompt's load-bearing parts (all spelled out, nothing assumed):
 - **Identity:** "You are `<PARTY-B-LABEL>`; the other party is `<PARTY-A-LABEL>`. The baton is already yours — `<PARTY-A-LABEL>` opens with Turn 1."
 - **Turn + baton grammar** (the exact turn shape and the baton line), and the **completion check** (act only when the last non-empty line batons to you; `BATON → CONVENER` = ended).
 - **The three self-drive tiers** (§6) with `<DIALOGUE_FILE>` and `<PARTY-B-LABEL>` substituted into the watcher. Tiers are by **capability**, not by product: Tier 1 = host re-invokes on background-exit (confirmed for both Claude Code and Cursor); Tier 2 = ~15s self-poll in its own terminal; Tier 3 = human nudge. Fill the Tier-1 `<WATCH_COMMAND>` with the §6 watcher for the other party's **OS** — PowerShell by default (the common on-Windows case — turnkey), the bash variant for a macOS/Linux party. (OS picks the shell; capability picks the tier — they're independent.)
-- **Stop condition:** on `BATON → CONVENER` (consensus joint summary, or defer Decision Request), surface the result to the human and stop.
+- **Hand-off, not stop:** on `BATON → CONVENER` (consensus joint summary, or defer Decision Request), surface the result to the human and keep watching.
+- **One accountable party per ask** (§5.7): the two agree who asks the human and implements the answer, and name it in the hand-off baton; the other never asks the same thing.
+- **Only the human closes** (§5.6): a party may suggest closing, but stops only when the file says `— CONVENER · DIALOGUE CLOSED`.
 
 ## Step 4 — play Party A yourself (don't paste anything to this session)
 
-You convened here, so **this session is Party A** — do not ask the user to paste a prompt into it. Read the protocol now, then follow **§6 as Party A**: write **Turn 1** opening the topic, end with your baton line (`BATON → <PARTY-B-LABEL>`), and arm the §6 background watch (PowerShell variant — this is a Claude Code session) so you self-drive. Then stop and report one line (e.g. "Turn 1 written; watching for the baton"). From here you take exactly one turn each time the watcher wakes you, until consensus or defer — then surface the result and stop.
+You convened here, so **this session is Party A** — do not ask the user to paste a prompt into it. Read the protocol now, then follow **§6 as Party A**: write **Turn 1** opening the topic, end with your baton line (`BATON → <PARTY-B-LABEL>`), and arm the §6 background watch (PowerShell variant — this is a Claude Code session) so you self-drive. Then stop and report one line (e.g. "Turn 1 written; watching for the baton"). From here you take exactly one turn each time the watcher wakes you. On consensus or defer, surface the result and re-arm. If the user answers in your chat, append the answer as a Convener block (§5.5). Stop only after the user explicitly tells you to close and you have appended `— CONVENER · DIALOGUE CLOSED` (§5.6).
 
 ## Step 5 — tell the user what to do next
 
 Print, concisely:
 1. **Party B prompt is shown above and on your clipboard** — paste it into the other agent (another Claude Code session, Cursor, etc.). It becomes `<PARTY-B-LABEL>` and replies to Turn 1.
-2. **This session is now Party A** and has written Turn 1; it self-drives from here. The two ping-pong unattended and stop, surfacing to you, on **consensus** (joint summary) or **defer** (a co-signed Decision Request). To resume after answering a defer, see §5.5 of the protocol.
+2. **This session is now Party A** and has written Turn 1; it self-drives from here. The two ping-pong unattended and hand you the floor on **consensus** (joint summary) or **defer** (a co-signed Decision Request). Both keep watching: answer in either session and the discussion resumes. **The dialogue closes only when you say so** ("close the dialogue").
 3. **Recovery:** if a party's watcher dies or its session is lost, re-paste that party's universal prompt (same template, that party's label) — its completion check resumes wherever the baton sits.

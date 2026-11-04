@@ -54,11 +54,11 @@ Reach the **GOAL stated in the dialogue header.** Unless the header says otherwi
 1. When you believe the result is settled, end your turn with a clearly-marked **proposal** and a baton of the form:
    `— <YOUR-LABEL> · END OF TURN · PROPOSE CONSENSUS · BATON → <OTHER-PARTY-LABEL>`
 2. The other party then either:
-   - **Ratifies** — appends a turn with any final amendments, the **joint summary for the Convener**, and a baton: `— <YOUR-LABEL> · END OF TURN · RATIFY CONSENSUS · BATON → CONVENER`; **or**
+   - **Ratifies** — appends a turn with any final amendments, the **joint summary for the Convener**, and a baton naming the accountable party (§5.7): `— <YOUR-LABEL> · END OF TURN · RATIFY CONSENSUS · ACCOUNTABLE → <LABEL> · BATON → CONVENER`; **or**
    - **Continues** — a normal turn, if not yet satisfied.
-3. **Done** when one party has signed `PROPOSE CONSENSUS` and the other, in the next turn, signs `RATIFY CONSENSUS` (amendments folded in are fine; genuinely new objections mean it's *not* done — keep going). The ratifying turn **must** contain the joint summary for the Convener: the agreed result, the key decisions, and any open questions. After that, **both parties stop and await the Convener.**
+3. **Consensus is reached** when one party has signed `PROPOSE CONSENSUS` and the other, in the next turn, signs `RATIFY CONSENSUS` (amendments folded in are fine; genuinely new objections mean it's *not* reached — keep going). The ratifying turn **must** contain the joint summary for the Convener: the agreed result, the key decisions, any open questions, and whether the parties suggest closing. After that, **both parties hand the floor to the Convener and keep watching (§6).** Consensus does not close the dialogue; only the Convener does (§5.6).
 
-> The literal token `CONVENER` in a final baton signals "discussion over, human's turn." Keep using that exact word (not the human's name) so the waiting mechanic in §6 detects the end generically. It is reserved for the two endings — consensus (§4) and defer (§5).
+> The literal token `CONVENER` in a baton signals "the human's turn." Keep using that exact word (not the human's name) so the waiting mechanic in §6 detects it generically. It is reserved for the two hand-offs to the Convener — consensus (§4) and defer (§5).
 
 ## 5. When to defer to the Convener (the defer rule + handshake)
 
@@ -99,8 +99,8 @@ A defer is *triggered* on one party's turn, but the Convener should receive a **
    and states: the **question**, **which gate fired**, **its own leaning**, and a **draft Decision Request**.
 2. The other party's next turn does exactly one of:
    - **Resolve / decline** — first it **must** attempt Gate 1 itself and say what it checked. If it *can* resolve it ("here's the ground truth, `file:line`") or judges it local ("here's my assumption, let's proceed"), it takes a normal turn and the dialogue continues — **no human bothered.**
-   - **Co-sign** — only after confirming Gate 1 is genuinely exhausted ("Gate-1 checked: <what I checked / why unreachable>"). It adds **its own leaning**, finalizes the joint Decision Request, and ends:
-     `— <LABEL> · END OF TURN · DEFER TO CONVENER · BATON → CONVENER`
+   - **Co-sign** — only after confirming Gate 1 is genuinely exhausted ("Gate-1 checked: <what I checked / why unreachable>"). It adds **its own leaning**, finalizes the joint Decision Request, confirms the accountable party (§5.7), and ends:
+     `— <LABEL> · END OF TURN · DEFER TO CONVENER · ACCOUNTABLE → <LABEL> · BATON → CONVENER`
 
 The defer that reaches the Convener is therefore co-signed by construction and carries **both** leanings; when they disagree, the Convener sees a genuine articulated fork (which is when human input is most valuable). One party can't unilaterally escalate — the other gets a veto-or-resolve first. All defers, gate-triggered and trip-wire-triggered alike, route through `PROPOSE DEFER`.
 
@@ -114,9 +114,46 @@ A co-signed defer's final turn must contain a **Decision Request** for the Conve
 
 ### 5.5 Resuming after the Convener answers
 
-Both watchers stop on the `BATON → CONVENER` handoff. To resume: the Convener appends a short answer block ending `— CONVENER · END OF TURN · BATON → <party>`, then re-activates **that one party**:
-- If it's the **convening (Party A) session** and it's still alive, just tell it to continue — it re-runs its completion check, reads the answer, takes the next turn, and re-arms.
-- Otherwise (Party B, or a session that was lost), **re-paste that party's §8 launch prompt** (same template, that party's label). Its completion check sees the baton and resumes from wherever it sits — the prompt is self-contained, so re-pasting it is also the generic recovery move if a watcher ever dies mid-dialogue.
+Both watchers stay armed through a `BATON → CONVENER` hand-off (§6), so both parties are still listening when the Convener answers. The Convener can answer in either party's chat, or append to the file directly.
+
+When the Convener answers in your chat, append his answer to the dialogue file as a Convener block, in his words, without adding your own position:
+```
+## Turn N — CONVENER
+<the Convener's answer>
+
+— CONVENER · END OF TURN · BATON → <party who moves next>
+```
+If the baton goes to you, take your turn. If it goes to the other party, its watcher wakes on its own.
+
+If a party's session or watcher was lost, **re-paste that party's §8 launch prompt** (same template, that party's label). Its completion check sees the baton and resumes from wherever it sits.
+
+### 5.6 Closing — only the Convener closes
+
+The dialogue stays open until the Convener explicitly closes it. Consensus and defer hand him the floor; they do not end anything.
+
+- **A party may suggest closing.** Say so in the turn that hands the floor to the Convener, or in your chat with him. Then keep watching.
+- **A party never closes on its own.** Never stop or skip re-arming your watcher before the dialogue is closed. Silence, approval of the result ("looks good", "thanks") and a new task given in chat are not a close.
+- **Only an explicit instruction from the Convener closes** ("close the dialogue", "you can close it"). If you are unsure whether he meant to close, ask him.
+- **To close:** the session that receives the instruction appends this exact line to the dialogue file:
+  ```
+  — CONVENER · DIALOGUE CLOSED
+  ```
+  Both watchers exit with `CLOSED` within one poll. Each party then stops and tells the Convener the dialogue is closed.
+
+### 5.7 One accountable party per ask
+
+Every question, decision or result that goes to the Convener has exactly **one accountable party**. Only that party asks him, and only that party implements his answer. The other party never asks him the same thing.
+
+- **Agree on it in the dialogue, before the ask reaches him.** The party proposing a defer or consensus names who it thinks should be accountable; the co-signing or ratifying party confirms it or names the other. Default: the party whose side the decision changes, the one who will implement it.
+- **Name it in the hand-off baton**, before `BATON`:
+  ```
+  — <LABEL> · END OF TURN · DEFER TO CONVENER · ACCOUNTABLE → <LABEL> · BATON → CONVENER
+  — <LABEL> · END OF TURN · RATIFY CONSENSUS · ACCOUNTABLE → <LABEL> · BATON → CONVENER
+  ```
+- **The accountable party** surfaces the question or summary to the Convener, collects his answer, appends it as a Convener block (§5.5), and implements it. If implementation touches the other party's side, it asks the other party through the dialogue, never through the Convener.
+- **The other party** tells the Convener nothing about that ask except one line: "<accountable label> is handling this with you." It keeps watching.
+- **Outside the hand-off too:** a party that needs something from the Convener mid-dialogue raises it in the dialogue first, so the two agree who asks.
+- **If the Convener answers the wrong party anyway**, that party appends his answer to the dialogue as a Convener block with the baton to the accountable party, tells him in one line that the accountable party will act on it, and does not implement it itself.
 
 ## 6. The background waiting mechanic (how you self-drive)
 
@@ -131,23 +168,29 @@ So the two parties converge **without the Convener passing messages**, each watc
 - **Tier 2 — self-poll:** if your host won't auto-re-invoke you but you can loop/sleep in your own terminal, run the same poll yourself — check the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
 - **Tier 3 — human nudge:** if you can do neither, write your turn, then ask the human to tell you "your turn" once the other party replies.
 
-**Arming the watch (Tier 1)** — run this as a **background** command (it polls every 30s and exits the moment your turn is due, or when a turn has been handed to the Convener — consensus *or* defer, both end `BATON → CONVENER`). It caps at **58 minutes** per arming and then exits `TIMEOUT`; that cap is not a deadline for the other party — it's just how long one background command runs before you **re-arm it** (see the `TIMEOUT` wake below). Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
+**Arming the watch (Tier 1)** — run this as a **background** command. It polls every 30s and exits when:
+- the baton passes to you (`YOUR_TURN`);
+- a **new** turn hands the floor to the Convener (`CONVENER`) — a hand-off already in the file when you armed does not wake you again;
+- the Convener closes the dialogue (`CLOSED`).
+
+It caps at **58 minutes** per arming and then exits `TIMEOUT`; that cap is not a deadline for anyone — it's how long one background command runs before you **re-arm it**. Substitute `<DIALOGUE_FILE>` and your own `<YOUR-LABEL>`:
 
 ```powershell
-$f = "<DIALOGUE_FILE>"; $me = "<YOUR-LABEL>"; $max = 116; for ($i=0; $i -lt $max; $i++) { $last = (Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" } | Select-Object -Last 1); if ($last -match "BATON.*CONVENER") { Write-Output "CONVENER"; Write-Output $last; exit 0 }; if ($last -match "BATON.*$me") { Write-Output "YOUR_TURN"; Write-Output $last; exit 0 }; Start-Sleep -Seconds 30 }; Write-Output "TIMEOUT"; Write-Output $last
+$f = "<DIALOGUE_FILE>"; $me = "<YOUR-LABEL>"; $max = 116; $n0 = @(Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" }).Count; for ($i=0; $i -lt $max; $i++) { $lines = @(Get-Content -LiteralPath $f | Where-Object { $_.Trim() -ne "" }); $last = $lines[-1]; if ($last -match "DIALOGUE CLOSED") { Write-Output "CLOSED"; Write-Output $last; exit 0 }; if ($last -match "BATON.*$me") { Write-Output "YOUR_TURN"; Write-Output $last; exit 0 }; if ($last -match "BATON.*CONVENER" -and $lines.Count -ne $n0) { Write-Output "CONVENER"; Write-Output $last; exit 0 }; Start-Sleep -Seconds 30 }; Write-Output "TIMEOUT"; Write-Output $last
 ```
 
 *(POSIX/bash equivalent, if a session isn't on PowerShell:)*
 ```bash
-f="<DIALOGUE_FILE>"; me="<YOUR-LABEL>"; for i in $(seq 1 116); do last=$(grep -v '^[[:space:]]*$' "$f" | tail -n1); case "$last" in *BATON*CONVENER*) echo "CONVENER"; echo "$last"; exit 0;; *BATON*"$me"*) echo "YOUR_TURN"; echo "$last"; exit 0;; esac; sleep 30; done; echo "TIMEOUT"; echo "$last"
+f="<DIALOGUE_FILE>"; me="<YOUR-LABEL>"; n0=$(grep -cv '^[[:space:]]*$' "$f"); for i in $(seq 1 116); do n=$(grep -cv '^[[:space:]]*$' "$f"); last=$(grep -v '^[[:space:]]*$' "$f" | tail -n1); case "$last" in *"DIALOGUE CLOSED"*) echo "CLOSED"; echo "$last"; exit 0;; *BATON*"$me"*) echo "YOUR_TURN"; echo "$last"; exit 0;; *BATON*CONVENER*) if [ "$n" != "$n0" ]; then echo "CONVENER"; echo "$last"; exit 0; fi;; esac; sleep 30; done; echo "TIMEOUT"; echo "$last"
 ```
 
 **On wake:**
-- Output `YOUR_TURN` → the other party finished and the baton is yours: read the new turn(s), write your reply per §3–§5, then **re-arm** the watch.
-- Output `CONVENER` → a turn was handed to the Convener (consensus or defer): **stop. Do not re-arm.** Surface the final turn (joint summary or Decision Request) to the Convener and end.
-- Output `TIMEOUT` → 58 min passed with no baton to you: **do NOT assume the other party died and do NOT surface a stall to the Convener.** A turn legitimately takes many minutes — even several of the other party's own turns — and it will get back to you. Just **silently re-arm** the same watch and keep waiting. This re-arm is **indefinite**: repeat on every `TIMEOUT`, with no cap on the number of re-arms. The only things that stop you are `YOUR_TURN` (take your turn) and `CONVENER` (end).
+- Output `YOUR_TURN` → run the completion check (§3), read the new turn(s), write your reply per §3–§5, then **re-arm** the watch.
+- Output `CONVENER` → the floor was handed to the Convener (consensus or defer). If the baton line names you `ACCOUNTABLE`, surface the final turn (joint summary or Decision Request) to the Convener. If it names the other party, tell the Convener only "<that label> is handling this with you" (§5.7). Either way, **re-arm** the watch: you keep listening for his answer or his close (§5.5, §5.6).
+- Output `CLOSED` → the Convener closed the dialogue: **stop. Do not re-arm.** Tell the Convener it is closed.
+- Output `TIMEOUT` → 58 min passed with nothing for you: **do NOT assume the other party died and do NOT surface a stall to the Convener.** **Silently re-arm** the same watch. This re-arm is **indefinite**, also while the floor is with the Convener: he may take hours or days to answer.
 
-This is exactly the loop both parties run: *take turn → arm watch → wake on baton → take turn → …* until `CONVENER`.
+The loop both parties run: *take turn → arm watch → wake → take turn or surface to the Convener → re-arm → …* until `CLOSED`. Nothing but `CLOSED` ends it.
 
 ## 7. Hygiene
 
@@ -179,13 +222,17 @@ Fill `<PROTOCOL_PATH>`, `<DIALOGUE_FILE>`, `<PARTY-B-LABEL>`, `<PARTY-A-LABEL>`,
 >
 > — <PARTY-B-LABEL> · END OF TURN · BATON → <PARTY-A-LABEL>
 > ```
-> The last line is the **baton** — the only way to end a turn; it names who moves next. To settle, use `PROPOSE CONSENSUS` then (on the other's ratify) `RATIFY CONSENSUS · BATON → CONVENER` with a joint summary addressed to me. To hand a decision back to me, use the §5 defer handshake (`PROPOSE DEFER` → `DEFER TO CONVENER · BATON → CONVENER`).
+> The last line is the **baton** — the only way to end a turn; it names who moves next. To settle, use `PROPOSE CONSENSUS` then (on the other's ratify) `RATIFY CONSENSUS · ACCOUNTABLE → <label> · BATON → CONVENER` with a joint summary addressed to me. To hand a decision back to me, use the §5 defer handshake (`PROPOSE DEFER` → `DEFER TO CONVENER · ACCOUNTABLE → <label> · BATON → CONVENER`).
 >
-> **Completion check before every turn:** look at the last non-empty line of the dialogue file. Baton to you (`BATON → <PARTY-B-LABEL>`) → take your turn. Baton to `<PARTY-A-LABEL>`, or no baton line → not ready; wait. Baton to `CONVENER` → the dialogue has ended; show me the final turn and stop.
+> **Completion check before every turn:** look at the last non-empty line of the dialogue file. Baton to you (`BATON → <PARTY-B-LABEL>`) → take your turn. Baton to `<PARTY-A-LABEL>`, or no baton line → not ready; wait. Baton to `CONVENER` → the floor is mine; show me the final turn and keep waiting. `— CONVENER · DIALOGUE CLOSED` → the dialogue is over; stop.
+>
+> **One accountable party per ask (§5.7).** Before anything comes to me, agree in the dialogue which of you is accountable for it, and name it in the hand-off baton (`ACCOUNTABLE → <label>` before `BATON`). Only the accountable party asks me and implements my answer; the other tells me only "<label> is handling this with you". If I answer the wrong one of you, that one appends my answer to the file for the accountable party and does not act on it.
+>
+> **Only I close the dialogue (§5.6).** You may suggest closing; never stop watching until the file says `DIALOGUE CLOSED`. If I answer you in chat, append my answer to the file as a Convener block (§5.5). If I tell you explicitly to close, append `— CONVENER · DIALOGUE CLOSED`. Approval of the result is not a close; if unsure, ask me.
 >
 > **Self-drive — pick the highest tier your environment supports (§6):**
-> - **Tier 1 (hands-free):** if your host re-invokes you when a background command exits, run this as a background command; when it wakes you, read its output — `YOUR_TURN` → take your turn and re-arm; `CONVENER` → show me the result and stop; `TIMEOUT` (the watch caps at 58 min) → **silently re-arm the same command and keep waiting — do NOT assume the other party died or tell me it stalled; a turn can take many minutes and it will get back to you.** Re-arm on `TIMEOUT` indefinitely, no cap: `<WATCH_COMMAND>`
-> - **Tier 2 (self-poll):** else if you can loop/sleep in your own terminal, poll the dialogue file's last non-empty line every ~15s and take your turn when it batons to you.
+> - **Tier 1 (hands-free):** if your host re-invokes you when a background command exits, run this as a background command; when it wakes you, read its output — `YOUR_TURN` → take your turn and re-arm; `CONVENER` → show me the result and re-arm; `CLOSED` → stop; `TIMEOUT` (the watch caps at 58 min) → **silently re-arm the same command and keep waiting — do NOT assume the other party died or tell me it stalled.** Re-arm indefinitely, no cap: `<WATCH_COMMAND>`
+> - **Tier 2 (self-poll):** else if you can loop/sleep in your own terminal, poll the dialogue file's last non-empty line every ~15s and take your turn when it batons to you, until it says `DIALOGUE CLOSED`.
 > - **Tier 3 (human nudge):** else write your turn and tell me to say "your turn" when the other party replies.
 >
-> Take your turn now, then self-drive. Stop and show me the result on consensus (joint summary) or defer (Decision Request).
+> Take your turn now, then self-drive. On consensus (joint summary) or defer (Decision Request), show me the result and keep watching until I close the dialogue.

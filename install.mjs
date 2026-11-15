@@ -51,10 +51,17 @@ Before any other on-session-start behavior, check the working directory for a pe
    was asked.
 3. **To load a note, rename it first** to insert \`.consumed\` before \`.md\` — BEFORE reading it. That's the
    consumed marker. Then read it and use it as orientation. **To peek, read without renaming.**
-4. Open the first turn by acknowledging the resume and summarizing each note loaded or peeked (3–4 lines
+4. **Rejoin the dialogues a loaded note carries.** If a loaded note has an \`## Open dialogues\`
+   section, rejoin each dialogue it lists before your first reply. First check its file with
+   \`node <your Claude config folder>/open-dialogues.mjs --status "<file>"\`. If the file is missing or
+   does not answer, do not arm the watch: say so and ask the user whether to keep it (arm the watch
+   anyway) or forget it. If it is closed, do not arm. If it is open: read the protocol it names
+   (§3–§6) and the dialogue file, run the completion check and act on it, then run the listed watch
+   command in the background. A peeked note rejoins nothing.
+5. Open the first turn by acknowledging the resume and summarizing each note loaded or peeked (3–4 lines
    each), then defer to the project's own conventions. If a note has an \`## Intent\` section, quote it
    verbatim first — it is the user's own message to that session.
-5. After the first turn, treat the handovers as one-time orientation — don't re-quote them as a source of truth.
+6. After the first turn, treat the handovers as one-time orientation — don't re-quote them as a source of truth.
 
 If no unconsumed handover exists, proceed normally.`;
 

@@ -116,7 +116,7 @@ A co-signed defer's final turn must contain a **Decision Request** for the Conve
 
 Both watchers stay armed through a `BATON → CONVENER` hand-off (§6), so both parties are still listening when the Convener answers. The Convener can answer in either party's chat, or append to the file directly.
 
-When the Convener answers in your chat, append his answer to the dialogue file as a Convener block, in his words, without adding your own position:
+When the Convener answers in your chat, append his answer to the dialogue file as a Convener block, word for word, without adding your own position or your reading of it (a date, a name); a reading goes to him in your chat, never into the block:
 ```
 ## Turn N — CONVENER
 <the Convener's answer>
@@ -134,6 +134,7 @@ The dialogue stays open until the Convener explicitly closes it. Consensus and d
 - **A party may suggest closing.** Say so in the turn that hands the floor to the Convener, or in your chat with him. Then keep watching.
 - **A party never closes on its own.** Never stop or skip re-arming your watcher before the dialogue is closed. Silence, approval of the result ("looks good", "thanks") and a new task given in chat are not a close.
 - **Only an explicit instruction from the Convener closes** ("close the dialogue", "you can close it"). If you are unsure whether he meant to close, ask him.
+- **One exception, at handover.** A Claude Code session ending through `/handover` closes a dialogue without a fresh instruction when the dialogue has run its course (a ratified consensus with nothing left open) and the Convener has approved that result. It records why in one line before the close line. Every other open dialogue stops the handover for the Convener's decision.
 - **To close:** the session that receives the instruction appends this exact line to the dialogue file:
   ```
   — CONVENER · DIALOGUE CLOSED

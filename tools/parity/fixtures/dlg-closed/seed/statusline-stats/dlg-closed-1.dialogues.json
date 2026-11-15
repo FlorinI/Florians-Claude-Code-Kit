@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "checkedAt": 1781749990,
+  "dialogues": {
+    "//dialogues/share/alpha-dialogue.md": {
+      "file": "//dialogues/share/alpha-dialogue.md",
+      "state": "closed",
+      "lastLine": "— CONVENER · DIALOGUE CLOSED",
+      "checkedAt": 1781749990
+    },
+    "/dialogues/share/alpha-dialogue.md": {
+      "file": "//dialogues/share/alpha-dialogue.md",
+      "state": "closed",
+      "lastLine": "— CONVENER · DIALOGUE CLOSED",
+      "checkedAt": 1781749990
+    }
+  }
+}

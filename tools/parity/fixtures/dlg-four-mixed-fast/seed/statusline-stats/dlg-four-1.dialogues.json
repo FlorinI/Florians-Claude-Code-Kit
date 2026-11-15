@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "checkedAt": 1781749990,
+  "dialogues": {
+    "//dialogues/share/alpha-dialogue.md": {
+      "file": "//dialogues/share/alpha-dialogue.md",
+      "state": "open",
+      "lastLine": "— Web-Claude · END OF TURN · BATON → Api-Claude",
+      "checkedAt": 1781749990
+    },
+    "/dialogues/share/alpha-dialogue.md": {
+      "file": "//dialogues/share/alpha-dialogue.md",
+      "state": "open",
+      "lastLine": "— Web-Claude · END OF TURN · BATON → Api-Claude",
+      "checkedAt": 1781749990
+    },
+    "//dialogues/share/beta-dialogue.md": {
+      "file": "//dialogues/share/beta-dialogue.md",
+      "state": "open",
+      "lastLine": "— Web-Claude · END OF TURN · BATON → Api-Claude",
+      "checkedAt": 1781749990
+    },
+    "/dialogues/share/beta-dialogue.md": {
+      "file": "//dialogues/share/beta-dialogue.md",
+      "state": "open",
+      "lastLine": "— Web-Claude · END OF TURN · BATON → Api-Claude",
+      "checkedAt": 1781749990
+    },
+    "//dialogues/share/gamma-dialogue.md": {
+      "file": "//dialogues/share/gamma-dialogue.md",
+      "state": "unreadable",
+      "lastLine": null,
+      "checkedAt": 1781749990
+    },
+    "/dialogues/share/gamma-dialogue.md": {
+      "file": "//dialogues/share/gamma-dialogue.md",
+      "state": "unreadable",
+      "lastLine": null,
+      "checkedAt": 1781749990
+    },
+    "//dialogues/share/delta-dialogue.md": {
+      "file": "//dialogues/share/delta-dialogue.md",
+      "state": "missing",
+      "lastLine": null,
+      "checkedAt": 1781749990
+    },
+    "/dialogues/share/delta-dialogue.md": {
+      "file": "//dialogues/share/delta-dialogue.md",
+      "state": "missing",
+      "lastLine": null,
+      "checkedAt": 1781749990
+    }
+  }
+}

@@ -273,15 +273,46 @@ test('9 — placeholder trend cells are untinted dots, still 6 cells wide (A15)'
   assert.ok(seen >= 8, `vacuity guard: only ${seen} fixtures exercise placeholder cells`);
 });
 
-test('10 — the trend strip is the only tinted element anywhere on the display (A15)', () => {
+// Does one SGR sequence set a background? Parsed, not pattern-matched: a 256-colour or truecolour
+// FOREGROUND carries sub-parameters (`38;5;48`) that a substring test for `48;` would misread, and a
+// substring test for `48;2;` alone (this row's old form) let a `48;5;` fill through unseen.
+function setsBackground(seq) {
+  const p = seq.slice(2, -1).split(';').map(Number);
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === 48) return true;
+    if (p[i] === 38) { i += p[i + 1] === 5 ? 2 : (p[i + 1] === 2 ? 4 : 0); continue; }
+    if ((p[i] >= 40 && p[i] <= 47) || (p[i] >= 100 && p[i] <= 107)) return true;
+  }
+  return false;
+}
+// The dialogue badge (open-dialogues sprint 2026-11-05, spec docs/261105-open-dialogues-spec.md §5):
+// bold 231 on plum 96 — the display's second filled element, on the flags row only.
+const DIALOGUE_BADGE_SGR = '\x1b[1;38;5;231;48;5;96m';
+
+test('10 — a background colour appears only in the trend strip\'s chips and in the dialogue badge on the flags row (A15; open-dialogues C-6)', () => {
+  // Rewritten 2026-11-05 (open-dialogues test plan C-6). The row used to be named "the trend strip is
+  // the only tinted element" and scanned for `48;2;` only, so the dialogue badge's `48;5;96` would
+  // have passed it unseen while making its name false. Now every background form counts, and exactly
+  // two places may carry one: the trend row's tinted chips, and the dialogue badge on the flags row.
+  let badges = 0;
   for (const f of blessed()) {
+    const tr = rowIndexByLabel(f, 'trend'), fl = rowIndexByLabel(f, 'flags');
     rawRows(f).forEach((row, i) => {
-      if (i === 1) return;                            // the trend row is where tint belongs
-      const hits = [...row.matchAll(/48;2;/g)];
-      assert.equal(hits.length, 0,
-        `${f} row ${i + 1}: a tinted background outside the trend row — deleting the % fill chip leaves the trend cells as the line's only tinted language (spec §5)`);
+      const bgs = [...row.matchAll(/\x1b\[[0-9;]*m/g)].map((m) => m[0]).filter(setsBackground);
+      if (i === tr) {
+        for (const s of bgs) assert.match(s, /^\x1b\[38;2;\d+;\d+;\d+;48;2;\d+;\d+;\d+m$/, `${f} trend row: only the BgTint chip form may carry a background: ${JSON.stringify(s)}`);
+        return;
+      }
+      if (i === fl) {
+        for (const s of bgs) assert.equal(s, DIALOGUE_BADGE_SGR, `${f} flags row: the dialogue badge is the only filled flag: ${JSON.stringify(s)}`);
+        badges += bgs.length;
+        return;
+      }
+      assert.deepEqual(bgs, [], `${f} row ${i + 1}: a background outside the trend row and the dialogue badge (spec 261105 §5)`);
     });
   }
+  // Vacuity: the dlg-* fixtures carry the badge, so the flags-row branch is exercised.
+  assert.ok(badges >= 4, `vacuity guard: only ${badges} dialogue badges seen across the blessed goldens`);
 });
 
 // ================================================================================================
@@ -910,10 +941,17 @@ test('30 — every fixture is well-formed: parseable inputs, frozen clock, a mat
     const seed = join(FIX, f, 'seed', 'statusline-stats');
     // skip-guards: a per-fixture PROPERTY, not a guard — most fixtures render from a cold state and carry no seed at all, so its absence is what the fixture is, never a deletion.
     if (existsSync(seed)) {
-      const stats = readdirSync(seed).filter((n) => n.endsWith('.json') && !n.endsWith('.agents.json'));
+      // The per-session sidecar files (`<sid>.agents.json`, and since 2026-11-05 `<sid>.dialogues.json`,
+      // the open-dialogues state) are keyed by the same id, so they must carry the same prefix.
+      const SIDECARS = /\.(agents|dialogues|dialogue-probe)\.json$/;
+      const stats = readdirSync(seed).filter((n) => n.endsWith('.json') && !SIDECARS.test(n));
       for (const s of stats) {
         assert.equal(s, `${d.session_id}.json`,
           `${f}: seed stats file ${s} does not match session_id ${d.session_id} — the seed would be ignored`);
+      }
+      for (const s of readdirSync(seed).filter((n) => SIDECARS.test(n))) {
+        assert.ok(s.startsWith(`${d.session_id}.`),
+          `${f}: seed file ${s} does not belong to session_id ${d.session_id} — the engine would never read it`);
       }
     }
   }

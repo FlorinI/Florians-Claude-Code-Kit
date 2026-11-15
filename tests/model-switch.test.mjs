@@ -38,12 +38,12 @@ function render(dirs, displayName, cost) {
     input: JSON.stringify(stdin),
     // CLAUDE_CONFIG_DIR is pinned POSITIVELY (never deleted) so the child's user-level state stays
     // inside the temp home even when this suite is launched from a second-subscription session.
-    env: { ...process.env, USERPROFILE: dirs.home, HOME: dirs.home, CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CLAUDE_PROJECT_DIR: dirs.cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) },
+    env: { ...process.env, USERPROFILE: dirs.home, HOME: dirs.home, CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CLAUDE_PROJECT_DIR: dirs.cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW), CLAUDE_SL_DIALOGUE_PROBE: 'off' },
     maxBuffer: 64 * 1024 * 1024,
   }).toString('utf8');
   return {
     stats: JSON.parse(readFileSync(join(dirs.cwd, '.claude', 'statusline-stats', 'msw-test-1.json'), 'utf8')),
-    sidecar: JSON.parse(readFileSync(join(dirs.cwd, '.claude', 'statusline-last.json'), 'utf8')),
+    sidecar: JSON.parse(readFileSync(join(dirs.cwd, '.claude', 'statusline-stats', 'msw-test-1.sidecar.json'), 'utf8')),
     stdout, plain: stdout.replace(/\x1b\[[0-9;]*m/g, ''),
   };
 }
@@ -389,7 +389,7 @@ function factsSheet(dirs) {
   const env = {
     ...process.env, USERPROFILE: dirs.home, HOME: dirs.home,
     CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CLAUDE_PROJECT_DIR: dirs.cwd,
-    TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW + 5),
+    TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW + 5), CLAUDE_SL_DIALOGUE_PROBE: 'off',
   };
   delete env.CLAUDE_CODE_SESSION_ID;   // else the FOREIGN ownership guard fires
   return execFileSync(process.execPath, [join(here, '..', 'home', 'handover-facts.mjs')],

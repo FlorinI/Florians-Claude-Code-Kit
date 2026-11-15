@@ -8,15 +8,21 @@
 //     the default home's. Project-level state (<project>/.claude/…) is deliberately NOT affected —
 //     it is per-project, not per-subscription.
 //
-//  2. resolveSidecarPath() — WHICH status-line sidecar a stateless consumer should READ. The status
-//     line writes its snapshot to BOTH a project-local file (<project>/.claude/statusline-last.json)
-//     and the global <config-home>/statusline-last.json. The project-local file is the source of
-//     truth; this resolver returns it if it exists, else the global fallback — so render-legspark.mjs,
-//     render-spikes.mjs and the /handover-check subagent agree.
+//  2. resolveSidecarPath(dir, sid) — WHICH status-line snapshot a stateless consumer should READ.
+//     The status line writes one snapshot per session, beside its rollup:
+//     <project>/.claude/statusline-stats/<sid>.sidecar.json, or <config-home>/statusline-stats/
+//     <sid>.sidecar.json when its payload had no cwd. `sid` defaults to CLAUDE_CODE_SESSION_ID, which
+//     Claude Code sets in its tool processes, so render-legspark.mjs, render-spikes.mjs and
+//     handover-facts.mjs (the /handover-check fact sheet) all read the calling session's own file.
+//     With a sid: the project file, else the home file, else null. Without one: the newest
+//     *.sidecar.json by mtime in the project's stats folder, else the home's, else null. null means
+//     "no snapshot" to every reader.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+
+const SIDECAR_SUFFIX = '.sidecar.json';
 
 export function resolveConfigHome() {
   const cd = process.env.CLAUDE_CONFIG_DIR;
@@ -24,11 +30,35 @@ export function resolveConfigHome() {
   return join(process.env.USERPROFILE || homedir(), '.claude');
 }
 
-export function resolveSidecarPath(dir) {
+// The newest *.sidecar.json in `statsDir` by mtime, or null (missing folder, none there).
+function newestSidecar(statsDir) {
+  let names;
+  try { names = readdirSync(statsDir); } catch { return null; }
+  let best = null, bestMs = -Infinity;
+  for (const name of names) {
+    if (!name.endsWith(SIDECAR_SUFFIX)) continue;
+    const fp = join(statsDir, name);
+    try {
+      const st = statSync(fp);
+      if (st.isFile() && st.mtimeMs > bestMs) { best = fp; bestMs = st.mtimeMs; }
+    } catch {}
+  }
+  return best;
+}
+
+export function resolveSidecarPath(dir, sid = process.env.CLAUDE_CODE_SESSION_ID) {
   if (!dir || !String(dir).trim()) {
     dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   }
-  const projLocal = join(dir, '.claude', 'statusline-last.json');
-  if (existsSync(projLocal)) return projLocal;
-  return join(resolveConfigHome(), 'statusline-last.json');
+  const projStats = join(dir, '.claude', 'statusline-stats');
+  const homeStats = join(resolveConfigHome(), 'statusline-stats');
+  const id = sid ? String(sid).trim() : '';
+  if (id) {
+    for (const statsDir of [projStats, homeStats]) {
+      const fp = join(statsDir, id + SIDECAR_SUFFIX);
+      if (existsSync(fp)) return fp;
+    }
+    return null;
+  }
+  return newestSidecar(projStats) ?? newestSidecar(homeStats);
 }

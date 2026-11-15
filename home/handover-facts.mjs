@@ -31,18 +31,23 @@ const emit = (s) => lines.push(s);
 function flushAndExit() { process.stdout.write(lines.join('\n')); process.exit(0); }
 
 // ---- resolve + read the sidecar ----
+// This session's own snapshot (<project>/.claude/statusline-stats/<CLAUDE_CODE_SESSION_ID>.sidecar.json,
+// else the config home's), resolved by sidecar-path.mjs. MISSING has two causes, and the command's
+// MISSING branch names both: the status line has not rendered since install (press Enter on an empty
+// prompt, re-run), or this session has no status line at all (the desktop app).
 const sidecar = resolveSidecarPath(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 if (!sidecar || !existsSync(sidecar)) { process.stdout.write('MISSING'); process.exit(0); }
 let s;
 try { s = JSON.parse(readFileSync(sidecar, 'utf8')); } catch { s = null; }
 if (!s) { process.stdout.write('MISSING'); process.exit(0); }
 
-// FOREIGN guard — is this snapshot actually MINE? The status line writes one sidecar per project (and a
-// global fallback); a session that never renders a status line (e.g. the desktop app) writes none, so the
-// resolver silently hands us another session's snapshot. The discriminator is the session id, NOT age:
-// CLAUDE_CODE_SESSION_ID is set for spawned processes and the sidecar stores the full sessionId, so a
-// definite mismatch means "wrong session → abort". (Staleness stays a soft warning below.) When the env id
-// is absent we can't verify ownership — proceed unchanged.
+// FOREIGN guard — is this snapshot actually MINE? The status line writes one sidecar per session, and the
+// resolver reads the file named by CLAUDE_CODE_SESSION_ID, so a session that renders no status line (e.g.
+// the desktop app) gets MISSING above. Only the no-id fallback (the newest snapshot in the project) or a
+// file whose content names another session can reach here with someone else's snapshot. The
+// discriminator is the session id, NOT age: the sidecar stores the full sessionId, so a definite mismatch
+// means "wrong session → abort". (Staleness stays a soft warning below.) When the env id is absent we
+// can't verify ownership — proceed unchanged.
 // Each side is named in words when a name is known (the id fragment stays in brackets so it still
 // cross-references `from session <hex>` stamps and tab titles), id fragment alone otherwise. The
 // snapshot's name was persisted in the sidecar at write time; THIS session's name comes from the
@@ -105,7 +110,7 @@ if (!(snapSchemaIsNum && snapSchema === SIDECAR_SCHEMA)) {
 }
 
 // Freeze the EXACT snapshot this run used → render-legspark/render-spikes (--frozen) read THIS file, so all
-// three renderers see the SAME session even if a concurrent same-project session clobbers the live sidecar
+// three renderers see the SAME snapshot even if this session's status line rewrites its live sidecar
 // between reads. Best-effort; a freeze failure just falls them back to the live sidecar.
 try { copyFileSync(sidecar, join(configHome, 'handover-frozen.json')); } catch { /* best effort */ }
 
@@ -176,9 +181,10 @@ const ageSec = s.renderedAt != null ? psRound(now - Number(s.renderedAt)) : null
 let ageF;
 if (ageSec == null) ageF = 'age unknown';
 else if (ageSec < 60) ageF = `${ageSec}s`;
-else if (ageSec < 3600) ageF = `${psRound(ageSec / 60)}m${String(ageSec % 60).padStart(2, '0')}s`;
-else if (ageSec < 86400) ageF = `${psRound(ageSec / 3600)}h${String(psRound((ageSec % 3600) / 60)).padStart(2, '0')}m`;
-else ageF = `${psRound(ageSec / 86400)}d${String(psRound((ageSec % 86400) / 3600)).padStart(2, '0')}h`;
+// Each leading unit floored, the trailing unit the floored remainder: 100 s is `1m40s`, never `2m40s`.
+else if (ageSec < 3600) ageF = `${Math.floor(ageSec / 60)}m${String(ageSec % 60).padStart(2, '0')}s`;
+else if (ageSec < 86400) ageF = `${Math.floor(ageSec / 3600)}h${String(Math.floor((ageSec % 3600) / 60)).padStart(2, '0')}m`;
+else ageF = `${Math.floor(ageSec / 86400)}d${String(Math.floor((ageSec % 86400) / 3600)).padStart(2, '0')}h`;
 const stale = (ageSec != null && ageSec > 180);
 const sid8 = s.sessionId ? String(s.sessionId).slice(0, Math.min(8, String(s.sessionId).length)) : '????????';
 const repo = s.gitRepo ? s.gitRepo : '(no repo)';
@@ -312,7 +318,11 @@ if (s.base != null && sessionCostVal > 0 && coldWastedUsdScan != null) {
 
 // ---- COLD ----
 const ttlName = Number(s.coldTtlSec) === 3600 ? '~1-hour cache' : (Number(s.coldTtlSec) === 300 ? '5-minute cache' : '5-minute cache (assumed)');
-const warm = FmtMin(s.coldCoolRemainSec);
+// The countdown was true at renderedAt; an idle session's snapshot can be up to ~130 s old (the
+// status line skips unchanged writes), so it is aged to now. A future renderedAt does not age.
+const coolElapsedSec = (s.renderedAt != null && Number.isFinite(Number(s.renderedAt)))
+  ? Math.max(0, now - Number(s.renderedAt)) : 0;
+const warm = FmtMin(s.coldCoolRemainSec == null ? null : Math.max(0, Number(s.coldCoolRemainSec) - coolElapsedSec));
 const stake = FmtUsd(s.coldStakeUsd);
 // Keep-warm alternative for the act-soon/urgent branches: a `max_tokens: 0` API ping re-warms the
 // still-warm cache at cache-READ price — base × ctx × 0.10 (TTL-independent), vs the rebuild stake.
@@ -512,6 +522,17 @@ emit(`ACTIVITY: ${act}`);
 emit(`TRAJECTORY: ${trajShape}, range ${trajRange}`);
 emit(`YOURCALL_POLARITY: ${ycPol}`);
 emit(`YOURCALL_BASIS: ${ycBasis}`);
+// Open dialogues (sidecar `openDialogues`, present only when the session takes part in at least one):
+// the last line of the sheet. It changes neither the headline nor YOUR CALL.
+const od = s.openDialogues;
+if (od && typeof od === 'object' && Number(od.open) >= 1) {
+  const nOpen = Math.trunc(Number(od.open));
+  const parts = [];
+  if (Number(od.unreadable) > 0) parts.push(`${BT}${Math.trunc(Number(od.unreadable))}${BT} unreadable`);
+  if (Number(od.missing) > 0) parts.push(`${BT}${Math.trunc(Number(od.missing))}${BT} missing`);
+  emit(`DIALOGUES: this session takes part in ${BT}${nOpen}${BT} open ${nOpen === 1 ? 'dialogue' : 'dialogues'}`
+    + (parts.length ? ` (${parts.join(', ')})` : '') + '; /handover will stop until you decide each one');
+}
 
 // Move every approximate-tilde INSIDE the adjacent code span. A bare "~`" breaks the terminal's markdown
 // parser (swallows the opening backtick, shifting the span pairing). "`~" renders identically but parses

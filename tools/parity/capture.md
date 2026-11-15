@@ -4,7 +4,7 @@
 the result against committed goldens:
 
 - **stdout** (`golden.txt`) — must be **byte-identical** (this is what the user sees).
-- **sidecar JSON** (`golden-sidecar.json`, vs `<cwd>/.claude/statusline-last.json`) — **structurally
+- **sidecar JSON** (`golden-sidecar.json`, vs `<cwd>/.claude/statusline-stats/<sid>.sidecar.json`) — **structurally
   equal** with float tolerance (`1e-9`), so a harmless float-formatting difference never fails a run.
 
 Run all fixtures: `npm run parity`  ·  one fixture: `node tools/parity/run-parity.mjs <name>`.
@@ -19,7 +19,7 @@ golden diff before committing — it is the human-readable record of what the ch
 - **Frozen clock.** Each fixture's `meta.json` sets `nowEpoch`; the harness exports it as
   `CLAUDE_SL_NOW_EPOCH`, honoured by `nowEpoch()` in `_sl-compat.mjs` (unset in production → the real
   clock). `TZ=UTC` pins date formatting.
-- **Isolated writes.** The engine runs in its own temp `HOME` + temp project dir, so the dual
+- **Isolated writes.** The engine runs in its own temp `HOME` + temp project dir, so the
   sidecar, per-session stats, agent rollups and daily counter land in throwaway dirs and never touch
   the real machine.
 - **Stable transcript.** The engine reads the fixture's read-only `transcript.jsonl`, so file

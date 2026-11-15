@@ -21,12 +21,12 @@ Each piece guards against a specific way agentic coding goes wrong:
   complete" — so building the wrong thing gets caught before a line of code exists.
 - **`/handover`** — *guards continuity.* Dumps a session's in-flight state to a handover file the next
   session auto-picks up, so you stop losing the thread between sessions.
-- **A two-column status dossier** (`statusline.mjs`) — *guards cost & context.* A fixed-width grid of six
-  always-present rows, plus one spotlight row per pair of expensive legs: per-leg cost with a
+- **A two-column status dossier** (`statusline.mjs`) — *guards cost & context.* A fixed-width grid of up to
+  six fixed rows, plus one spotlight row per pair of expensive legs: per-leg cost with a
   composition-weighted forecast and a recent-leg median, an eight-chip per-leg cost trend, context tokens
   against the model window, auto-compaction headroom, cold-cache tax tracking, and 5h/7d quota gauges
-  with a runway line under each. Every cluster has a permanent address, so a calm session looks calm
-  rather than looking like missing data.
+  with a runway line under each. A cluster with nothing to say renders nothing, label included, and a
+  row with nothing on either side drops out, so a calm session shows a short, quiet grid.
 - **The `rca` skill** — *guards debugging.* Forces a falsifiable hypothesis and a disconfirming check
   before any fix, and right-sizes itself: a quick inline diagnosis for a cheap bug, a full documented
   analysis when the fix gates something expensive or irreversible.

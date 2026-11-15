@@ -7,7 +7,7 @@ any detail is the engine itself.
 
 ## Layout — the two-column grid
 
-**Six always-present fixed rows**, then a variable block of **spotlight-leg** rows.
+**Up to six fixed rows** in a frozen order, then a variable block of **spotlight-leg** rows.
 
 ```
 col 1                                    53 54 55 56                                        117
@@ -30,10 +30,10 @@ col 1                                    53 54 55 56                            
   slug, several caveat chips or a long driver simply make that one line longer. No number is ever
   truncated and no caveat is ever abbreviated to fit.
 
-**Empty clusters keep their address.** A cluster with nothing to say still renders its **label**;
-only the value is absent. Nothing collapses and no row goes missing, so the grid holds its shape on
-every session — which is the point: a reader can tell "calm" from "no data", and every cluster sits
-at a predictable screen position. The quota gauges are the one variation: they state why the window
+**A label belongs to its value.** A cluster with nothing to say renders nothing, its label
+included, and a fixed row whose two halves are both silent drops out. So the grid keeps its column
+geometry on every session but not its height, because a bare label reads as noise. The quota gauges
+are the one variation: they state why the window
 is absent, in one of three phrases — `none on this plan`, `reset · next message measures it` or
 `n/a` — rather than leaving a half-empty row that reads as a rendering bug.
 
@@ -41,12 +41,12 @@ is absent, in one of three phrases — `none on this plan`, `reset · next messa
 
 | Row | left half | right half |
 |---|---|---|
-| 1 | **`model`** — display name + effort level | **`cost`** — session total, last leg, next-leg forecast, recent-leg median, cold tax paid |
+| 1 | **`model`** — display name + effort level + Claude Code's version badge | **`cost`** — session total, last leg, next-leg forecast, recent-leg median, cold tax paid |
 | 2 | **`ctx`** — tokens/window + distance to the compaction wall | **`trend`** — eight per-leg cost chips + the leg count |
 | 3 | **`5h`** — quota gauge (+ a verdict when the window is loud) | **`7d`** — the same, for the 7-day window |
 | 4 | *(no label)* — the 5h runway + `resets` | *(no label)* — the 7d runway + `resets` |
-| 5 | **`⁂`** — sub-agent fleet aggregate | **`repo`** — slug@branch + sync glyph + version badges |
-| 6 | **`cold`** — what a cold resume would cost next | **`flags`** — off-default settings + every earned caveat |
+| 5 | **`⁂`** — sub-agent fleet aggregate | **`repo`** — slug@branch + sync glyph |
+| 6 | **`cold`** — what a cold resume would cost next | **`flags`** — the open dialogues + off-default settings + every earned caveat + the `bsl` version badge |
 
 ### Rows 7+ — spotlight legs, two to a row
 
@@ -125,11 +125,19 @@ projection computed off a sliver of elapsed time would be shown and disbelieved.
 redundant — the first keeps an unstable imperative off the screen, the second keeps a meaningless
 number off it.
 
-## The `flags` row — off-default settings only
+## The `flags` row — open dialogues, then off-default settings
 
 Row 6 right carries everything a reader must know about *how this session is configured* and *how its
-numbers must be read*, in one fixed order. **Its empty state — the label alone — is the common,
-healthy case.**
+numbers must be read*, and the duties it has taken on, in one fixed order. It always ends with the
+`bsl` version badge, right-aligned. **With nothing else to say, the row shows that badge alone,
+without the `flags` label — the common, healthy case.**
+
+**First comes the open-dialogues badge**, `1 dialogue open` or `3 dialogues open`: bold white on a
+plum fill, the one filled chip on the row, shown only while the session takes part in at least one
+open two-party dialogue (`/dialogue-convene`). A dialogue file that could not be read in time, or is no
+longer at its path, still counts and is named after the badge, as `(1 unreadable)` or `(1 missing)`.
+The status line never reads a dialogue file itself: a background probe does, under a time limit, so a
+network share that stops answering never slows a render.
 
 **Only off-default settings appear.** Each mode chip fires on one state only: fast mode is named when
 it is **on**, extended thinking when it is **off**, the output style only when it is **not** the
@@ -153,13 +161,17 @@ ever abbreviated to fit.
 context-token bands, the quota rungs, the cold-cache cooling ramp, the git sync glyphs — and the
 per-leg `$` gradient, one continuous gradient shared by the forecast, the realized last leg, the
 median, every trend chip and every spotlight leg, so equal dollars render identically wherever they
-sit. The **trend strip is the only tinted element** anywhere on the display, which keeps tint one
-language rather than a second gray.
+sit.
+
+**The display has two filled elements, and they speak different languages.** The trend strip's
+tints are a ground at 30% of each chip's own colour: a cost language. The dialogue badge is a full
+plum fill under white text: an attention signal. Plum appears nowhere else, so the fill means
+"dialogue" and nothing else.
 
 ## Determinism & testing
 
-The renderer writes a small per-project sidecar (`statusline-last.json`) and per-session stats under
-`~/.claude`. The parity goldens (`tools/parity/`) feed frozen stdin + a frozen clock into the engine
+The renderer writes a small per-session sidecar (`<sid>.sidecar.json`) beside its per-session stats,
+under `<project>/.claude/statusline-stats/` (`~/.claude/statusline-stats/` when there is no project). The parity goldens (`tools/parity/`) feed frozen stdin + a frozen clock into the engine
 in a throwaway HOME and assert the rendered bytes and the sidecar match committed references — so any
 change to the output is a deliberate, reviewed re-bless. Bless with the two explicit commands:
 

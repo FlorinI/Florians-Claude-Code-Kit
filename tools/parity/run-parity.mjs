@@ -3,13 +3,13 @@
 // For every fixture under tools/parity/fixtures/<name>/, feed the fixture stdin to the Node renderer
 // (home/statusline.mjs) and compare against committed goldens:
 //   1. rendered stdout  — must be BYTE-IDENTICAL to golden.txt (this is what the user sees).
-//   2. the project-local sidecar JSON — STRUCTURALLY equal (float tolerance) to golden-sidecar.json.
+//   2. the session's sidecar JSON — STRUCTURALLY equal (float tolerance) to golden-sidecar.json.
 //
 // Run `node tools/parity/run-parity.mjs` (or `npm run parity`) to check; pass `--bless` to (re)write
 // the goldens from the current Node output — do that only when the change in output is intended.
 // Optionally pass a fixture name to limit to one: `node ... run-parity.mjs --bless small-young`.
 //
-// Determinism: the engine runs in its OWN temp HOME + temp project dir (so the dual sidecar,
+// Determinism: the engine runs in its OWN temp HOME + temp project dir (so the sidecar,
 // per-session stats, agent rollups and daily counter land in throwaway dirs and never touch the real
 // machine), reads the SAME read-only transcript (so file mtime/ctime are stable), and gets a FROZEN
 // clock via CLAUDE_SL_NOW_EPOCH (from the fixture's meta.json) plus TZ=UTC. See tools/parity/capture.md.
@@ -132,6 +132,9 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
       CLAUDE_PROJECT_DIR: tempCwd,
       TZ: 'UTC',
       CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
+      // The render must never start a dialogue probe here: a background probe could still be writing
+      // into, or holding a handle on, the temp dirs deleted below. A fixture seeds the state instead.
+      CLAUDE_SL_DIALOGUE_PROBE: 'off',
     };
     // Inherited shell value must not flip goldens; a fixture that needs it sets it via meta.env.
     delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
@@ -144,7 +147,8 @@ function runNode(fixDir, stdinObj, nowEpoch, extraEnv) {
       stdout = stdout.subarray(3);
     }
 
-    const sidecarPath = join(tempCwd, '.claude', 'statusline-last.json');
+    // The session's own snapshot: one file per session, beside its rollup.
+    const sidecarPath = join(tempCwd, '.claude', 'statusline-stats', `${stdin.session_id}.sidecar.json`);
     let sidecar = null;
     if (existsSync(sidecarPath)) {
       try { sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')); } catch { sidecar = '<unparseable>'; }

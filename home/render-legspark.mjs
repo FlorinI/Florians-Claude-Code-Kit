@@ -31,7 +31,7 @@ const configHome = resolveConfigHome();
 function done(s) { process.stdout.write(s); process.exit(0); }
 
 // --frozen: read the run-local snapshot handover-facts.mjs froze for THIS /handover-check, so all three
-// renderers see the SAME session even if a concurrent same-project session clobbers the live sidecar.
+// renderers see the SAME snapshot even if this session's status line rewrites its live sidecar.
 const frozen = join(configHome, 'handover-frozen.json');
 const sidecar = (Frozen && existsSync(frozen)) ? frozen : resolveSidecarPath(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 if (!sidecar || !existsSync(sidecar)) done('(no status-line snapshot yet — press Enter on an empty prompt to render one)');
@@ -39,12 +39,13 @@ let snap;
 try { snap = JSON.parse(readFileSync(sidecar, 'utf8')); } catch { snap = null; }
 if (!snap) done('(no status-line snapshot yet — press Enter on an empty prompt to render one)');
 
+// Each leading unit floored, the trailing unit the floored remainder: 100 s is `1m40s`, never `2m40s`.
 function FmtAge(sec) {
   sec = psRound(sec);
   if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${psRound(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
-  if (sec < 86400) return `${psRound(sec / 3600)}h${String(psRound((sec % 3600) / 60)).padStart(2, '0')}m`;
-  return `${psRound(sec / 86400)}d${String(psRound((sec % 86400) / 3600)).padStart(2, '0')}h`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}m`;
+  return `${Math.floor(sec / 86400)}d${String(Math.floor((sec % 86400) / 3600)).padStart(2, '0')}h`;
 }
 const sid = snap.sessionId ? String(snap.sessionId).slice(0, Math.min(8, String(snap.sessionId).length)) : '????????';
 const repo = snap.gitRepo ? snap.gitRepo : '(no repo)';

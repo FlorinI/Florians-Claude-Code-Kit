@@ -42,9 +42,36 @@ export function atomicWriteFile(path, text) {
 // mtime (epoch seconds) is older than `cutoffEpoch` and whose name passes `match(name)`, skipping
 // names that start with `keepPrefix` (the caller's own live files). Best-effort by contract: a
 // missing dir, an unreadable entry, a concurrent delete — every error is swallowed, nothing throws.
-export function sweepStaleFiles(dir, cutoffEpoch, { match, keepPrefix } = {}) {
+//
+// `groupBySession: true` ages a session's files TOGETHER: the matched names are grouped by the text
+// before their first `.` (a session id has no dot), and a group is removed — every file in it — only
+// when its NEWEST matched file is older than the cutoff. A live session's heartbeat file keeps its
+// whole group, so a file it rightly leaves unwritten (an unchanged agents cache) is not swept from
+// under it. Default off: each file is aged on its own, as before.
+export function sweepStaleFiles(dir, cutoffEpoch, { match, keepPrefix, groupBySession = false } = {}) {
   let names;
   try { names = readdirSync(dir); } catch { return; }
+  if (groupBySession) {
+    const groups = new Map();
+    for (const name of names) {
+      try {
+        if (keepPrefix && name.startsWith(keepPrefix)) continue;
+        if (typeof match === 'function' && !match(name)) continue;
+        const fp = join(dir, name);
+        const sec = statSync(fp).mtimeMs / 1000;
+        const key = name.split('.')[0];
+        const g = groups.get(key) || { newest: -Infinity, files: [] };
+        g.files.push(fp);
+        if (sec > g.newest) g.newest = sec;
+        groups.set(key, g);
+      } catch { /* best effort */ }
+    }
+    for (const g of groups.values()) {
+      if (g.newest >= cutoffEpoch) continue;
+      for (const fp of g.files) { try { rmSync(fp, { force: true }); } catch { /* best effort */ } }
+    }
+    return;
+  }
   for (const name of names) {
     try {
       if (keepPrefix && name.startsWith(keepPrefix)) continue;

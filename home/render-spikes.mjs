@@ -38,12 +38,13 @@ if (!snap) done('(no status-line snapshot yet — press Enter on an empty prompt
 const tpath = snap.transcriptPath;
 if (!tpath || !existsSync(tpath)) done('(no transcript path in the snapshot — render the status line once after deploying, then re-run)');
 
+// Each leading unit floored, the trailing unit the floored remainder: 100 s is `1m40s`, never `2m40s`.
 function FmtAge(sec) {
   sec = psRound(sec);
   if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${psRound(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
-  if (sec < 86400) return `${psRound(sec / 3600)}h${String(psRound((sec % 3600) / 60)).padStart(2, '0')}m`;
-  return `${psRound(sec / 86400)}d${String(psRound((sec % 86400) / 3600)).padStart(2, '0')}h`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}m`;
+  return `${Math.floor(sec / 86400)}d${String(Math.floor((sec % 86400) / 3600)).padStart(2, '0')}h`;
 }
 // True median — even count → mean of the middle two (same semantics as statusline.mjs's Median()).
 // The old upper-middle index read the FATTER of 2 agents as the median, so it rendered "1.0x med".

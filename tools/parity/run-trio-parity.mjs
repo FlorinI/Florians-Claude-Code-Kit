@@ -12,7 +12,7 @@
 // once on a live session at cutover (the pwsh trio was retired in the same change); these goldens guard
 // against future drift. Determinism mirrors run-parity.mjs: a throwaway temp HOME + project dir, the
 // fixture's frozen nowEpoch (CLAUDE_SL_NOW_EPOCH) + TZ=UTC, and CLAUDE_CODE_SESSION_ID UNSET so the
-// FOREIGN ownership guard doesn't fire on the harness's own session id.
+// readers take the project's newest snapshot (the fixture's) instead of the harness's own session's file.
 //
 // Fixtures WITH sub-agents (transcript/subagents/) first run the status-line engine once into the temp
 // cwd — same stdin rewrite, seeds and env as run-parity.mjs — so the agents cache exists there; the golden
@@ -97,8 +97,10 @@ function runTrio(fixDir, nowEpoch, meta) {
       CLAUDE_PROJECT_DIR: tempCwd,
       TZ: 'UTC',
       CLAUDE_SL_NOW_EPOCH: String(nowEpoch),
+      // The pre-run render must never start a dialogue probe into the temp dirs deleted below.
+      CLAUDE_SL_DIALOGUE_PROBE: 'off',
     };
-    delete env.CLAUDE_CODE_SESSION_ID; // else the FOREIGN guard fires on the harness's own session
+    delete env.CLAUDE_CODE_SESSION_ID; // else the readers look for the harness's own session's snapshot (MISSING)
 
     // Frozen snapshot = the fixture's golden sidecar, with transcriptPath pointed at the fixture transcript.
     const sidecar = JSON.parse(readFileSync(join(fixDir, 'golden-sidecar.json'), 'utf8'));
@@ -113,7 +115,11 @@ function runTrio(fixDir, nowEpoch, meta) {
     }
     // handover-facts reads the live sidecar (project-local) then freezes it; render-* read the freeze.
     // (Written AFTER the pre-run, so the trio sees the committed golden, not the engine's fresh sidecar.)
-    writeFileSync(join(tempCwd, '.claude', 'statusline-last.json'), JSON.stringify(sidecar), 'utf8');
+    // The snapshot lands where the readers resolve it: <cwd>/.claude/statusline-stats/<sessionId>.sidecar.json
+    // (over the pre-run's own file for sub-agent fixtures). CLAUDE_CODE_SESSION_ID is unset, so the readers
+    // take the newest snapshot in the project — this one.
+    mkdirSync(join(tempCwd, '.claude', 'statusline-stats'), { recursive: true });
+    writeFileSync(join(tempCwd, '.claude', 'statusline-stats', `${sidecar.sessionId}.sidecar.json`), JSON.stringify(sidecar), 'utf8');
 
     const out = {};
     for (const [key, spec] of Object.entries(SCRIPTS)) {

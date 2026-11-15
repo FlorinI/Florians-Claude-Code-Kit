@@ -71,7 +71,7 @@ test('F1 — post-kill state (intact stats + orphaned temp): stats survive, rend
     });
     // CLAUDE_CONFIG_DIR is pinned POSITIVELY (never deleted) so the child's user-level state stays
     // inside the temp home even when this suite is launched from a second-subscription session.
-    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW) };
+    const env = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW), CLAUDE_SL_DIALOGUE_PROBE: 'off' };
     const run = (cost) => execFileSync(process.execPath, [engine], { input: stdinFor(cost), env, maxBuffer: 64 * 1024 * 1024 });
 
     // Render 1 establishes the stats file. The costBaseline mechanism was removed 2026-07-27
@@ -163,7 +163,7 @@ function projectionRig() {
   const env = {
     ...process.env, USERPROFILE: home, HOME: home,
     CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd,
-    TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW),
+    TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW), CLAUDE_SL_DIALOGUE_PROBE: 'off',
   };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statsPath = join(cwd, '.claude', 'statusline-stats', sid + '.json');
@@ -334,7 +334,7 @@ test('RP-3 — sessionName survives the projection; the switch is DERIVED to the
     assert.ok(!('modelSwitch' in s2), 'still no stats stamp after a second projection pass');
 
     const facts = join(here, '..', 'home', 'handover-facts.mjs');
-    const sidecarPath = join(rig.cwd, '.claude', 'statusline-last.json');
+    const sidecarPath = join(rig.cwd, '.claude', 'statusline-stats', rig.sid + '.sidecar.json');
 
     // READER-VISIBLE #1 — the model-switch caveat still reaches the sheet, now by DERIVATION: the
     // sidecar key is computed from the banked perLegModels at every render, with the transcript ids
@@ -408,7 +408,7 @@ test('RP-6 — the projection is NOT over-applied: the sub-agent rollup keeps an
     const env = {
       ...process.env, USERPROFILE: home, HOME: home,
       CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd,
-      TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW),
+      TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(NOW), CLAUDE_SL_DIALOGUE_PROBE: 'off',
     };
     delete env.CLAUDE_CODE_SESSION_ID;
     const stdin = JSON.stringify({

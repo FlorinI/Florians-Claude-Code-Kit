@@ -38,14 +38,19 @@ test('E4 — handover-facts.mjs no longer frames the warm-rewrite tax as pending
 });
 
 // ---- F2: all three state writers go through atomicWriteFile ------------------------------------
-test('F2 — stats, agents cache, and both sidecar writes use atomicWriteFile', () => {
+test('F2 — stats, agents cache, and the one sidecar write use atomicWriteFile; nothing writes statusline-last.json', () => {
   const s = src('home/statusline.mjs');
   assert.match(s, /atomicWriteFile\(statsPath,/, 'per-session stats writer');
   assert.match(s, /atomicWriteFile\(cachePath,/, 'agents cache writer');
-  const sidecarWrites = s.match(/atomicWriteFile\([^)]*statusline-last\.json[^)]*\)/g) || [];
-  assert.equal(sidecarWrites.length, 2, 'project + home sidecar writes');
+  // One snapshot per session, beside its rollup (2026-11-14 idle-session CPU fix): one write site,
+  // and its target is <state dir>/statusline-stats/<sessionId>.sidecar.json.
+  const sidecarWrites = s.match(/atomicWriteFile\(sidecarPath,/g) || [];
+  assert.equal(sidecarWrites.length, 1, 'one sidecar write: the session\'s own snapshot');
+  assert.match(s, /const sidecarPath = [^\n]*'statusline-stats'[^\n]*\.sidecar\.json/, 'the sidecar target is the per-session file in statusline-stats');
+  const legacyWrites = s.match(/(?:atomicWriteFile|writeFileSync)\([^)\n]*statusline-last\.json/g) || [];
+  assert.deepEqual(legacyWrites, [], 'no write of statusline-last.json, home or project');
   // No state target may still use the bare primitive.
-  for (const bad of [/writeFileSync\(statsPath/, /writeFileSync\(cachePath/, /writeFileSync\([^)\n]*statusline-last\.json/]) {
+  for (const bad of [/writeFileSync\(statsPath/, /writeFileSync\(cachePath/, /writeFileSync\(sidecarPath/, /writeFileSync\([^)\n]*statusline-last\.json/]) {
     assert.ok(!bad.test(s), `bare writeFileSync on a state file: ${bad}`);
   }
 });
@@ -594,13 +599,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.16 (PATCH: an absent quota window names why it is absent)', () => {
+test('D4-5 — SL_VERSION is 6.1.18 (PATCH: idle sessions stop writing; one snapshot file per session)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.16',
-    'X.Y.Z is 6.1.16 (2026-11-05, five-hour display spec 261104 §4.6 and §7): an absent quota window reads `none on this plan`, `reset · next message measures it` or `n/a`, and the quota writer drops a 5-hour window that ended without a successor; a behavior-affecting display fix. Not X: no displayed number changes meaning. Not Y: no new cluster or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.18',
+    'X.Y.Z is 6.1.18 (2026-11-14, idle-session CPU spec 261114 §5): an idle session writes nothing but a 120 s heartbeat of its own <sid>.sidecar.json, and statusline-last.json is written nowhere; a behavior-affecting fix. Not X: the display and every number\'s meaning are unchanged. Not Y: no new capability or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would
@@ -689,6 +694,31 @@ test('D4-9 — docs/fleet-tray.md says the age can exceed the probe\'s interval,
     'and it must say WHY: the panel keeps the HIGHEST reading it has seen within one window, because consumption only rises');
   assert.match(doc, /quota-probe\.log/,
     'and it must send the reader to `<home>\\quota-probe.log` for probe health — the whole point of the bullet is that the date on the row is not that signal');
+});
+
+test('D4-10 — docs/status-line.md names TWO filled elements, the trend tints and the dialogue badge, and why they differ', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship; export-surface X7 checks the generated doc' : false }, () => {
+  // Open-dialogues sprint (2026-11-05), spec 261105 §5 "Docs consequence" and §11; test plan row
+  // "D4-9" — numbered D4-10 here because D4-9 already names the fleet-tray probe-interval row above.
+  // The dialogue badge is a full plum fill, so the old sentence "the trend strip is the only tinted
+  // element anywhere on the display" became false the day the badge shipped. A doc that lies about
+  // the colour vocabulary is the rot this row exists to stop.
+  const doc = src('docs/status-line.md');
+  assert.ok(!/only tinted element/i.test(doc), 'the "trend strip is the only tinted element" claim is gone');
+  const start = doc.indexOf('### Colour vocabulary');
+  assert.ok(start >= 0, 'the colour-vocabulary section exists');
+  const next = doc.slice(start + 1).search(/\n#{2,3} /);
+  const section = next < 0 ? doc.slice(start) : doc.slice(start, start + 1 + next);
+  assert.match(section, /two filled elements/i, 'the section names exactly two filled elements');
+  assert.match(section, /trend/i, 'one is the trend strip\'s tints');
+  assert.match(section, /dialogue badge/i, 'the other is the dialogue badge');
+  assert.match(section, /cost language/i, 'the tints are a cost language');
+  assert.match(section, /attention signal/i, 'the badge is an attention signal — why the two differ');
+  const att = doc.indexOf('## Attention colors');
+  assert.ok(att >= 0, 'the Attention colors section exists');
+  const attNext = doc.slice(att + 1).search(/\n## /);
+  const attSection = attNext < 0 ? doc.slice(att) : doc.slice(att, att + 1 + attNext);
+  assert.match(attSection, /dialogue/i, 'Attention colors lists the dialogue badge');
+  assert.ok(attSection.includes('1;38;5;231;48;5;96'), 'with its SGR `1;38;5;231;48;5;96`');
 });
 
 test('D4-7 — interpret-statusline.md reads the labels that actually ship', { skip: IN_PUBLIC_KIT ? 'public kit checkout: the private docs do not ship' : false }, () => {

@@ -24,6 +24,17 @@ every session, to:
 A matching `SessionStart` hook (`session-start-handover.mjs`) surfaces pending handovers at launch: one by
 name, several as a numbered list with the keywords.
 
+**Open dialogues.** Ending a session stops its watch on every two-party dialogue it takes part in
+(`/dialogue-convene`), and the other party then waits with no one answering. So `/handover` stops
+first, in every mode, for each open dialogue. It closes one on its own only when the dialogue has run
+its course and you approved its result; otherwise you answer `close` (the close line is appended),
+`keep` or `forget` (it is left out and nothing is written). Nothing in the handover ever creates a
+dialogue file. A kept dialogue goes into the note's `## Open dialogues` section with the protocol's
+current watch command for it, and the session that loads the note with `take` rejoins it before its
+first reply: it checks the file with a time-limited read, asks you whether to keep a dialogue whose
+file is gone or silent, and otherwise reads the file, acts on where the baton sits and arms the watch.
+`peek` rejoins nothing.
+
 A launcher that starts a session not meant to continue the work (a search, an always-on helper) sets
 `CC_SKIP_HANDOVER_PICKUP=1` in that session's environment: the hook then reports no pending note to
 the pickup check, and its start-up line says pickup is off, so the note stays pending for its own session.

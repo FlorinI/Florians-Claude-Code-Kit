@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import {
+  readFileSync, readdirSync, statSync, existsSync, mkdtempSync, mkdirSync, rmSync, copyFileSync, utimesSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
 import { rowByLabel } from './_grid.mjs';
 
 // goldens-invariants — hand-computed pins on the COMMITTED parity goldens, independent of the
@@ -723,4 +727,121 @@ test('M6 — the three D7 labels fire on their own gates, across all 73', () => 
     if (wantLegPrice) legprice++;
   }
   assert.ok(resume >= 1 && legprice >= 1, `vacuity guard: resume ${resume}, legprice ${legprice}`);
+});
+
+
+// ---- CPU M3 (2026-11-14, the idle-session CPU fix) — a clock-only render writes nothing ---------
+// Every parity fixture, rendered in the SAME temp folders at its frozen T and again at T+10: the
+// second render must leave the session's snapshot and its rollup byte-identical AND unwritten (mtime
+// pinned before it, still pinned after), and a snapshot computed fresh at T+10 differs from the T one
+// only in the four clock-only keys. This is the design-time probe of the fix, run as a test: if a key
+// starts moving with the clock alone, every idle session goes back to writing on every render.
+//
+// The render mirrors tools/parity/run-parity.mjs runNode (seed copies, the transcript mtime pin, the
+// env), because the property is about exactly those runs.
+const CLOCK_ONLY_KEYS = ['renderedAt', 'aliveSec', 'activityPct', 'coldCoolRemainSec'];
+const ENGINE = join(here, '..', 'home', 'statusline.mjs');
+function copyTree(src, dst) {
+  let names;
+  try { names = readdirSync(src); } catch { return; }   // a fixture without that seed folder
+  for (const name of names) {
+    const s = join(src, name), d = join(dst, name);
+    if (statSync(s).isDirectory()) { mkdirSync(d, { recursive: true }); copyTree(s, d); } else copyFileSync(s, d);
+  }
+}
+function lastTimestampMs(file) {
+  let max = null;
+  for (const m of readFileSync(file, 'utf8').matchAll(/"timestamp"\s*:\s*"([^"]+)"/g)) {
+    const ms = Date.parse(m[1]);
+    if (!Number.isNaN(ms) && (max === null || ms > max)) max = ms;
+  }
+  return max;
+}
+const readOrNull = (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
+async function clockOnlyProbe(name) {
+  const fixDir = join(FIX, name);
+  const stdinObj = JSON.parse(readFileSync(join(fixDir, 'stdin.json'), 'utf8'));
+  const meta = JSON.parse(readOrNull(join(fixDir, 'meta.json')) ?? '{}');
+  const T = meta.nowEpoch;
+  const home = mkdtempSync(join(tmpdir(), 'cpu-m3-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'cpu-m3-cwd-'));
+  try {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    mkdirSync(join(cwd, '.claude'), { recursive: true });
+    copyTree(join(fixDir, 'home-seed'), join(home, '.claude'));
+    copyTree(join(fixDir, 'seed'), join(cwd, '.claude'));
+    const stdin = structuredClone(stdinObj);
+    const transcript = join(fixDir, 'transcript.jsonl');
+    const hasTranscript = readdirSync(fixDir).includes('transcript.jsonl');
+    if (hasTranscript) {
+      stdin.transcript_path = transcript;
+      const endMs = lastTimestampMs(transcript);
+      if (endMs != null) utimesSync(transcript, endMs / 1000, endMs / 1000);
+    }
+    stdin.workspace = stdin.workspace || {};
+    stdin.workspace.current_dir = cwd;
+    if ('cwd' in stdin) stdin.cwd = cwd;
+    const env = (now) => {
+      const e = { ...process.env, USERPROFILE: home, HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CLAUDE_PROJECT_DIR: cwd, TZ: 'UTC', CLAUDE_SL_NOW_EPOCH: String(now), CLAUDE_SL_DIALOGUE_PROBE: 'off' };
+      delete e.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+      return Object.assign(e, meta.env || {});
+    };
+    // Async, so the fixtures run several at a time; execFile has no `input`, so stdin goes through
+    // the child handle.
+    const renderAt = (now) => new Promise((resolve, reject) => {
+      const child = execFile(process.execPath, [ENGINE], { env: env(now), maxBuffer: 64 * 1024 * 1024 }, (err) => (err ? reject(err) : resolve()));
+      child.stdin.end(JSON.stringify(stdin));
+    });
+    const stats = join(cwd, '.claude', 'statusline-stats');
+    const sidecarPath = join(stats, `${stdinObj.session_id}.sidecar.json`);
+    const rollupPath = join(stats, `${stdinObj.session_id}.json`);
+
+    await renderAt(T);
+    const a = readOrNull(sidecarPath);
+    const r = readOrNull(rollupPath);
+    // A pinned mtime inside T's own UTC day: the rollup's mtime is the sweep's day trigger, so a
+    // mark on the day before would legitimately force a write.
+    const mark = Math.max(Math.floor(T / 86400) * 86400, T - 1000);
+    const marked = [a !== null ? sidecarPath : null, r !== null ? rollupPath : null].filter(Boolean);
+    for (const p of marked) utimesSync(p, mark, mark);
+
+    await renderAt(T + 10);
+    const sameBytes = { sidecar: readOrNull(sidecarPath) === a, rollup: readOrNull(rollupPath) === r };
+    const unwritten = marked.filter((p) => Math.round(statSync(p).mtimeMs / 1000) === mark).length === marked.length;
+
+    // The snapshot this build would have written at T+10, had it written: remove the file, render again.
+    rmSync(sidecarPath, { force: true });
+    await renderAt(T + 10);
+    const b = readOrNull(sidecarPath);
+    return { name, T, a: a && JSON.parse(a), b: b && JSON.parse(b), hasRollup: r !== null, sameBytes, unwritten };
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+test('CPU M3 — every parity fixture: a render 10 s later writes neither the snapshot nor the rollup, and differs only in the four clock keys', async () => {
+  const names = readdirSync(FIX).filter((n) => statSync(join(FIX, n)).isDirectory() && readdirSync(join(FIX, n)).includes('stdin.json')).sort();
+  assert.ok(names.length >= 100, `vacuity guard: the probe covers every fixture (saw ${names.length})`);
+  const results = [];
+  const queue = [...names];
+  const worker = async () => { while (queue.length) results.push(await clockOnlyProbe(queue.shift())); };
+  await Promise.all(Array.from({ length: 6 }, worker));
+
+  const problems = [];
+  let rollups = 0;
+  for (const x of results) {
+    if (!x.a || !x.b) { problems.push(`${x.name}: no snapshot written (a=${!!x.a}, b=${!!x.b})`); continue; }
+    if (x.hasRollup) rollups++;
+    if (!x.sameBytes.sidecar) problems.push(`${x.name}: the T+10 render changed the snapshot bytes`);
+    if (!x.sameBytes.rollup) problems.push(`${x.name}: the T+10 render changed the rollup bytes`);
+    if (!x.unwritten) problems.push(`${x.name}: the T+10 render rewrote a file (mtime moved) with nothing but the clock changed`);
+    if (x.b.renderedAt !== x.T + 10) problems.push(`${x.name}: the fresh snapshot is not the T+10 one (renderedAt ${x.b.renderedAt})`);
+    if (JSON.stringify(Object.keys(x.a)) !== JSON.stringify(Object.keys(x.b))) problems.push(`${x.name}: key set or order differs between T and T+10`);
+    const moved = Object.keys(x.b).filter((k) => JSON.stringify(x.a[k]) !== JSON.stringify(x.b[k]));
+    const nonClock = moved.filter((k) => !CLOCK_ONLY_KEYS.includes(k));
+    if (nonClock.length) problems.push(`${x.name}: non-clock keys moved in 10 s: ${nonClock.join(', ')}`);
+  }
+  assert.deepEqual(problems, []);
+  assert.ok(rollups >= 50, `vacuity guard: most fixtures carry a transcript, so most have a rollup to compare (saw ${rollups})`);
 });

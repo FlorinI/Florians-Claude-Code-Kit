@@ -5,9 +5,10 @@
 // parsing goes through _sl-compat.mjs. Rendering is guarded by the Node golden test
 // (tools/parity/run-parity.mjs) against committed fixtures.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync, openSync, readSync, closeSync, writeSync, unlinkSync } from 'node:fs';
+import { join, dirname, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   nowEpoch, psRound, fmtN, mathRoundD, parseUtcEpoch, parseUtcMs, atomicWriteFile, sweepStaleFiles,
 } from './_sl-compat.mjs';
@@ -20,14 +21,16 @@ import {
 import { resolveConfigHome } from './sidecar-path.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
 import { WriteQuotaFile, ReadQuotaFile, QuotaAbsence } from './quota-file.mjs';
+import { detectDialoguesInLine, detectDialoguesInText, dialogueStatus, resolveLimits, poolSizeFor } from './open-dialogues.mjs';
 
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.16.0';
+export const SL_VERSION = '6.1.18.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
-// user-level read (settings.json) and write (the global sidecar, the rollup caches)
+// user-level read (settings.json) and write (the quota file; the rollup caches and the snapshot when
+// the payload has no cwd)
 // goes through it, so a second-subscription session sees its own state. PROJECT-level paths
 // (<cwd>/.claude/…) are per-project, not per-subscription, and are deliberately untouched.
 const ConfigHome = resolveConfigHome();
@@ -318,7 +321,11 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   const statsDir = join(claudeStateDir(projRoot), 'statusline-stats');
   try { if (!existsSync(statsDir)) mkdirSync(statsDir, { recursive: true }); } catch {}
   const statsPath = join(statsDir, sessionId + '.json');
-  let r = existsSync(statsPath) ? readJson(statsPath) : null;
+  // The text as read, kept for the skip-unchanged compare at the write below.
+  let priorText = null;
+  try { if (existsSync(statsPath)) priorText = readFileSync(statsPath, 'utf8'); } catch {}
+  let r = null;
+  if (priorText !== null) { try { r = JSON.parse(priorText); } catch { r = null; } }
   const hadPrior = r !== null;
   // The stats file's own mtime = the last render's time (read BEFORE this render overwrites it); it
   // is the sweep trigger's only state — see the housekeeping sweep below.
@@ -330,7 +337,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     perLegUnits: [], perLegOwnUnits: [], perLegModels: [], lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0, coldLegs: [],
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], seenMsgIds: [], mainModel: '',
-    runIdx: 0, runStartLeg: 0,
+    runIdx: 0, runStartLeg: 0, dialogues: [],
   });
   // The stats file is written as a PROJECTION of the declared shape, never as "the object we read
   // plus whatever it already had": UpdateSessionRollups mutates what it reads and writes it back, so
@@ -401,6 +408,13 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   if (!('mainModel' in r)) r.mainModel = '';
   if (!('runIdx' in r)) r.runIdx = 0;
   if (!('runStartLeg' in r)) r.runStartLeg = 0;
+  // Additive, NEVER required: the dialogues this session has joined (open-dialogues.mjs — one entry
+  // per dialogue file: { file, label, shell, command }). A stats file without the key was written
+  // before this build (or by a lagging one): its offset already sits past every watch armed so far,
+  // so the detection runs ONCE over the bytes before that offset (the backfill below). A lagging
+  // build that drops the key costs one more backfill, which finds the same entries.
+  const needDialogueBackfill = hadPrior && !needsReset && !Array.isArray(r.dialogues);
+  if (!Array.isArray(r.dialogues)) r.dialogues = [];
   const skipLastLegCost = needsReset;
   const nLegsBefore = Number(r.nLegs);
 
@@ -429,9 +443,12 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
         // them; leaving them standing would double-count every cold leg the rescan re-walks.
         r.nColdLegs = 0; r.coldWastedUnits = 0; r.lastColdWastedUnits = 0; r.lastColdLegIdx = 0;
         r.coldLegs = []; r.lastLegTs = null; r.lastLegTtlSec = 0; r.seenMsgIds = [];
+        r.dialogues = [];
         if ('recentWriteTtls' in r) r.recentWriteTtls = [];
         if ('recentLegs' in r) r.recentLegs = [];
         if ('lastWarm' in r) r.lastWarm = 0;
+      } else if (needDialogueBackfill && Number(r.lastByteOffset) > 0) {
+        detectDialoguesInText(fileBuf.subarray(0, Number(r.lastByteOffset)).toString('utf8'), projRoot, r.dialogues);
       }
       if (Number(r.lastByteOffset) < totalLen) {
         const newText = fileBuf.subarray(Number(r.lastByteOffset)).toString('utf8');
@@ -447,6 +464,10 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
             try {
               const p = JSON.parse(line);
               if (p.type !== 'assistant') continue;
+              // Dialogue detection BEFORE the dedup skip: Claude Code writes one line per content
+              // block, all under one message id, and the watch's tool_use block is rarely the first.
+              // The raw-line pre-test inside keeps ordinary lines at one substring search.
+              detectDialoguesInLine(line, projRoot, r.dialogues, p);
               const msgId = p?.message?.id;
               // First-wins GLOBAL dedup, keyed on every id this session has banked — the identical
               // discipline getScannedLegs uses, at the identical point in the line (before the usage
@@ -556,27 +577,41 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   // A back-compat key already in the file rode through the loop above untouched; one that was never
   // there gets stamped now, so a file this build CREATED is also safe for a lagging reader.
   for (const [k, v] of Object.entries(ROLLUP_COMPAT_KEYS)) if (!(k in rOut)) rOut[k] = v;
-  try { atomicWriteFile(statsPath, JSON.stringify(rOut, null, 2)); } catch {}
 
   // Housekeeping sweep — runs on a NEW session's first render OR on a session's first render on a
   // new UTC day (the stats file's pre-write mtime vs NOW, calendar-day compare). "New session only"
   // was too rare: sessions here live for days, so nothing reclaimed stale entries for weeks; and
   // ConfigHome/statusline-stats is only ever written when the payload has no cwd, so nothing else
   // reclaims it. Cutoff 7 days. Stats dirs: .json = expired session state (incl. .agents.json /
-  // .nudge.json), .tmp. = an orphaned atomic-write temp — a concurrent writer's in-flight temp is
-  // never that old. The current session's own files (every `<sessionId>.` name) are never touched.
-  // Sidecar dirs (<cwd>/.claude and ConfigHome itself) are swept ONLY for the orphaned atomic-write
-  // temps of the two state files written there — statusline-last.json and statusline-quota.json —
-  // never the files themselves, never anything else in those dirs. Best-effort, never throws.
+  // .nudge.json / .sidecar.json), .tmp. = an orphaned atomic-write temp — a concurrent writer's
+  // in-flight temp is never that old. The current session's own files (every `<sessionId>.` name)
+  // are never touched. The state dirs themselves (<cwd>/.claude and ConfigHome) are swept ONLY for
+  // the orphaned atomic-write temps of statusline-last.json and statusline-quota.json, and for the
+  // legacy statusline-last.json itself — older builds wrote it on every render; this build writes it
+  // nowhere, so a copy 7 days old has no writer left. Never anything else in those dirs.
+  // Best-effort, never throws.
   const utcDay = (sec) => Math.floor(sec / 86400);
   const doSweep = !hadPrior || (priorMtimeSec !== null && utcDay(priorMtimeSec) < utcDay(NOW));
+
+  // Skip-unchanged: an idle render produces the same bytes, and rewriting them wakes every session
+  // whose Claude Code watches this folder. A sweep render always writes: the day-rollover trigger
+  // above reads this file's mtime, and the forced write keeps it firing once per day, not per render.
+  const outText = JSON.stringify(rOut, null, 2);
+  if (doSweep || outText !== priorText) {
+    try { atomicWriteFile(statsPath, outText); } catch {}
+  }
+
   if (doSweep) {
     try {
       const cutoff = NOW - 7 * 86400;
       const stateMatch = (n) => n.endsWith('.json') || n.includes('.tmp.');
-      const sidecarTmpMatch = (n) => n.startsWith('statusline-last.json.tmp.')
+      const sidecarTmpMatch = (n) => n === 'statusline-last.json'
+        || n.startsWith('statusline-last.json.tmp.')
         || n.startsWith('statusline-quota.json.tmp.');
-      const keep = { match: stateMatch, keepPrefix: sessionId + '.' };
+      // Stats folders age each session's files TOGETHER (groupBySession): a live idle session writes
+      // only its snapshot heartbeat, so its unchanged agents cache and other files must not be swept
+      // on their own mtimes. The two state-dir sweeps below do not group.
+      const keep = { match: stateMatch, keepPrefix: sessionId + '.', groupBySession: true };
       sweepStaleFiles(statsDir, cutoff, keep);
       const globalStatsDir = join(ConfigHome, 'statusline-stats');
       if (globalStatsDir !== statsDir) sweepStaleFiles(globalStatsDir, cutoff, keep);
@@ -646,6 +681,8 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
   try { if (!existsSync(statsDir)) mkdirSync(statsDir, { recursive: true }); } catch {}
   const cachePath = join(statsDir, sessionId + '.agents.json');
   let cache = existsSync(cachePath) ? readJson(cachePath) : null;
+  // The file's content as read, re-serialized, for the skip-unchanged compare after the scan.
+  const priorCacheText = (cache !== null && typeof cache === 'object') ? JSON.stringify(cache, null, 2) : null;
   if (cache === null || !('agents' in cache)) cache = { lastScanTs: 0, agents: [] };
   if (isNil(cache.agents)) cache.agents = [];
   runIdx = Number(runIdx) || 0;
@@ -751,10 +788,16 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
         }
         if (!e.label) e.label = agentLabelFromFileHead(fp) || agentIdFromPath(fp);
       }
+      const priorScanTs = cache.lastScanTs;
       cache.lastScanTs = nEpoch;
       cache.run = runIdx;
       cache.agents = Object.values(byPath);
-      try { atomicWriteFile(cachePath, JSON.stringify(cache, null, 2)); } catch {}
+      // Skip-unchanged, ignoring lastScanTs (it moves on every scan): an idle session's cache keeps
+      // its bytes, so its folder sees no write. The stored lastScanTs then stays old and the next
+      // render scans again — stat-only, through the mtime+size idle skip above.
+      const unchanged = priorCacheText !== null
+        && JSON.stringify({ ...cache, lastScanTs: priorScanTs }, null, 2) === priorCacheText;
+      if (!unchanged) { try { atomicWriteFile(cachePath, JSON.stringify(cache, null, 2)); } catch {} }
     } catch {}
   }
   // This run's agents only: a prior run's agents are not in total_cost_usd, so they leave the
@@ -854,6 +897,20 @@ const cwd = (d?.workspace?.current_dir) ? d.workspace.current_dir : d?.cwd;
 if (!isNil(costUsd)) costTotalPart = ColorCost(costUsd, '$' + fmtN(costUsd, 2));
 let rollup = null;
 if (sessionId && tpath && !isNil(costUsd)) rollup = UpdateSessionRollups(sessionId, tpath, costUsd, cwd, d?.model?.display_name ?? '', sessionName);
+
+// Open dialogues this session takes part in (open-dialogues.mjs). The rollup lists the dialogues the
+// session has joined; whether each is still open comes ONLY from the local state file the background
+// probe writes. This render never opens, stats or reads a dialogue file: they often sit on network
+// shares, and a share that stops answering must never slow a render. A session with no dialogue
+// reads nothing and creates nothing here.
+const DLG_LIMITS = resolveLimits();
+const dlgList = (rollup && Array.isArray(rollup.dialogues)) ? rollup.dialogues : [];
+const dlgStatsDir = join(claudeStateDir(cwd), 'statusline-stats');
+const dlgStatePath = sessionId ? join(dlgStatsDir, sessionId + '.dialogues.json') : null;
+const dlgStatus = (dlgList.length > 0 && dlgStatePath)
+  ? dialogueStatus(dlgList, readJson(dlgStatePath), NOW, DLG_LIMITS.intervalSec) : null;
+const openDialogues = (dlgStatus && dlgStatus.open >= 1)
+  ? { open: dlgStatus.open, unreadable: dlgStatus.unreadable, missing: dlgStatus.missing } : null;
 
 let sessionCost = costUsd;
 let agentAgg = null;
@@ -1219,10 +1276,10 @@ const fiveHourAbsent = quotaFromLeg && (d?.rate_limits?.five_hour === undefined 
 // when QuotaCells returned one AND the payload carried a `resets_at` — so a payload with no reading
 // yields {} and the writer leaves the file exactly as it found it.
 //
-// THESE DO NOT GO IN THE SIDECAR. They were carried there for one render of this sprint's first
-// pass, and the reason they are not any more is that `statusline-last.json` is a SINGLE SLOT every
-// session in the home overwrites: the tray read whichever session rendered last, not whichever
-// reading was freshest. The quota file is merged instead (see quota-file.mjs), and it is the only
+// THESE DO NOT GO IN THE SIDECAR. The sidecar is one session's snapshot, while a quota reading
+// belongs to the whole subscription: a per-session copy would leave the tray choosing between
+// sessions rather than taking the freshest reading. The quota file is merged instead (see
+// quota-file.mjs), and it is the only
 // place this reading is persisted — a second copy in a file nothing reads it from would be a key
 // with no consumer.
 const quotaWindows = (() => {
@@ -1329,36 +1386,37 @@ const apiSec = d?.cost?.total_api_duration_ms ? psRound(Number(d.cost.total_api_
 // mid-git still leaves this fresh snapshot behind. Phase 2 (after the git cluster) re-writes the
 // SAME snapshot with only gitRepo refreshed off the live git read — live when git resolves a
 // repo, the last-known value when it doesn't (the identity never decays on a git failure).
-// Both phases go through the same atomic writer.
+// Both phases go through the same atomic writer and the same skip test.
 //
-// WITH CC_QUOTA_PROBE SET THE HOME-LEVEL WRITE IS SKIPPED, AND THIS IS NOW COMPATIBILITY CODE. It
-// was written for the quota probe's earlier mechanism, which launched a bare `claude` with that
-// variable set purely to make a status line render and write the quota file. That session had no
-// transcript and no work in it, so the home-level snapshot — read by /handover-check's subagent,
-// render-legspark.mjs, render-spikes.mjs and home/handover-facts.mjs, all through
-// home/sidecar-path.mjs — would have spent the interval to the next live render describing a
-// near-empty session. The guard sits in the WRITER, not in each of those five readers.
+// ONE FILE PER SESSION: <state dir>/statusline-stats/<sessionId>.sidecar.json, beside the rollup
+// (<state dir> = <cwd>/.claude, or the config home when the payload has no cwd). No session_id → no
+// snapshot. Readers find it through home/sidecar-path.mjs (resolveSidecarPath), keyed by the
+// CLAUDE_CODE_SESSION_ID Claude Code sets in its tool processes. Nothing is written at the config
+// home's root or at <cwd>/.claude/ itself any more: Claude Code watches both folders one level deep,
+// and every write there woke every session watching them (each of N sessions waking all N).
 //
-// THE PROBE NO LONGER RENDERS ANYTHING (home/quota-probe.mjs reads the rate-limit headers of its own
-// API request and has no session), so nothing on a machine carrying this build sets the variable.
-// The guard is kept anyway, deliberately, because a machine that has not installed this build yet is
-// still launching those sessions against the same config homes. It is removed once both machines
-// report the new build — with the tray's `quota-probe` cwd exclusion and the session-start hook's
-// silent return, which exist for the same lagging machine.
-//
-// THE PROJECT-LOCAL WRITE IS DELIBERATELY KEPT: the condition is "the variable is set AND the
-// project-local write happened", so no render can end up leaving no snapshot at all.
+// SKIP UNCHANGED. A write happens only when (a) the file is missing or unparseable, (b) the snapshot
+// differs on a key other than the four that move with the clock alone (SIDECAR_CLOCK_KEYS), or (c)
+// the file's renderedAt is SIDECAR_HEARTBEAT_SEC old or more, not a number, or in the future. An idle
+// session therefore writes one heartbeat per 120 s, so its snapshot is at most 130 s old (120 s plus
+// one refresh) — under the readers' 180 s STALE threshold. Phase 2 writes only when gitRepo changed.
+const SIDECAR_HEARTBEAT_SEC = 120;
+const SIDECAR_CLOCK_KEYS = new Set(['renderedAt', 'aliveSec', 'activityPct', 'coldCoolRemainSec']);
+const sidecarPath = sessionId ? join(claudeStateDir(cwd), 'statusline-stats', sessionId + '.sidecar.json') : null;
+function sidecarNeedsWrite(snap, prev) {
+  if (!prev || typeof prev !== 'object' || Array.isArray(prev)) return true;
+  const at = prev.renderedAt;
+  if (typeof at !== 'number' || !Number.isFinite(at) || at > NOW || NOW - at >= SIDECAR_HEARTBEAT_SEC) return true;
+  const nonClock = (o) => JSON.stringify(Object.entries(o).filter(([k]) => !SIDECAR_CLOCK_KEYS.has(k)));
+  return nonClock(snap) !== nonClock(prev);
+}
 let sidecarSnapshot = null;
-function writeSidecar(json) {
-  let wroteProject = false;
-  if (cwd) {
-    const projDir = join(cwd, '.claude');
-    if (!existsSync(projDir)) mkdirSync(projDir, { recursive: true });
-    atomicWriteFile(join(projDir, 'statusline-last.json'), json);
-    wroteProject = true;
-  }
-  if (wroteProject && process.env.CC_QUOTA_PROBE === '1') return;
-  atomicWriteFile(join(ConfigHome, 'statusline-last.json'), json);
+function writeSidecar(snap) {
+  if (!sidecarPath) return;
+  if (!sidecarNeedsWrite(snap, readJson(sidecarPath))) return;
+  const dir = dirname(sidecarPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  atomicWriteFile(sidecarPath, JSON.stringify(snap));
 }
 try {
   const absState = isNil(ctxUsed) ? null
@@ -1377,8 +1435,8 @@ try {
       else coldState = 'cold';
     } else coldState = 'idle-cold';
   }
-  const sidecarPath = cwd ? join(cwd, '.claude', 'statusline-last.json') : join(ConfigHome, 'statusline-last.json');
-  const prevSnap = readJson(sidecarPath);
+  // gitRepo carry-forward: the session's own snapshot (null without a session_id).
+  const prevSnap = sidecarPath ? readJson(sidecarPath) : null;
   const prevGitRepo = (prevSnap && !isNil(prevSnap.gitRepo)) ? prevSnap.gitRepo : null;
   const snapshot = {
     schema: 6,
@@ -1415,6 +1473,10 @@ try {
     ...(legPricingSuspect ? { legPricingSuspect: true } : {}),
     // Present ONLY when fast mode is on: every $ in this sidecar excludes the fast premium.
     ...(fastMode ? { fastMode: true } : {}),
+    // Present ONLY when the session takes part in at least one open dialogue: `open` is the chip's
+    // total (unreadable and missing included), the other two are its parts. Additive + conditional,
+    // so no schema bump (the fastMode precedent).
+    ...(openDialogues ? { openDialogues } : {}),
     // Present ONLY when the payload carries a session_name: the snapshot owner's name, persisted at
     // write time so the fact sheet's FOREIGN guard can name that side in words.
     ...(sessionName ? { sessionName } : {}),
@@ -1444,7 +1506,7 @@ try {
     gitRepo: prevGitRepo,
   };
   sidecarSnapshot = snapshot;
-  writeSidecar(JSON.stringify(snapshot));
+  writeSidecar(snapshot);
 } catch {}
 
 // === The quota file (phase 1 too, and independent of the sidecar) ==========
@@ -1456,7 +1518,11 @@ try {
 // Read back directly after the write, so this render's own observation (and any drop it caused) is
 // already in what names an absent window. ReadQuotaFile never throws; a missing or foreign file is
 // null and every absent window then reads `n/a`.
-WriteQuotaFile(ConfigHome, quotaWindows, { fiveHourAbsent });
+//
+// `clockStamp`: a render with no banked leg stamped its reading with the render clock, which is no
+// observation, so its reading never wins a tie (quota-file.mjs, MergeQuotaWindow rule 4). An idle
+// no-turn session's renders are then total ties and the file's bytes do not move.
+WriteQuotaFile(ConfigHome, quotaWindows, { fiveHourAbsent, clockStamp: !quotaFromLeg });
 const quotaFile = ReadQuotaFile(ConfigHome);
 const q5Absence = q5 ? null : QuotaAbsence('fiveHour', q7 !== null, quotaFile, NOW);
 const q7Absence = q7 ? null : QuotaAbsence('sevenDay', q5 !== null, quotaFile, NOW);
@@ -1510,7 +1576,7 @@ if (cwd) {
 try {
   if (sidecarSnapshot) {
     sidecarSnapshot.gitRepo = repo ?? sidecarSnapshot.gitRepo;
-    writeSidecar(JSON.stringify(sidecarSnapshot));
+    writeSidecar(sidecarSnapshot);
   }
 } catch {}
 
@@ -1526,12 +1592,26 @@ try {
 const costValue = [costTotalPart, costLastPart, costNextPart, costMedPart, costColdPart]
   .filter(Boolean).join('  ');
 
-// The flags cluster, in the frozen order: the two mode chips, the style chip, then the five
+// The flags cluster, in the frozen order: the dialogue badge, the two mode chips, the style chip, then the five
 // conditional caveats ordered by how much each changes the way a number must be read. Every chip
 // keeps its text verbatim — this row is allowed to run long, so width is never a reason to
 // abbreviate a caveat into ambiguity. Each mode chip fires on ONE state only — fast mode is named
 // when it is on, thinking when it is off — so the reassuring half of either pair never renders.
 const flagChips = [];
+// Order 0: the open dialogues, the one chip on this row that asks for an action (a dialogue this
+// session takes part in is orphaned when the session ends). The only FILLED badge on the status line
+// besides the trend strip's tints: bold white (231) on plum (96), one pad space inside the fill on
+// each side. Both are fixed 256-colour indexes, which themes do not remap, so it reads the same on a
+// dark and a light theme; plum appears nowhere else, so the fill means "dialogue". The unreadable /
+// missing parts follow outside the badge, in chrome.
+if (openDialogues) {
+  const n = openDialogues.open;
+  const badge = `${ESC}[1;38;5;231;48;5;96m ${n} ${n === 1 ? 'dialogue' : 'dialogues'} open ${ESC}[0m`;
+  const parts = [];
+  if (openDialogues.unreadable > 0) parts.push(`${openDialogues.unreadable} unreadable`);
+  if (openDialogues.missing > 0) parts.push(`${openDialogues.missing} missing`);
+  flagChips.push(badge + (parts.length ? ' ' + DarkGray('(' + parts.join(', ') + ')') : ''));
+}
 if (fastMode) flagChips.push(DarkGray('fast ') + Magenta('on'));
 if (thinking === false) flagChips.push(DarkGray('think ') + BrightCyan('off'));
 // The style name is the chip's VALUE and carries the colour, exactly as `fast on` and `think off`
@@ -1601,3 +1681,85 @@ for (let i = 0; i < bigLegCells.length; i += 2) {
 }
 
 process.stdout.write(rows.filter(Boolean).join('\n'));
+
+// === The dialogue probe start (after the render is written) ================
+// A probe is due when a dialogue that is not closed has no state entry or one older than the probe
+// interval. At most one probe per session runs at a time, through the guard file
+// `<sessionId>.dialogue-probe.json`:
+//  - only the render whose EXCLUSIVE CREATE of the guard succeeds spawns the probe, then rewrites the
+//    guard with the child's pid; a spawn that fails deletes the guard at once;
+//  - the probe never deletes the guard. A render whose create fails reads it: LIVE (start nothing)
+//    when its pid is alive and younger than the pid-reuse window, or when its pid is still null and
+//    younger than one probe interval (the claiming render has not written it yet); STALE otherwise —
+//    that render deletes it and tries the exclusive create once more.
+// So a probe that outlives its own deadline (a process blocked in a network open) still holds the
+// guard until the operating system lets it go, or until the pid-reuse window passes.
+// CLAUDE_SL_DIALOGUE_PROBE=off: never start one. An absolute path to an existing .mjs: spawn that
+// script (a test stub) with the same two arguments instead.
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; }
+}
+function claimDialogueGuard(guardPath, limits) {
+  const create = () => {
+    try {
+      const fd = openSync(guardPath, 'wx');
+      try { writeSync(fd, JSON.stringify({ pid: null, startedAt: NOW })); } finally { closeSync(fd); }
+      return true;
+    } catch { return false; }
+  };
+  if (create()) return true;
+  if (!existsSync(guardPath)) return false;
+  let g = readJson(guardPath);
+  // Unparseable: the claiming render is between its create and its write — read it as a null pid
+  // stamped at the file's mtime.
+  if (!g || typeof g !== 'object') {
+    let mt = NOW;
+    try { mt = Math.floor(statSync(guardPath).mtimeMs / 1000); } catch {}
+    g = { pid: null, startedAt: mt };
+  }
+  const age = NOW - Number(g.startedAt);
+  const ageKnown = Number.isFinite(age);
+  const pid = Number.isInteger(g.pid) && g.pid > 0 ? g.pid : null;
+  const live = pid !== null
+    ? (ageKnown && age <= limits.reuseSec && pidAlive(pid))
+    : (g.pid === null && ageKnown && age <= limits.intervalSec);
+  if (live) return false;
+  try { unlinkSync(guardPath); } catch {}
+  return create();
+}
+// The probe's libuv pool gets one thread per dialogue plus headroom (poolSizeFor, open-dialogues.mjs).
+// A file open blocked on a share that does not answer holds its pool thread until the share gives
+// up; with the default pool of four, four hanging shares would leave a local dialogue's read queued
+// behind them until the deadline, misreported as unreadable. The size is read once when the pool
+// first starts, which in an ES module is already during module loading, so it is set at spawn.
+function startDialogueProbe(statsPath, statePath, guardPath, limits, nDialogues) {
+  if (!claimDialogueGuard(guardPath, limits)) return;
+  const stub = process.env.CLAUDE_SL_DIALOGUE_PROBE;
+  const useStub = !!stub && isAbsolute(stub) && /\.mjs$/i.test(stub) && existsSync(stub);
+  const args = useStub ? [stub, statsPath, statePath]
+    : [join(dirname(fileURLToPath(import.meta.url)), 'open-dialogues.mjs'), '--probe', statsPath, statePath];
+  // `detached: true` is load-bearing on Windows (build check B0, 2026-11-05): libuv puts every
+  // non-detached child in a kill-on-close job object, so a plain child dies the moment this render
+  // exits, before it writes anything. A detached node.exe needs no console, so it runs to the end.
+  // `stdio: 'ignore'` keeps the host's pipe out of the child: the host's wait for this render's
+  // stdout to close never waits on the probe.
+  const pool = poolSizeFor(nDialogues);
+  let child = null;
+  try {
+    child = spawn(process.execPath, args, {
+      detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, UV_THREADPOOL_SIZE: String(pool) },
+    });
+    child.on('error', () => {});
+  } catch { child = null; }
+  if (!child || !child.pid) { try { unlinkSync(guardPath); } catch {} return; }
+  child.unref();
+  const body = JSON.stringify({ pid: child.pid, startedAt: NOW });
+  try { atomicWriteFile(guardPath, body); } catch { try { writeFileSync(guardPath, body, 'utf8'); } catch {} }
+}
+if (dlgStatus && dlgStatus.due && sessionId && process.env.CLAUDE_SL_DIALOGUE_PROBE !== 'off') {
+  try {
+    startDialogueProbe(join(dlgStatsDir, sessionId + '.json'), dlgStatePath,
+      join(dlgStatsDir, sessionId + '.dialogue-probe.json'), DLG_LIMITS, dlgList.length);
+  } catch {}
+}

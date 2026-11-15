@@ -160,7 +160,16 @@ export function ReadQuotaFile(configHome) {
 // both stamps exactly `resetsAt`, so the tie is TOTAL, stored wins, and the bytes do not move. No
 // number of re-renders can freshen the date on a dead window.
 //
-// RULE 4 READS A STAMP; IT DOES NOT WRITE ONE. This function still takes two parameters and no clock.
+// A RENDER-CLOCK STAMP IS NO OBSERVATION, SO IT NEVER WINS RULE 4. A status-line render with no banked
+// leg stamps its reading with the render clock: its `rate_limits` came from an API call at an unknown
+// earlier moment, and the clock says only when the reading was RE-SHOWN. Winning a tie on that stamp
+// would date an unconfirmed reading `as of 0m` — the echo this rule already refuses for sessions with
+// a leg — and would rewrite the file on every idle render. The caller says so with
+// `{ clockStamp: true }`: the incoming reading then wins only on rules 1–3, and an equal-percentage
+// tie keeps STORED, by reference, so the unchanged write below is skipped. The quota probe passes
+// nothing: its own HTTP request is an observation.
+//
+// RULE 4 READS A STAMP; IT DOES NOT WRITE ONE. This function takes no clock.
 //
 // WHY RULE 3 CLAMPS THE STAMP, AND WHY THAT IS NOT A FABRICATION. A session's stamp is its own last
 // banked API call, which can predate a reading another session already delivered — so a higher
@@ -179,7 +188,7 @@ export function ReadQuotaFile(configHome) {
 // The stored object is returned BY REFERENCE when it wins — same object, same bytes, same
 // `reportedAt`. Every branch except the rule-3 clamp returns one of its arguments, and nothing in
 // this function writes a field of either.
-export function MergeQuotaWindow(stored, incoming) {
+export function MergeQuotaWindow(stored, incoming, { clockStamp = false } = {}) {
   if (!stored || typeof stored !== 'object') return incoming;
   const sr = numOrNull(stored.resetsAt);
   if (sr === null) return incoming;
@@ -196,14 +205,16 @@ export function MergeQuotaWindow(stored, incoming) {
     if (iu < su) return stored;
     return (sp !== null && ip !== null && ip < sp) ? { ...incoming, reportedAt: sp } : incoming;
   }
+  if (clockStamp) return stored;
   if (sp === null) return incoming;
   if (ip === null) return stored;
   return ip > sp ? incoming : stored;
 }
 
 // ---------------------------------------------------------------------------
-// WriteQuotaFile(configHome, windows, { fiveHourAbsent }) — read, merge each window key
-// independently, drop an ended 5-hour window when this write is evidence, write.
+// WriteQuotaFile(configHome, windows, { fiveHourAbsent, clockStamp }) — read, merge each window key
+// independently, drop an ended 5-hour window when this write is evidence, write. `clockStamp` is
+// forwarded to every window's merge (see MergeQuotaWindow: a render-clock stamp never wins rule 4).
 //
 // A window the payload did not carry is LEFT IN THE FILE UNTOUCHED: a session whose payload holds
 // only `five_hour` must never wipe a good `sevenDay`. A render carrying no usable window writes
@@ -233,9 +244,11 @@ export function MergeQuotaWindow(stored, incoming) {
 // defeating the cache the poll thread depends on. The test is a BYTE COMPARISON against the text
 // just read — normative because it needs no field list to stay in sync with the schema.
 //
-// WHICH RENDERS IT SKIPS. Merge rule 4 advances `reportedAt` on a tie, but the stamp is now the
-// OBSERVATION moment, so only a render carrying a NEW observation can advance it: an idle session's
+// WHICH RENDERS IT SKIPS. Merge rule 4 advances `reportedAt` on a tie, but only for a stamp that is
+// an OBSERVATION moment, so only a render carrying a NEW observation can advance it: an idle session's
 // re-render produces the stamp it produced last time, the merge is a total tie, and no bytes move.
+// A session with no banked leg stamps the render clock, which is no observation: it passes
+// `clockStamp: true`, its tie keeps the stored reading, and no bytes move either.
 // A home whose window has reset writes nothing either (the clamp makes every one of those renders a
 // total tie), and a home nobody is rendering in writes nothing because it does not render. What is
 // left is one write per genuine new reading, and each of those costs the tray's TWO-SECOND POLL
@@ -256,7 +269,7 @@ export function MergeQuotaWindow(stored, incoming) {
 // decided nothing — no usable window, or the catch — returns `{}`.
 //
 // Never throws: a failure loses one render's update and nothing else.
-export function WriteQuotaFile(configHome, windows, { fiveHourAbsent = false } = {}) {
+export function WriteQuotaFile(configHome, windows, { fiveHourAbsent = false, clockStamp = false } = {}) {
   try {
     const incoming = windows && typeof windows === 'object' ? windows : {};
     if (!WINDOW_KEYS.some((k) => incoming[k])) return {};
@@ -271,7 +284,7 @@ export function WriteQuotaFile(configHome, windows, { fiveHourAbsent = false } =
     for (const k of WINDOW_KEYS) {
       const stored = (cur[k] && typeof cur[k] === 'object') ? cur[k] : null;
       if (incoming[k]) {
-        out[k] = MergeQuotaWindow(stored, incoming[k]);
+        out[k] = MergeQuotaWindow(stored, incoming[k], { clockStamp });
         // `written` vs `kept` is the MERGE's own answer, read off object identity: MergeQuotaWindow
         // returns the stored object BY REFERENCE when it wins, so `out[k] === stored` is the whole
         // test and it needs no second parse. `kept` means this window's submitted reading did not

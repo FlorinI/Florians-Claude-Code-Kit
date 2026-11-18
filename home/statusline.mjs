@@ -27,7 +27,7 @@ import { detectDialoguesInLine, detectDialoguesInText, dialogueStatus, resolveLi
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.19.0';
+export const SL_VERSION = '6.1.20.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the quota file; the rollup caches and the snapshot when
@@ -316,6 +316,30 @@ function gridRow(lLabel, lValue, rLabel, rValue) {
   return guardLead(right ? left + DarkGray('│ ') + right : left + DarkGray('│'));
 }
 
+// The totalCostUSD of the transcript's LAST `cost-state` record carrying a numeric total, or null.
+// Searched backward from the end of the bytes in hand. Only a line whose TOP-LEVEL type is
+// `cost-state` counts: a message that quotes one carries it JSON-escaped inside a string, which the
+// raw pre-test cannot match and the parse would reject anyway.
+function lastCostStateTotal(buf) {
+  let pos = buf.length;
+  while (pos > 0) {
+    const hit = buf.lastIndexOf('cost-state', pos - 1);
+    if (hit < 0) return null;
+    const start = buf.lastIndexOf(0x0a, hit) + 1;
+    let end = buf.indexOf(0x0a, hit); if (end < 0) end = buf.length;
+    const line = buf.subarray(start, end).toString('utf8').trim();
+    if (/"type"\s*:\s*"cost-state"/.test(line)) {
+      try {
+        const p = JSON.parse(line);
+        const t = p?.totalCostUSD;
+        if (p?.type === 'cost-state' && typeof t === 'number' && Number.isFinite(t)) return t;
+      } catch {}
+    }
+    pos = start;
+  }
+  return null;
+}
+
 // === Per-session cumulative-token rollups (incremental transcript scan) =====
 function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel, sessionName) {
   if (!sessionId || !tpath || !existsSync(tpath)) return null;
@@ -338,7 +362,7 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     perLegUnits: [], perLegOwnUnits: [], perLegModels: [], lastLegTs: null, lastWarm: 0,
     nColdLegs: 0, coldWastedUnits: 0, lastColdLegIdx: 0, lastColdWastedUnits: 0, coldLegs: [],
     lastLegTtlSec: 0, recentWriteTtls: [], recentLegs: [], seenMsgIds: [], mainModel: '',
-    runIdx: 0, runStartLeg: 0, dialogues: [],
+    runIdx: 0, runStartLeg: 0, runStartCost: 0, dialogues: [],
   });
   // The stats file is written as a PROJECTION of the declared shape, never as "the object we read
   // plus whatever it already had": UpdateSessionRollups mutates what it reads and writes it back, so
@@ -409,6 +433,10 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   if (!('mainModel' in r)) r.mainModel = '';
   if (!('runIdx' in r)) r.runIdx = 0;
   if (!('runStartLeg' in r)) r.runStartLeg = 0;
+  // Additive, NEVER required: the current run's starting amount (see the resume detection below).
+  // A file without it (written before this build, or by a lagging home's projection) reads as 0,
+  // which prices the run from the whole payload — the previous build's figure, and no reset.
+  if (!(typeof r.runStartCost === 'number' && Number.isFinite(r.runStartCost) && r.runStartCost >= 0)) r.runStartCost = 0;
   // Additive, NEVER required: the dialogues this session has joined (open-dialogues.mjs — one entry
   // per dialogue file: { file, label, shell, command }). A stats file without the key was written
   // before this build (or by a lagging one): its offset already sits past every watch armed so far,
@@ -419,14 +447,21 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
   const skipLastLegCost = needsReset;
   const nLegsBefore = Number(r.nLegs);
 
-  // Resume detection — BEFORE the scan (it needs nLegs as of the previous run). total_cost_usd is
-  // per-run (CC resets it on resume/clear) while the rollup spans every run of the transcript, so a
-  // cost that fell below the last seen one marks a new run: the pricing window (base = this run's
-  // cost / this run's units) starts at the current leg count; earlier legs stay listed and are
-  // priced at this run's rate (sidecar runStartLeg says so).
+  // Resume detection — BEFORE the scan (it needs nLegs as of the previous run). On a resume, CC
+  // restores total_cost_usd from the transcript's last `cost-state` record (a record CC writes when a
+  // run ends; not every run writes one), and starts at $0 only when there is none. So the payload
+  // can restart at $0 or at an older total than the last one seen, while the rollup spans every run
+  // of the transcript. A cost that fell below the last seen one marks a new run: the pricing window
+  // starts at the current leg count, and the run's starting amount (runStartCost) is the total CC
+  // restored — read from the transcript once, on this render, below. Base = (cost − runStartCost) /
+  // this run's units; earlier legs stay listed and are priced at this run's rate (sidecar
+  // runStartLeg says so).
+  let resumeDetected = false;
   if (hadPrior && !needsReset && Number(currentCost) < Number(r.lastSeenCost) - 1e-9) {
+    resumeDetected = true;
     r.runIdx = Number(r.runIdx) + 1;
     r.runStartLeg = Number(r.nLegs);
+    r.runStartCost = 0;
     r.lastSeenCost = 0;
     r.lastLegCost = null;
   }
@@ -436,10 +471,20 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
       let fileBuf = readFileSync(tpath);
       if (TRANSCRIPT_MAXBYTES != null && fileBuf.length > TRANSCRIPT_MAXBYTES) fileBuf = fileBuf.subarray(0, TRANSCRIPT_MAXBYTES);
       const totalLen = fileBuf.length;
+      // The run's starting amount, read on the detection render only: the current run has written
+      // no `cost-state` record yet, so the last one in the file is the one CC restored from. Used
+      // only when it is at most this render's cost (else 0: a run never starts below $0). `last` is
+      // then measured from it, so a leg that lands in this same render shows its own cost.
+      if (resumeDetected) {
+        const restored = lastCostStateTotal(fileBuf);
+        r.runStartCost = (restored != null && restored > 0 && restored <= Number(currentCost) + 1e-9) ? restored : 0;
+        r.lastSeenCost = r.runStartCost;
+      }
       if (Number(r.lastByteOffset) > totalLen) {
         r.lastByteOffset = 0; r.nLegs = 0; r.sumUnits = 0; r.sumOutputTokens = 0;
         r.lastInputBilled = 0; r.lastOutputTokens = 0; r.perLegUnits = []; r.perLegOwnUnits = [];
-        r.perLegModels = []; r.runStartLeg = 0;
+        r.perLegModels = []; r.runStartLeg = 0; r.runStartCost = 0;
+        if (resumeDetected) r.lastSeenCost = 0;
         // The cold counters and clock reset with the arrays — the rescan below re-derives all of
         // them; leaving them standing would double-count every cold leg the rescan re-walks.
         r.nColdLegs = 0; r.coldWastedUnits = 0; r.lastColdWastedUnits = 0; r.lastColdLegIdx = 0;
@@ -676,7 +721,8 @@ function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replac
 // (Model → price lives in leg-driver.mjs's MODEL_PRICES — shared with handover-facts.)
 // `runIdx` = the main rollup's current run (see UpdateSessionRollups' resume detection). Every
 // entry is stamped with the run it was FIRST seen in; only this run's agents count toward the
-// aggregate, matching total_cost_usd's "this run" scope.
+// aggregate, matching the run's spend (total_cost_usd minus the amount CC restored at the resume),
+// which is this run's scope.
 function UpdateAgentRollups(sessionId, tpath, projRoot, mainModelKey, runIdx) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
@@ -920,7 +966,11 @@ const dlgStatus = (dlgList.length > 0 && dlgStatePath)
 const openDialogues = (dlgStatus && dlgStatus.open >= 1)
   ? { open: dlgStatus.open, unreadable: dlgStatus.unreadable, missing: dlgStatus.missing } : null;
 
-let sessionCost = costUsd;
+// The run's spend: CC's total minus the run's starting amount (the total CC restored on resume; 0
+// for a run that started at $0), floored at 0. Every derived dollar below is priced from it; the
+// `$` total stays costUsd, CC's own figure.
+const runStartCost = rollup ? Number(rollup.runStartCost) || 0 : 0;
+const runSpend = (runStartCost > 0 && !isNil(costUsd)) ? Math.max(0, Number(costUsd) - runStartCost) : costUsd;
 let agentAgg = null;
 const runIdx = rollup ? Number(rollup.runIdx) || 0 : 0;
 const runStartLeg = rollup ? Number(rollup.runStartLeg) || 0 : 0;
@@ -938,11 +988,12 @@ const modelSwitch = rollup ? modelSwitchReport(rollup.perLegModels) : null;
 // Per-leg EFFECTIVE units = the banked units converted to the leg's own model's read rate
 // (pricedUnits — the stats file stays on the 0.10 storage basis), × the leg's price weight relative
 // to the main model (a Sonnet 5.5 opening leg on a Fable 5.2 session weighs 2/8). `base` = this
-// run's total_cost_usd over this run's effective units (main legs from runStartLeg on + this run's
+// run's spend (runSpend: total_cost_usd minus the amount CC restored at the resume, see the resume
+// detection) over this run's effective units (main legs from runStartLeg on + this run's
 // price-weighted agents), so every $ derived from units below is model-true and run-anchored, and
-// mainSessionUsd + agentsUsd ≡ total_cost_usd by construction (both are shares of the same
-// divisor). Legs before runStartLeg (a resumed session's earlier runs) are still priced — at this
-// run's rate.
+// mainSessionUsd + agentsUsd ≡ runSpend by construction (both are shares of the same divisor;
+// with no carried amount that is total_cost_usd). Legs before runStartLeg (a resumed session's
+// earlier runs) are still priced — at this run's rate.
 const perLegEff = rollup ? rollup.perLegUnits.map((u, i) => {
   const m = rollup.perLegModels?.[i];
   return pricedUnits(u, rollup.perLegOwnUnits?.[i], m) * priceWeight(m, mainModelKey);
@@ -951,8 +1002,8 @@ let runMainEff = 0; for (let i = runStartLeg; i < perLegEff.length; i++) runMain
 const agentUnits = agentAgg ? Number(agentAgg.sumEffUnits) : 0;
 const totalUnits = runMainEff + agentUnits;
 let agentsUsd = null, mainSessionUsd = null, baseTrue = null;
-if (totalUnits > 0 && sessionCost > 0) {
-  baseTrue = Number(sessionCost) / totalUnits;
+if (totalUnits > 0 && runSpend > 0) {
+  baseTrue = Number(runSpend) / totalUnits;
   mainSessionUsd = baseTrue * runMainEff;
   agentsUsd = baseTrue * agentUnits;
 }
@@ -963,11 +1014,11 @@ const mainInputPrice = inputPrice(mainModelKey);
 const listUnitUsd = mainInputPrice != null ? mainInputPrice / 1e6 : null; // list $/unit at the main model
 const legPricingSuspect = (listUnitUsd != null && baseTrue != null && baseTrue < 0.5 * listUnitUsd);
 let perLegCostArr = [];
-if (rollup && totalUnits > 0 && sessionCost > 0) {
+if (rollup && totalUnits > 0 && runSpend > 0) {
   perLegCostArr = perLegEff.map((u) => baseTrue * u);
 }
 let forecast = null;
-if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
+if (rollup && runSpend > 0 && Number(rollup.nLegs) > 0
   && totalUnits > 0 && !isNil(ctxTok) && ctxTok > 0) {
   const base = baseTrue;
   // The next leg re-reads the whole context at the MAIN model's read rate.
@@ -1039,7 +1090,7 @@ if (rollup && Array.isArray(rollup.coldLegs) && rollup.coldLegs.length > 0
   lastColdUnitsEff = counted.length > 0 ? counted[counted.length - 1] : 0;
   nColdCounted = counted.length;
 }
-if (rollup && nColdCounted >= 1 && totalUnits > 0 && sessionCost > 0) {
+if (rollup && nColdCounted >= 1 && totalUnits > 0 && runSpend > 0) {
   const coldTax = baseTrue * coldUnitsEff;
   costColdPart = DarkGray('cold ') + ColorCost(coldTax, '$' + fmtN(coldTax, 2));
 }
@@ -1048,7 +1099,7 @@ if (rollup && nColdCounted >= 1 && totalUnits > 0 && sessionCost > 0) {
 // row EMPTY through the runway where every leg resets the clock and there is nothing to act on. The
 // snowflake marker is gone from the fixed rows — the label names the cluster and the countdown
 // carries the calm-to-cooling ramp — and survives as the spotlight cold-leg glyph.
-if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0) {
+if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && runSpend > 0) {
   const coldBase = baseTrue;
   const ttlSec = ('lastLegTtlSec' in rollup && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : 300;
   // Rebuild premium over a warm re-read, both at the MAIN model's rates.
@@ -1216,7 +1267,7 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   aParts.push(DarkGray('Σ ') + FmtNum(Number(agentAgg.sumMaxCtx)));
   if (!isNil(agentsUsd)) {
     let costChip = ColorCost(agentsUsd, '$' + fmtN(agentsUsd, 2));
-    if (sessionCost > 0) costChip += ' ' + DarkGray(psRound(100.0 * Number(agentsUsd) / Number(sessionCost)).toString() + '%');
+    if (runSpend > 0) costChip += ' ' + DarkGray(psRound(100.0 * Number(agentsUsd) / Number(runSpend)).toString() + '%');
     aParts.push(costChip);
   }
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
@@ -1492,6 +1543,11 @@ try {
     // First leg of the CURRENT run (0 = the session's first run); legs before it predate this
     // run and are priced at this run's rate. Present whenever a rollup exists.
     runStartLeg: rollup ? Number(rollup.runStartLeg) : null,
+    // Present ONLY when the current run started above $0 (a resume that restored an earlier total):
+    // the amount of costUsd carried from earlier runs. Every derived $ here is priced from
+    // costUsd − runStartCostUsd, the run's spend. Additive + conditional, so no schema bump (the
+    // fastMode / legPricingSuspect precedent).
+    ...(runStartCost > 0 ? { runStartCostUsd: runStartCost } : {}),
     // Present ONLY when the base sits far below the main model's list price (a resume the
     // detection could not see — no local history); the $ are flagged, never recomputed.
     ...(legPricingSuspect ? { legPricingSuspect: true } : {}),
@@ -1505,8 +1561,8 @@ try {
     // write time so the fact sheet's FOREIGN guard can name that side in words.
     ...(sessionName ? { sessionName } : {}),
     nColdLegs: rollup ? nColdCounted : null,
-    coldWastedUsd: (rollup && totalUnits > 0 && sessionCost > 0) ? mathRoundD(baseTrue * coldUnitsEff, 2) : null,
-    lastColdTaxUsd: (rollup && totalUnits > 0 && sessionCost > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * lastColdUnitsEff, 2) : null,
+    coldWastedUsd: (rollup && totalUnits > 0 && runSpend > 0) ? mathRoundD(baseTrue * coldUnitsEff, 2) : null,
+    lastColdTaxUsd: (rollup && totalUnits > 0 && runSpend > 0 && ('lastColdWastedUnits' in rollup)) ? mathRoundD(baseTrue * lastColdUnitsEff, 2) : null,
     lastColdLegsAgo: (rollup && ('lastColdLegIdx' in rollup) && Number(rollup.lastColdLegIdx) > 0) ? Number(rollup.nLegs) - Number(rollup.lastColdLegIdx) : null,
     coldStakeUsd,
     coldState,

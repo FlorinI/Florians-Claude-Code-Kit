@@ -627,13 +627,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.19 (PATCH: per-model prices)', () => {
+test('D4-5 — SL_VERSION is 6.1.20 (PATCH: resumed-run cost baseline)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.19',
-    'X.Y.Z is 6.1.19 (2026-11-18, sprint 261118-per-model-prices spec §5, frozen as PATCH): every dollar figure is priced at its own model\'s input price and cache-read multiplier; each figure keeps its definition and no threshold moves. Not X: no displayed number changes meaning. Not Y: no new capability or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.20',
+    'X.Y.Z is 6.1.20 (2026-11-18, sprint 261118-resume-cost-baseline spec item 7, frozen as PATCH): a resume that restores an earlier cost total prices the run\'s legs from the run\'s own spend (the total minus the amount CC restored), not from the whole total. A behavior-affecting fix; each figure keeps its definition and no threshold moves. Not X: no displayed number changes meaning. Not Y: no new capability or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would

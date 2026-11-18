@@ -76,9 +76,13 @@ const legs = getScannedLegs(tpath).map((l) => ({ ...l, eff: l.units * priceWeigh
 const sumUnits = legs.reduce((a, l) => a + l.eff, 0);
 if (legs.length === 0 || sumUnits <= 0) done('(no priced legs in the transcript yet)');
 
-// --- session cost — total_cost_usd IS session-local (CC resets it on /clear since 2.1.211) ---
-let sessionCost = Number(snap.costUsd);
-// The status line's DE-INFLATED base (this run's sessionCost / (main + sub-agent EFFECTIVE units))
+// --- the run's spend — total_cost_usd minus the amount carried from earlier runs ---
+// CC resets total_cost_usd on /clear (since 2.1.211), and on a resume restores it from the
+// transcript's last `cost-state` record, so a resumed run can start above $0. The sidecar's
+// runStartCostUsd (present only then) is that starting amount; the run's spend is the total above it.
+const runStartCost = Number(snap.runStartCostUsd) > 0 ? Number(snap.runStartCostUsd) : 0;
+const runSpend = runStartCost > 0 ? Math.max(0, Number(snap.costUsd) - runStartCost) : Number(snap.costUsd);
+// The status line's DE-INFLATED base (this run's spend / (main + sub-agent EFFECTIVE units))
 // from the sidecar, so the spike $ and the avoidable cold tax reconcile with the status line.
 // null means "this run has no cost basis yet" (the state between a detected resume and the first
 // new leg) — the panel then prints no dollars: a header note states it once, rows keep their glyph,
@@ -136,7 +140,7 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
       const medU = median(liveAg.map((a) => a.effU));
       const topAg = [...liveAg].sort((a, b) => b.effU - a.effU).slice(0, Top);
       const agUsd = liveAg.reduce((s, a) => s + a.effU, 0) * base;
-      const agPct = sessionCost > 0 ? ` (${psRound(100 * agUsd / sessionCost)}%)` : '';
+      const agPct = runSpend > 0 ? ` (${psRound(100 * agUsd / runSpend)}%)` : '';
       // Workflow siblings can share a long identical preamble even past the TASK marker; re-window
       // colliding labels to start near their mutual divergence point so each row shows what DIFFERS.
       const groups = {};

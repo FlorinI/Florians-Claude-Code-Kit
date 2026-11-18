@@ -244,10 +244,14 @@ const hPol = hLevel <= 1 ? '+' : '-';
 const hDriver = wLevel > Math.max(qLevel, cLevel) ? 'wall'
   : (cLevel > qLevel ? 'cost' : (qLevel > cLevel ? 'quality' : 'both'));
 
-// Agent-spend prominence, proportional to share of session cost (denominator matches the status line's
-// agentsUsd/sessionCost): <1/3 = minor aside only (COST_DETAIL) · 1/3–1/2 = a headline tail · ≥1/2 = leads Cost.
-const sessionCostVal = Number(s.costUsd);
-const agentShare = (Number(s.nAgents) > 0 && s.agentsUsd != null && sessionCostVal > 0) ? Number(s.agentsUsd) / sessionCostVal : null;
+// The run's spend: CC's total minus the amount carried from earlier runs (runStartCostUsd, present only
+// when a resume restored an earlier total), floored at 0 — the figure every per-leg $ is priced from.
+// COST_TOTAL stays CC's own total.
+const runStartCostVal = Number(s.runStartCostUsd) > 0 ? Number(s.runStartCostUsd) : 0;
+const runSpendVal = runStartCostVal > 0 ? Math.max(0, Number(s.costUsd) - runStartCostVal) : Number(s.costUsd);
+// Agent-spend prominence, proportional to share of the run's spend (denominator matches the status
+// line's agentsUsd/runSpend): <1/3 = minor aside only (COST_DETAIL) · 1/3–1/2 = a headline tail · ≥1/2 = leads Cost.
+const agentShare = (Number(s.nAgents) > 0 && s.agentsUsd != null && runSpendVal > 0) ? Number(s.agentsUsd) / runSpendVal : null;
 const agentPct = agentShare != null ? psRound(agentShare * 100) : null;
 const agentTier = agentShare == null ? 'none' : (agentShare >= 0.5 ? 'lead' : (agentShare >= (1 / 3) ? 'headline' : 'minor'));
 let hText = ['Plenty of room', 'Getting deeper', 'Wind down soon', 'Time to hand over'][hLevel];
@@ -297,24 +301,24 @@ if (Number(s.nAgents) > 0 && s.mainSessionUsd != null) {
 // ≥1/2 of spend is sub-agents → a lead fragment the composer OPENS the Cost section with (agents ARE the story).
 let costAgentsLead = '(none)';
 if (agentTier === 'lead') {
-  costAgentsLead = 'most of the spend is sub-agents — ' + FmtUsd(s.agentsUsd) + ' of ' + FmtUsd(sessionCostVal)
+  costAgentsLead = 'most of the spend is sub-agents — ' + FmtUsd(s.agentsUsd) + ' of ' + FmtUsd(runSpendVal)
     + ' (' + BT + agentPct + '%' + BT + ') across ' + BT + Math.trunc(Number(s.agentLegs)) + BT + ' legs from '
     + BT + Math.trunc(Number(s.nAgents)) + BT + ' agents';
 }
 // The cold tax is the story → a lead fragment built like COST_AGENTS_LEAD, which keeps precedence in
-// the compose prompt. Two triggers: the tax already paid is at least COLD_LEAD_SHARE of session spend
+// the compose prompt. Two triggers: the tax already paid is at least COLD_LEAD_SHARE of the run's spend
 // (the share is DERIVED HERE from this file's own scan — no share key reaches the sidecar), or the
 // prospective stake is live (the `expired` band: the session idled past its cache lifetime, and the
 // stake cleared the dollar gate or the band would not be set). `(none)` otherwise, and ALWAYS `(none)`
 // without a cost basis — the sentence is never emitted over an unpriced tax or a zero spend.
 let costColdLead = '(none)';
-if (s.base != null && sessionCostVal > 0 && coldWastedUsdScan != null) {
-  const shareLead = nColdScan >= 1 && (coldWastedUsdScan / sessionCostVal) >= COLD_LEAD_SHARE;
+if (s.base != null && runSpendVal > 0 && coldWastedUsdScan != null) {
+  const shareLead = nColdScan >= 1 && (coldWastedUsdScan / runSpendVal) >= COLD_LEAD_SHARE;
   const stakeLive = String(s.coldBand) === 'expired' && s.coldStakeUsd != null;
   if (shareLead || stakeLive) {
     const stake = 're-creating the expired cache is a one-time cold tax of ' + FmtUsd(s.coldStakeUsd);
-    const paid = 'the cold tax so far is ' + FmtUsd(coldWastedUsdScan) + ' of ' + FmtUsd(sessionCostVal)
-      + ' (' + BT + psRound((coldWastedUsdScan / sessionCostVal) * 100) + '%' + BT + ') across '
+    const paid = 'the cold tax so far is ' + FmtUsd(coldWastedUsdScan) + ' of ' + FmtUsd(runSpendVal)
+      + ' (' + BT + psRound((coldWastedUsdScan / runSpendVal) * 100) + '%' + BT + ') across '
       + BT + nColdScan + BT + ' leg(s) that re-created an expired cache';
     costColdLead = [stakeLive ? stake : null, nColdScan >= 1 ? paid : null].filter(Boolean).join('; ');
   }
@@ -472,8 +476,16 @@ emit(`COST_COLD_LEAD: ${costColdLead}`);
 // sheet is a `KEY: value` contract: a key that appears twice with different content is unparseable
 // (the reader cannot tell a second value from a corrected one). Every label here must also be
 // registered in home/commands/handover-check.md's relayable list, or the composer silently drops it.
+// Two wordings. With no carried amount (CC restarted the run at $0) the total covers this run only.
+// With one (the resume restored an earlier run's total), the total includes it, and the per-leg $
+// are priced from this run's spend above it.
 if (s.runStartLeg != null && Number(s.runStartLeg) > 0) {
-  emit(`COST_RESUME_NOTE: resumed session — legs 1${NDASH}${Math.trunc(Number(s.runStartLeg))} predate this run; the total covers this run only, earlier legs are priced at this run's rate`);
+  const resumeLegs = `legs 1${NDASH}${Math.trunc(Number(s.runStartLeg))} predate this run`;
+  if (runStartCostVal > 0) {
+    emit(`COST_RESUME_NOTE: resumed session — ${resumeLegs}; the total includes ${FmtUsd(runStartCostVal)} carried from earlier runs, this run's spend is ${FmtUsd(runSpendVal)} and the per-leg $ are priced from it, earlier legs at this run's rate`);
+  } else {
+    emit(`COST_RESUME_NOTE: resumed session — ${resumeLegs}; the total covers this run only, earlier legs are priced at this run's rate`);
+  }
 }
 if (s.legPricingSuspect === true) {
   emit(`COST_LEGPRICE_NOTE: leg $ suspect — session rate far below list price (resumed without local history?); per-leg $ are understated, the total is CC's own`);

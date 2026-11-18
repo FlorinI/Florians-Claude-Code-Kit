@@ -101,15 +101,17 @@ test('A1 — mixed tiers, honest shares: $40 splits 37.50 / 2.50 (sonnet agent �
   assert.match(line, /\$2\.50 6%/); // fleet line: no parens (spec §7.5)
 });
 
-test('A4 — attribution never changes the total: split sums to sessionCost to the cent', () => {
+test('A4 — attribution never changes the total: split sums to the run\'s spend to the cent', () => {
   for (const f of ['a1-tier-weighted', 'b2-mythos', 'b3-unmapped', 'a3-empty-model', 'b4-absent-model',
     // K9 (leg-pricing-truth sprint): tier-mix legs, resumed run, no-history, progressive agent, rebalanced switch
     'legs-tier-mix', 'resumed-run', 'resumed-nohistory', 'agents-progressive', 'model-switch']) {
     const s = sidecar(f);
     assert.notEqual(s.agentsUsd, null, `${f}: agentsUsd must be non-null (vacuity guard)`);
-    const sessionCost = s.costUsd; // total_cost_usd IS session-local (CC resets it on /clear since 2.1.211)
-    assert.ok(Math.abs(s.mainSessionUsd + s.agentsUsd - sessionCost) < 0.005,
-      `${f}: ${s.mainSessionUsd} + ${s.agentsUsd} != ${sessionCost}`);
+    // The run's spend: total_cost_usd minus the amount a resume carried over (runStartCostUsd, present
+    // only when one did — no golden carries it, so here it is the total).
+    const runSpend = s.costUsd - (s.runStartCostUsd ?? 0);
+    assert.ok(Math.abs(s.mainSessionUsd + s.agentsUsd - runSpend) < 0.005,
+      `${f}: ${s.mainSessionUsd} + ${s.agentsUsd} != ${runSpend}`);
   }
 });
 

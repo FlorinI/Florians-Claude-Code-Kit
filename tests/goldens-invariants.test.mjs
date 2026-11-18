@@ -386,7 +386,9 @@ test('K5 — the spikes agent panel quotes the same dollars as the agents chip, 
   }
   // spot pins from the acceptance arithmetic (tier-weighted, not raw)
   assert.match(spikes('a1-tier-weighted'), /top 1 agents\s+·\s+of 1\s+·\s+\$2\.50 \(6%\)/); // raw pricing would say $12.50
-  assert.match(spikes('tier-mix'), /\$2\.06 \(43%\)/);
+  // tier-mix: the Sonnet 4.6 agent at $3 against Opus 4.8's $5 (weight 0.6; per-model prices sprint
+  // 261118, spec §2) — (81,210 + 61,185 × 0.6) units × 4.75 / 256,291 = $2.19 of $4.75.
+  assert.match(spikes('tier-mix'), /\$2\.19 \(46%\)/);
   assert.match(spikes('b2-mythos'), /\$20\.00 \(40%\)/);
   assert.match(spikes('b3-unmapped'), /top 1 agents\s+·\s+of 1\s+·\s+\$10\.00/);
   assert.match(spikes('b4-absent-model'), /top 1 agents\s+·\s+of 1\s+·\s+\$10\.00/);

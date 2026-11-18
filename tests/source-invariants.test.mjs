@@ -17,10 +17,38 @@ const src = (p) => readFileSync(join(repo, ...p.split('/')), 'utf8');
 // private doc cannot tell the kit from a deletion; this can (docs/260908-suite-skip-guards-spec.md §2).
 const IN_PUBLIC_KIT = !existsSync(join(repo, 'tools', 'export-public.mjs'));
 
-// ---- A5: TIER_BASE is literal constants — no fetching, no config, no env ----------------------
-test('A5 — TIER_BASE is a hand-maintained literal map in leg-driver.mjs', () => {
+// ---- A5: the price table is literal constants — no fetching, no config, no env ----------------
+// Re-pinned by sprint 261118-per-model-prices (spec §3 items 1 and 10): the per-model table replaced
+// the per-family TIER_BASE map. Every row must be a literal `{ input: <number>, read: <number> }`, and
+// the parsed rows must equal spec §2 (Haiku 5.5 at its ≤ 100K card). The VALUES are pinned again,
+// behaviorally, by tests/model-prices.test.mjs; this row pins that they are literals in the source.
+test('A5 — MODEL_PRICES is a hand-maintained literal table in leg-driver.mjs (TIER_BASE is gone)', () => {
   const s = src('home/leg-driver.mjs');
-  assert.match(s, /export const TIER_BASE = \{ fable: 10, mythos: 10, opus: 5, sonnet: 2, haiku: 1 \};/);
+  const m = /export const MODEL_PRICES = \{\n([\s\S]*?)\n\};/.exec(s);
+  assert.ok(m, 'leg-driver.mjs must define `export const MODEL_PRICES = { … };` as one literal block');
+  const rows = m[1].split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//'));
+  const parsed = {};
+  for (const row of rows) {
+    const r = /^'([a-z]+(?:-\d+){1,2})': \{ input: (\d+(?:\.\d+)?), read: (\d+(?:\.\d+)?) \},$/.exec(row);
+    assert.ok(r, `every MODEL_PRICES row is a literal { input, read } pair: ${row}`);
+    parsed[r[1]] = { input: Number(r[2]), read: Number(r[3]) };
+  }
+  assert.deepEqual(parsed, {
+    'fable-5-2': { input: 8, read: 0.025 }, 'mythos-5-2': { input: 8, read: 0.025 },
+    'fable-5-1': { input: 10, read: 0.025 }, 'mythos-5-1': { input: 10, read: 0.025 },
+    'fable-5': { input: 10, read: 0.10 }, 'mythos-5': { input: 10, read: 0.10 },
+    'opus-5-5': { input: 4, read: 0.05 },
+    'opus-5': { input: 5, read: 0.10 }, 'opus-4-8': { input: 5, read: 0.10 }, 'opus-4-7': { input: 5, read: 0.10 },
+    'opus-4-6': { input: 5, read: 0.10 }, 'opus-4-5': { input: 5, read: 0.10 },
+    'opus-4-1': { input: 15, read: 0.10 }, 'opus-4': { input: 15, read: 0.10 },
+    'sonnet-5-5': { input: 2, read: 0.05 }, 'sonnet-5': { input: 2, read: 0.10 },
+    'sonnet-4-6': { input: 3, read: 0.10 }, 'sonnet-4-5': { input: 3, read: 0.10 }, 'sonnet-4': { input: 3, read: 0.10 },
+    'haiku-5-5': { input: 0.10, read: 0.10 }, 'haiku-4-5': { input: 1, read: 0.10 },
+  }, 'the table holds exactly spec §2\'s rows');
+  // No dual maintenance (spec §9): the family map is gone from every consumer.
+  for (const f of ['home/leg-driver.mjs', 'home/statusline.mjs', 'home/handover-facts.mjs', 'home/render-spikes.mjs']) {
+    assert.ok(!/\bTIER_BASE\b/.test(src(f)), `${f} must not name TIER_BASE any more`);
+  }
 });
 
 test('A5 — leg-driver.mjs has no network or env surface at all', () => {
@@ -599,13 +627,13 @@ test('D4-4 — the driver verb list has ONE home, and it is the file that owns t
   }
 });
 
-test('D4-5 — SL_VERSION is 6.1.18 (PATCH: idle sessions stop writing; one snapshot file per session)', () => {
+test('D4-5 — SL_VERSION is 6.1.19 (PATCH: per-model prices)', () => {
   const s = src('home/statusline.mjs');
   // The BUILD digit is auto-ticked by install.mjs on deploy, so pin X.Y.Z and let B float.
   const m = /export const SL_VERSION = '(\d+)\.(\d+)\.(\d+)\.(\d+)';/.exec(s);
   assert.ok(m, 'SL_VERSION must be a four-part version');
-  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.18',
-    'X.Y.Z is 6.1.18 (2026-11-14, idle-session CPU spec 261114 §5): an idle session writes nothing but a 120 s heartbeat of its own <sid>.sidecar.json, and statusline-last.json is written nowhere; a behavior-affecting fix. Not X: the display and every number\'s meaning are unchanged. Not Y: no new capability or line. B resets to 0 and install.mjs ticks it from there');
+  assert.equal(`${m[1]}.${m[2]}.${m[3]}`, '6.1.19',
+    'X.Y.Z is 6.1.19 (2026-11-18, sprint 261118-per-model-prices spec §5, frozen as PATCH): every dollar figure is priced at its own model\'s input price and cache-read multiplier; each figure keeps its definition and no threshold moves. Not X: no displayed number changes meaning. Not Y: no new capability or line. B resets to 0 and install.mjs ticks it from there');
 });
 test('D4-6 — the docs describe the grid instead of the retired stack', () => {
   // Project rule: fix rot at its source. Both files are in the spec's scope (§12) and both would

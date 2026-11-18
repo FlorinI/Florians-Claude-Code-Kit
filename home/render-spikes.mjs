@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, getDriver, ModelTier, tierWeight, M_CACHE_READ, M_OUTPUT, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, getDriver, priceWeight, readMult, pricedUnits, M_OUTPUT, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
 import { fmtN, nowEpoch, psRound } from './_sl-compat.mjs';
 
 const argv = process.argv.slice(2);
@@ -67,10 +67,12 @@ if (snap.renderedAt) {
 }
 
 // --- scan transcript via the ONE shared scan, so the panel and the fact sheet agree by construction ---
-// Effective units = raw × the leg's tier weight relative to the MAIN tier (tierWeight, shared with
-// the status line) — so a Sonnet leg on a Fable session prices at Sonnet, exactly as the sparkline.
-const mainTier = ModelTier(snap.model);
-const legs = getScannedLegs(tpath).map((l) => ({ ...l, eff: l.units * tierWeight(l.model, mainTier) }));
+// Effective units = the scan's units (already at each leg's own read rate) × the leg's price weight
+// relative to the MAIN model (priceWeight, shared with the status line) — so a Sonnet leg on a Fable
+// session prices at Sonnet, exactly as the sparkline. The main model is keyed on the snapshot's raw
+// `modelId`, falling back to the display `model` for a snapshot written before modelId existed.
+const mainModelKey = snap.modelId ?? snap.model;
+const legs = getScannedLegs(tpath).map((l) => ({ ...l, eff: l.units * priceWeight(l.model, mainModelKey) }));
 const sumUnits = legs.reduce((a, l) => a + l.eff, 0);
 if (legs.length === 0 || sumUnits <= 0) done('(no priced legs in the transcript yet)');
 
@@ -94,7 +96,7 @@ for (const l of topLegs) {
   // read-equivalent) × base, the exact quantity the cumulative tax sums. A cold-shaped leg under the
   // gate still reads cold in its driver label and carries no ❆. With no basis there is nothing to
   // price the gate with, so every cold-shaped leg is marked and the dollar clause is elided.
-  const legTax = base != null ? (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTier) * base : null;
+  const legTax = base != null ? (l.cwUnits - l.cw * readMult(l.model)) * priceWeight(l.model, mainModelKey) * base : null;
   const isCold = testColdLeg(l) && (legTax == null || legTax >= COLD_PREMIUM_MIN_USD);
   if (isCold) {
     anyCold = true;
@@ -119,11 +121,17 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
   try {
     const acache = JSON.parse(readFileSync(snap.agentsCachePath, 'utf8'));
     // This run's agents only (same filter as the status line's fleet aggregate), priced on EFFECTIVE
-    // units (raw × tierWeight vs the main tier — the same weight the agents chip uses), so the panel
-    // total equals the sidecar's agentsUsd to the cent, tier-mix or not.
+    // units (banked units converted to the agent's own read rate by pricedUnits, × priceWeight vs the
+    // main model — the same pair the agents chip uses), so the panel total equals the sidecar's
+    // agentsUsd to the cent, model mix or not. `pricedU` / `ratio` keep the agent's own-rate figure
+    // and its priced ÷ banked ratio for the re-read share and the peak leg below.
     const liveAg = (acache.agents || [])
       .filter((a) => a && Number(a.legs) > 0 && (a.run ?? acache.run) === acache.run)
-      .map((a) => ({ ...a, effU: Number(a.units) * tierWeight(a.model, mainTier) }));
+      .map((a) => {
+        const pricedU = pricedUnits(a.units, a.ownUnits, a.model);
+        const ratio = Number(a.units) > 0 ? pricedU / Number(a.units) : 1;
+        return { ...a, pricedU, ratio, effU: pricedU * priceWeight(a.model, mainModelKey) };
+      });
     if (liveAg.length > 0) {
       const medU = median(liveAg.map((a) => a.effU));
       const topAg = [...liveAg].sort((a, b) => b.effU - a.effU).slice(0, Top);
@@ -154,15 +162,18 @@ if (snap.agentsCachePath && existsSync(snap.agentsCachePath) && base > 0) {
         seen[label] = true;
         const usd = '$' + fmtN(a.effU * base, 2);
         const xMed = medU > 0 ? `${fmtN(a.effU / medU, 1)}x med` : '—';
-        // decomposition from the stored aggregates: re-read (cache_read) / ingest (input+cache_write) / output
-        const reRead = Number(a.units) - Number(a.ownUnits);
+        // decomposition from the stored aggregates: re-read (cache_read, at the agent's own read
+        // rate) / ingest (input+cache_write) / output
+        const reRead = a.pricedU - Number(a.ownUnits);
         const outU = Number(a.out) * M_OUTPUT;
         const ingest = Math.max(0, Number(a.ownUnits) - outU);
         let cause;
         if (reRead >= ingest && reRead >= outU) cause = `mostly re-reading its context (${a.legs} legs over ~${psRound(Number(a.maxCtx) / 1000)}k)`;
         else if (ingest >= outU) cause = `mostly loading content (ctx grew to ~${psRound(Number(a.maxCtx) / 1000)}k)`;
         else cause = `mostly generating output (~${psRound(Number(a.out) / 1000)}k out)`;
-        const peak = Number(a.maxLegUnits) > 0 ? `  ${MID}  peak leg $${fmtN(Number(a.maxLegUnits) * tierWeight(a.model, mainTier) * base, 2)}` : '';
+        // Peak leg rescaled by the agent's own priced ÷ banked ratio — approximate: the per-leg read
+        // share is not stored, so the agent's average read share stands in for the peak leg's.
+        const peak = Number(a.maxLegUnits) > 0 ? `  ${MID}  peak leg $${fmtN(Number(a.maxLegUnits) * a.ratio * priceWeight(a.model, mainModelKey) * base, 2)}` : '';
         agLines.push(`   "${label}"  ${MID}  ${usd}  ${MID}  ${xMed}  ${MID}  ${a.legs} legs${peak}  ${MID}  ${cause}`);
       }
       outLines.push('');

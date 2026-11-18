@@ -14,7 +14,8 @@ import {
 } from './_sl-compat.mjs';
 import { QuotaCells, QuotaWindow } from './quota-ladder.mjs';
 import {
-  getDriver, testColdLeg, ModelTier, TIER_BASE, tierWeight,
+  getDriver, testColdLeg, ModelTier, priceWeight, inputPrice, readMult,
+  pricedUnits, pricedRecentUnits, pricedColdAvoidable,
   M_INPUT, M_CACHE_WRITE_5M, M_CACHE_WRITE_1H, M_CACHE_READ, M_OUTPUT,
   isSyntheticLeg, servingTierReport, modelSwitchReport, median, DRIVER_VERBS, COLD_PREMIUM_MIN_USD,
 } from './leg-driver.mjs';
@@ -26,7 +27,7 @@ import { detectDialoguesInLine, detectDialoguesInText, dialogueStatus, resolveLi
 // Status-line software version (OUR version). Rendered as a trailing `bsl<ver>` badge.
 // Bump on any change that shifts what the numbers mean.
 // (The installer auto-ticks the BUILD digit on deploy of a changed cluster.)
-export const SL_VERSION = '6.1.18.0';
+export const SL_VERSION = '6.1.19.0';
 
 // The USER config home this session belongs to — CLAUDE_CONFIG_DIR when set, else ~/.claude. Every
 // user-level read (settings.json) and write (the quota file; the rollup caches and the snapshot when
@@ -387,8 +388,8 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
     r.lastColdWastedUnits = (Number(r.nColdLegs) === 1) ? Number(r.coldWastedUnits) : 0;
   }
   // Additive, NEVER required (a required key is the reset ping-pong of the rollup-projection ticket
-  // all over again): per-cold-leg { idx, avoidableUnits, model } records, so the cold tax can be
-  // priced at the model that paid each leg. A lagging 6.1.x home's projection drops the key on its
+  // all over again): per-cold-leg { idx, avoidableUnits, model, cw } records, so the cold tax can be
+  // priced at the model that paid each leg (`cw` added in 6.1.19; records without it still read). A lagging 6.1.x home's projection drops the key on its
   // next write; this build re-patches [] and, finding it incomplete (length !== nColdLegs), the read
   // side falls back to the raw accumulators — today's figure, never a wrong new one, and no reset.
   if (!('coldLegs' in r)) r.coldLegs = [];
@@ -529,10 +530,13 @@ function UpdateSessionRollups(sessionId, tpath, currentCost, projRoot, mainModel
                   r.coldWastedUnits = Number(r.coldWastedUnits) + thisColdWaste;
                   r.lastColdWastedUnits = thisColdWaste;
                   r.lastColdLegIdx = Number(r.nLegs);
-                  // Per-cold-leg record: raw avoidable units + the model that paid them, so the
-                  // read side can weight each leg against the CURRENT main tier (never frozen to
-                  // the scan-time label). Bounded — one small record per cold leg.
-                  r.coldLegs.push({ idx: Number(r.nLegs), avoidableUnits: thisColdWaste, model: legModel });
+                  // Per-cold-leg record: raw avoidable units (storage basis, reads at 0.10) + the
+                  // model that paid them + the leg's cache-write tokens, so the read side can price
+                  // the read-equivalent at that model's read rate (pricedColdAvoidable) and weight
+                  // the leg against the CURRENT main model (never frozen to the scan-time label).
+                  // `cw` is additive (6.1.19): older records lack it and keep their stored figure.
+                  // Bounded — one small record per cold leg.
+                  r.coldLegs.push({ idx: Number(r.nLegs), avoidableUnits: thisColdWaste, model: legModel, cw: cwTok });
                 }
               }
               if (!('recentLegs' in r)) r.recentLegs = [];
@@ -669,11 +673,11 @@ function agentLabelFromFileHead(fp) {
   return '';
 }
 function agentIdFromPath(fp) { return String(fp).replace(/^.*agent-/, '').replace(/\.jsonl$/, '').slice(0, 9); }
-// (Model → pricing tier lives in leg-driver.mjs's ModelTier — shared with handover-facts.)
+// (Model → price lives in leg-driver.mjs's MODEL_PRICES — shared with handover-facts.)
 // `runIdx` = the main rollup's current run (see UpdateSessionRollups' resume detection). Every
 // entry is stamped with the run it was FIRST seen in; only this run's agents count toward the
 // aggregate, matching total_cost_usd's "this run" scope.
-function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
+function UpdateAgentRollups(sessionId, tpath, projRoot, mainModelKey, runIdx) {
   if (!sessionId || !tpath) return null;
   const subDir = tpath.replace(/\.jsonl$/, '') + require_sep() + 'subagents';
   if (!existsSync(subDir)) return null;
@@ -807,12 +811,13 @@ function UpdateAgentRollups(sessionId, tpath, projRoot, mainTier, runIdx) {
   if (live.length === 0) return null;
   let sumUnits = 0, sumEffUnits = 0, sumLegs = 0, sumOut = 0, sumMaxCtx = 0, maxCtx = 0, maxUnits = 0;
   for (const a of live) {
-    // Tier-weighted effective units (tierWeight — the same function render-spikes uses): an
-    // agent's units scale by its tier's headline input price relative to the MAIN tier, so the
-    // main-vs-agents $ split of total_cost_usd stays honest when tiers mix. The total itself is
-    // never recomputed — only its attribution.
-    const w = tierWeight(a.model, mainTier);
-    sumUnits += Number(a.units); sumEffUnits += Number(a.units) * w;
+    // Price-weighted effective units (pricedUnits × priceWeight — the same pair render-spikes
+    // uses): an agent's banked units are converted to its own model's read rate, then scaled by its
+    // model's input price relative to the MAIN model, so the main-vs-agents $ split of
+    // total_cost_usd stays honest when models mix. The total itself is never recomputed — only its
+    // attribution.
+    const w = priceWeight(a.model, mainModelKey);
+    sumUnits += Number(a.units); sumEffUnits += pricedUnits(a.units, a.ownUnits, a.model) * w;
     sumLegs += Number(a.legs); sumOut += Number(a.out);
     sumMaxCtx += Number(a.maxCtx);
     if (Number(a.maxCtx) > maxCtx) maxCtx = Number(a.maxCtx);
@@ -827,9 +832,12 @@ function require_sep() { return process.platform === 'win32' ? '\\' : '/'; }
 
 // === Row 1 left: model + effort ============================================
 const model = (d?.model?.display_name) ? d.model.display_name : 'unknown';
-// Tier from the RAW payload model (never the 'unknown' render fallback, which would read as a
-// real 'other' tier): absent display_name → null → weight 1.0, the un-weighted baseline.
-const mainTier = ModelTier(d?.model?.display_name);
+// The MAIN model for pricing: the payload's `model.id`, falling back to `model.display_name` — the
+// RAW payload strings, never the 'unknown' render fallback. Both absent → '' → no price entry →
+// weight 1.0 and the default read rate, the un-weighted baseline.
+const mainModelKey = (d?.model?.id) ? String(d.model.id) : String(d?.model?.display_name ?? '');
+// Family of the main model — the (hidden) dollar-gate calibration chip only; no figure reads it.
+const mainTier = ModelTier(mainModelKey);
 const version = d?.version;
 const effort = (d?.effort?.level) ? d.effort.level : '?';
 const style = (d?.output_style?.name) ? d.output_style.name : 'default';
@@ -916,7 +924,7 @@ let sessionCost = costUsd;
 let agentAgg = null;
 const runIdx = rollup ? Number(rollup.runIdx) || 0 : 0;
 const runStartLeg = rollup ? Number(rollup.runStartLeg) || 0 : 0;
-if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainTier, runIdx); } catch {} }
+if (sessionId && tpath) { try { agentAgg = UpdateAgentRollups(sessionId, tpath, cwd, mainModelKey, runIdx); } catch {} }
 // Transcript-vs-display tier PROVENANCE — "the label names a tier that has never served in this
 // run". Pure provenance: it drives one flags-cluster chip, a conditional sidecar key and a
 // fact-sheet caveat, and gates NO number (the display tier cancels out of per-leg dollars — see
@@ -927,13 +935,18 @@ const tierMismatch = rollup ? servingTierReport(rollup.perLegModels, runStartLeg
 // (modelSwitchReport, the sibling fact: tierMismatch is about the LABEL, this is about the priced
 // legs). Never persisted; a label change alone neither adds nor removes it.
 const modelSwitch = rollup ? modelSwitchReport(rollup.perLegModels) : null;
-// Per-leg EFFECTIVE units = raw units × the leg's tier weight relative to the main tier (a Sonnet
-// opening leg on a Fable session weighs 0.2). `base` = this run's total_cost_usd over this run's
-// effective units (main legs from runStartLeg on + this run's tier-weighted agents), so every $
-// derived from units below is tier-true and run-anchored, and mainSessionUsd + agentsUsd ≡
-// total_cost_usd by construction (both are shares of the same divisor). Legs before runStartLeg
-// (a resumed session's earlier runs) are still priced — at this run's rate.
-const perLegEff = rollup ? rollup.perLegUnits.map((u, i) => Number(u) * tierWeight(rollup.perLegModels?.[i], mainTier)) : [];
+// Per-leg EFFECTIVE units = the banked units converted to the leg's own model's read rate
+// (pricedUnits — the stats file stays on the 0.10 storage basis), × the leg's price weight relative
+// to the main model (a Sonnet 5.5 opening leg on a Fable 5.2 session weighs 2/8). `base` = this
+// run's total_cost_usd over this run's effective units (main legs from runStartLeg on + this run's
+// price-weighted agents), so every $ derived from units below is model-true and run-anchored, and
+// mainSessionUsd + agentsUsd ≡ total_cost_usd by construction (both are shares of the same
+// divisor). Legs before runStartLeg (a resumed session's earlier runs) are still priced — at this
+// run's rate.
+const perLegEff = rollup ? rollup.perLegUnits.map((u, i) => {
+  const m = rollup.perLegModels?.[i];
+  return pricedUnits(u, rollup.perLegOwnUnits?.[i], m) * priceWeight(m, mainModelKey);
+}) : [];
 let runMainEff = 0; for (let i = runStartLeg; i < perLegEff.length; i++) runMainEff += perLegEff[i];
 const agentUnits = agentAgg ? Number(agentAgg.sumEffUnits) : 0;
 const totalUnits = runMainEff + agentUnits;
@@ -944,8 +957,10 @@ if (totalUnits > 0 && sessionCost > 0) {
   agentsUsd = baseTrue * agentUnits;
 }
 // Sanity tripwire for the resume the detection cannot reach (no local history): a base far below
-// the main tier's list price means the units span more than the cost does. Flag, never recompute.
-const listUnitUsd = (mainTier != null && mainTier in TIER_BASE) ? TIER_BASE[mainTier] / 1e6 : null; // list $/unit at the main tier
+// the main model's list input price means the units span more than the cost does. Flag, never
+// recompute. An unmapped main model has no list price, so the tripwire stays off.
+const mainInputPrice = inputPrice(mainModelKey);
+const listUnitUsd = mainInputPrice != null ? mainInputPrice / 1e6 : null; // list $/unit at the main model
 const legPricingSuspect = (listUnitUsd != null && baseTrue != null && baseTrue < 0.5 * listUnitUsd);
 let perLegCostArr = [];
 if (rollup && totalUnits > 0 && sessionCost > 0) {
@@ -955,10 +970,11 @@ let forecast = null;
 if (rollup && sessionCost > 0 && Number(rollup.nLegs) > 0
   && totalUnits > 0 && !isNil(ctxTok) && ctxTok > 0) {
   const base = baseTrue;
-  const floorUnits = M_CACHE_READ * Number(ctxTok);
+  // The next leg re-reads the whole context at the MAIN model's read rate.
+  const floorUnits = readMult(mainModelKey) * Number(ctxTok);
   const ownArr = rollup.perLegOwnUnits.slice();
   const ownTail = ownArr.length > 5 ? ownArr.slice(ownArr.length - 5) : ownArr;
-  // Raw — the next leg runs at the CURRENT tier (weight 1 against itself).
+  // Raw — the next leg runs at the CURRENT model (weight 1 against itself).
   const nextUnits = floorUnits + Median(ownTail);
   forecast = base * nextUnits;
   costNextPart = DarkGray('next ') + ColorLegCell(forecast, '$' + fmtN(forecast, 2));
@@ -998,10 +1014,11 @@ if (recentN >= 2) {
 let coldStakes = null, coldRemain = null, coldBand = null;
 let costColdPart = null;
 let coldValue = '';
-// Tier-true cold-tax units — ONE pricing path for the chip and the sidecar. When the per-cold-leg
-// records are complete, each leg's avoidable units are weighted at the model that paid them
-// (tierWeight vs the CURRENT main tier — the same per-leg weighting every other dollar on the line
-// uses, re-read per render, never frozen to scan time). Incomplete records (a session banked by an
+// Model-true cold-tax units — ONE pricing path for the chip and the sidecar. When the per-cold-leg
+// records are complete, each leg's avoidable units are priced at the model that paid them: the
+// read-equivalent at that model's read rate (pricedColdAvoidable, when the record carries `cw`),
+// then priceWeight vs the CURRENT main model — the same per-leg weighting every other dollar on the
+// line uses, re-read per render, never frozen to scan time. Incomplete records (a session banked by an
 // older build, or a lagging home's projection dropped the key) fall back to the raw accumulators —
 // the prior behaviour: priced at the current label's rate.
 //
@@ -1016,7 +1033,7 @@ let lastColdUnitsEff = rollup ? Number(rollup.lastColdWastedUnits) : 0;
 let nColdCounted = rollup ? Number(rollup.nColdLegs) : 0;
 if (rollup && Array.isArray(rollup.coldLegs) && rollup.coldLegs.length > 0
   && rollup.coldLegs.length === Number(rollup.nColdLegs)) {
-  const effs = rollup.coldLegs.map((c) => Number(c.avoidableUnits) * tierWeight(c.model, mainTier));
+  const effs = rollup.coldLegs.map((c) => pricedColdAvoidable(c) * priceWeight(c.model, mainModelKey));
   const counted = isNil(baseTrue) ? effs : effs.filter((u) => baseTrue * u >= COLD_PREMIUM_MIN_USD);
   coldUnitsEff = counted.reduce((a, u) => a + u, 0);
   lastColdUnitsEff = counted.length > 0 ? counted[counted.length - 1] : 0;
@@ -1034,7 +1051,9 @@ if (rollup && nColdCounted >= 1 && totalUnits > 0 && sessionCost > 0) {
 if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0) {
   const coldBase = baseTrue;
   const ttlSec = ('lastLegTtlSec' in rollup && Number(rollup.lastLegTtlSec) > 0) ? Number(rollup.lastLegTtlSec) : 300;
-  coldStakes = coldBase * Number(ctxTok) * (CacheWriteMult(ttlSec) - M_CACHE_READ);
+  // Rebuild premium over a warm re-read, both at the MAIN model's rates.
+  const mainReadMult = readMult(mainModelKey);
+  coldStakes = coldBase * Number(ctxTok) * (CacheWriteMult(ttlSec) - mainReadMult);
   if (coldStakes >= COLD_PREMIUM_MIN_USD) {
     const stakesStr = '+$' + fmtN(coldStakes, 2);
     if (!isNil(rollup.lastLegTs)) {
@@ -1062,9 +1081,10 @@ if (rollup && !isNil(ctxTok) && ctxTok > 0 && totalUnits > 0 && sessionCost > 0)
         const amt = amtBright ? ColorLegCell(coldStakes, stakesStr) : DarkGray(stakesStr);
         if (wCol !== '2') {
           // Keep-warm alternative (display-only): a `max_tokens: 0` API ping refreshes the still-warm
-          // cache at cache-READ price — base × ctx × 0.10, TTL-independent — vs the full rebuild
-          // stake shown next to it. Only meaningful while cooling (nothing left to refresh once expired).
-          const keepWarmUsd = coldBase * Number(ctxTok) * M_CACHE_READ;
+          // cache at cache-READ price — base × ctx × the main model's read multiplier,
+          // TTL-independent — vs the full rebuild stake shown next to it. Only meaningful while
+          // cooling (nothing left to refresh once expired).
+          const keepWarmUsd = coldBase * Number(ctxTok) * mainReadMult;
           coldValue = DarkGray('in ') + `${ESC}[${tCol}m${FmtDuration(psRound(coldRemain))}${ESC}[0m`
             + ' ' + amt + DarkGray(' · keep-warm $' + fmtN(keepWarmUsd, 2));
         }
@@ -1202,7 +1222,7 @@ if (agentAgg && Number(agentAgg.nAgents) > 0) {
   const avgLegs = Number(agentAgg.nAgents) > 0 ? Number(agentAgg.sumLegs) / Number(agentAgg.nAgents) : 0;
   aParts.push(fmtN(avgLegs, 1) + DarkGray(' l/ag'));
   agentsValue = aParts.join(DarkGray(' · '));
-  // No tier-mix chip. The main-vs-agents $ split is tier-weighted above and stays honest when
+  // No tier-mix chip. The main-vs-agents $ split is price-weighted above and stays honest when
   // tiers mix, so the chip named a condition without naming a consequence — and with fable
   // sub-agents the condition is every working session, which made it a permanent fixture rather
   // than a warning. Retired 2026-09-06 by Florian's ruling; the tier WEIGHTING is untouched.
@@ -1322,7 +1342,7 @@ function SpotlightValue(cell, valueW, truncate) {
 let bigLegCells = [];
 if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   && !isNil(rollup.perLegUnits) && rollup.perLegUnits.length >= 1) {
-  // Effective (tier-weighted) units throughout, like the trend strip.
+  // Effective (model-priced, price-weighted) units throughout, like the trend strip.
   const medTail = perLegEff.length > 20 ? perLegEff.slice(perLegEff.length - 20) : perLegEff;
   const medUsd = Number(baseTrue) * Median(medTail);
   const nL = Number(rollup.nLegs);
@@ -1330,7 +1350,7 @@ if (rollup && ('recentLegs' in rollup) && !isNil(baseTrue) && baseTrue > 0
   for (const rec of rollup.recentLegs) {
     const legsAgo = nL - Number(rec.idx);
     if (legsAgo < 0 || legsAgo >= BIG_LEG_WINDOW) continue;
-    const usd = Number(baseTrue) * Number(rec.units) * tierWeight(rec.model, mainTier);
+    const usd = Number(baseTrue) * pricedRecentUnits(rec) * priceWeight(rec.model, mainModelKey);
     const isBig = (usd >= BIG_LEG_FLOOR_USD) || (medUsd > 0 && usd >= (BIG_LEG_MULT * medUsd) && usd >= BIG_LEG_MIN_USD);
     if (!isBig) continue;
     const glyph = testColdLeg(rec) ? ColdBlue('❆') : `${ESC}[38;5;179m◆${ESC}[0m`;
@@ -1444,6 +1464,10 @@ try {
     renderedAt: NOW,
     transcriptPath: tpath ?? null,
     model,
+    // Present ONLY when the payload carries `model.id`: the raw id, which the fact sheet and the
+    // spikes panel key the main model's prices on (falling back to `model`). Additive + conditional,
+    // so no schema bump (the fastMode / sessionName precedent).
+    ...(d?.model?.id ? { modelId: String(d.model.id) } : {}),
     // Present ONLY when the banked legs' price tiers changed between two legs of the transcript —
     // derived from the banked per-leg models each render (modelSwitchReport; a label change alone
     // neither adds nor removes it). Same conditional shape as ever; consumers handle absent keys.
@@ -1468,7 +1492,7 @@ try {
     // First leg of the CURRENT run (0 = the session's first run); legs before it predate this
     // run and are priced at this run's rate. Present whenever a rollup exists.
     runStartLeg: rollup ? Number(rollup.runStartLeg) : null,
-    // Present ONLY when the base sits far below the main tier's list price (a resume the
+    // Present ONLY when the base sits far below the main model's list price (a resume the
     // detection could not see — no local history); the $ are flagged, never recomputed.
     ...(legPricingSuspect ? { legPricingSuspect: true } : {}),
     // Present ONLY when fast mode is on: every $ in this sidecar excludes the fast premium.

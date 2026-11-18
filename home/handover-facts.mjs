@@ -16,7 +16,7 @@
 import { readFileSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveSidecarPath, resolveConfigHome } from './sidecar-path.mjs';
-import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, tierWeight, median, M_CACHE_READ, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
+import { getScannedLegs, testColdLeg, testWarmRewriteLeg, ModelTier, priceWeight, readMult, median, COLD_PREMIUM_MIN_USD } from './leg-driver.mjs';
 import { psRound, fmtN, mathRoundD, nowEpoch } from './_sl-compat.mjs';
 import { sanitizeSessionName } from './sanitize-name.mjs';
 
@@ -119,10 +119,13 @@ try { copyFileSync(sidecar, join(configHome, 'handover-frozen.json')); } catch {
 // change. Full-scanning here makes the fact sheet and the panel agree by construction. The PROSPECTIVE cold
 // fields (stake/band/clock) still come from the sidecar below.
 const scanLegs = getScannedLegs(s.transcriptPath);
-// Each leg's avoidable units are tier-weighted (tierWeight vs the main tier — the status line's own
-// per-leg weight), so a cold leg paid under another tier carries that tier's price, not the main's.
-const mainTierScan = ModelTier(s.model);
-const avoidableEff = (l) => (l.cwUnits - l.cw * M_CACHE_READ) * tierWeight(l.model, mainTierScan);
+// The main model is keyed on the sidecar's raw `modelId` (the payload's model.id), falling back to
+// the display `model` for a snapshot written before modelId existed.
+const mainModelKey = s.modelId ?? s.model;
+// Each leg's avoidable units = write units − the read-equivalent at THAT leg's model's read rate,
+// price-weighted vs the main model (priceWeight — the status line's own per-leg weight), so a cold
+// leg paid under another model carries that model's price, not the main's.
+const avoidableEff = (l) => (l.cwUnits - l.cw * readMult(l.model)) * priceWeight(l.model, mainModelKey);
 // The cold tax COUNTS a cold-shaped leg only when its own avoidable premium clears the ONE dollar gate
 // (COLD_PREMIUM_MIN_USD, leg-driver.mjs) — the status line's gate, so the COLD line and `cold $x`
 // agree. With no cost basis there is nothing to price the gate with, so every cold-shaped leg counts.
@@ -136,7 +139,8 @@ const coldWastedUsdScan = nColdScan > 0
   ? (s.base != null ? mathRoundD(coldLegs.reduce((a, l) => a + avoidableEff(l), 0) * Number(s.base), 2) : null)
   : 0;
 
-// Warm-rewrite tax — the same avoidable-premium formula the cold tax uses ((cwUnits − cw×0.10) × base,
+// Warm-rewrite tax — the same avoidable-premium formula the cold tax uses ((cwUnits − cw × the leg's
+// read multiplier) × weight × base,
 // per-leg site: render-spikes.mjs), summed over genuine warm-rewrite legs ONLY. The partition comes
 // from the classifier (testWarmRewriteLeg, leg-driver.mjs — getDriver's class order: cold first, then
 // compacted, then bigRewrite; opening leg excluded), so a big cache write is billed into exactly one
@@ -224,7 +228,7 @@ const qWord = ({
 })[absState] ?? 'sharp';
 const nextUsd = s.nextLegUsd != null ? Number(s.nextLegUsd) : null;
 const is1M = (Number(s.windowSize) >= WINDOW_1M);
-const sessionTier = ModelTier(s.model);
+const sessionTier = ModelTier(mainModelKey);
 
 // The cost verdict is the MONEY, and only the money: the forecast next-leg $ on the two floors'
 // three-rung ladder. No depth normalization, no cross-session comparison — the sheet reports what a
@@ -325,8 +329,9 @@ const coolElapsedSec = (s.renderedAt != null && Number.isFinite(Number(s.rendere
 const warm = FmtMin(s.coldCoolRemainSec == null ? null : Math.max(0, Number(s.coldCoolRemainSec) - coolElapsedSec));
 const stake = FmtUsd(s.coldStakeUsd);
 // Keep-warm alternative for the act-soon/urgent branches: a `max_tokens: 0` API ping re-warms the
-// still-warm cache at cache-READ price — base × ctx × 0.10 (TTL-independent), vs the rebuild stake.
-const keepWarmUsd = (s.base != null && s.ctxTokens != null) ? Number(s.base) * Number(s.ctxTokens) * M_CACHE_READ : null;
+// still-warm cache at cache-READ price — base × ctx × the main model's read multiplier
+// (TTL-independent), vs the rebuild stake.
+const keepWarmUsd = (s.base != null && s.ctxTokens != null) ? Number(s.base) * Number(s.ctxTokens) * readMult(mainModelKey) : null;
 const keepWarmClause = keepWarmUsd != null
   ? ' (a ' + FmtUsd(keepWarmUsd) + ' keep-warm API refresh — max_tokens:0 — buys the same warmth without a real send)'
   : '';
@@ -484,8 +489,9 @@ if (s.fastMode === true) {
 }
 // Transcript-vs-display tier provenance (sidecar `tierMismatch`, present only when the labelled tier
 // has never served in this run): the label is wrong, no number is. Pure provenance, like the fast
-// caveat — the DISPLAY TIER CANCELS out of per-leg dollars (`base` = cost / Σ(rawᵢ × wᵢ /
-// TIER_BASE[main]) and a leg's dollars are rawᵢ × wᵢ × base, so TIER_BASE[main] divides out).
+// caveat — the main model's input price CANCELS out of per-leg dollars (wᵢ = inputᵢ / input(main),
+// `base` = cost / Σ(rawᵢ × wᵢ) and a leg's dollars are rawᵢ × wᵢ × base, so input(main) divides
+// out), and the main model is keyed on the payload's model.id, not on the label.
 // The wording states exactly what `servingTierReport` computes: the labelled tier served NO leg in
 // this run (presence-based, certain), and `serving` is the tier that served the most legs (argmax,
 // not unanimity). A run that mixed two other tiers is the case that makes the difference visible —

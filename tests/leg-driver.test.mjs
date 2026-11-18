@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
-  getScannedLegs, getDriver, testColdLeg, testWarmRewriteLeg, tierWeight, TIER_BASE,
+  getScannedLegs, getDriver, testColdLeg, testWarmRewriteLeg, priceWeight, inputPrice,
   servingTierReport, isSyntheticLeg, modelSwitchReport,
 } from '../home/leg-driver.mjs';
 // `pickFreshBaseline` left this import list with the froz5 removal (2026-08-21, D5). Keeping it here
@@ -25,33 +25,38 @@ test('getScannedLegs — dedups by message.id (6 lines, 4 unique assistant legs)
   assert.equal(js.length, 4);
 });
 
-// ---- leg-pricing-truth sprint (2026-08-16): tierWeight + per-leg model -------------------------
-test('W1 — tierWeight table: TIER_BASE[leg]/TIER_BASE[main] for mapped pairs, 1.0 otherwise', () => {
-  const mains = ['fable', 'opus', 'sonnet', 'haiku', 'mythos'];
-  const legs = { 'claude-fable-5': 'fable', 'claude-opus-5': 'opus', 'claude-sonnet-5': 'sonnet', 'claude-haiku-4-5': 'haiku', 'claude-mythos-1': 'mythos' };
-  for (const main of mains) {
-    for (const [model, t] of Object.entries(legs)) {
-      assert.equal(tierWeight(model, main), TIER_BASE[t] / TIER_BASE[main], `${model} on ${main}`);
+// ---- leg-pricing-truth sprint (2026-08-16): the price weight + per-leg model ----------------------
+// Re-pinned by sprint 261118-per-model-prices (spec §3 items 1, 2 and 7): the weight is now the
+// leg's model's input price over the MAIN MODEL's input price (both keyed per model, not per
+// family), and 1.0 whenever either side has no table entry. The per-model values themselves are
+// pinned in tests/model-prices.test.mjs; these rows keep the weight's shape.
+test('W1 — price weight: input(leg) / input(main) for mapped pairs, 1.0 otherwise', () => {
+  const models = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5', 'claude-mythos-5', 'claude-opus-5-5', 'claude-haiku-5-5'];
+  for (const main of models) {
+    for (const model of models) {
+      assert.equal(priceWeight(model, main), inputPrice(model) / inputPrice(main), `${model} on ${main}`);
     }
     for (const unmapped of ['claude-x', '', null, undefined]) {
-      assert.equal(tierWeight(unmapped, main), 1.0, `${JSON.stringify(unmapped)} on ${main} must be 1.0`);
+      assert.equal(priceWeight(unmapped, main), 1.0, `${JSON.stringify(unmapped)} on ${main} must be 1.0`);
     }
   }
-  // spot values from the acceptance arithmetic
-  assert.equal(tierWeight('claude-sonnet-5', 'fable'), 0.2);
-  assert.equal(tierWeight('claude-fable-5', 'sonnet'), 5);
-  assert.equal(tierWeight('claude-mythos-1', 'opus'), 2);
-  assert.equal(tierWeight('claude-opus-5', 'opus'), 1);
+  // spot values from the acceptance arithmetic (spec §2 list prices)
+  assert.equal(priceWeight('claude-sonnet-5', 'claude-fable-5'), 0.2);
+  assert.equal(priceWeight('claude-fable-5', 'claude-sonnet-5'), 5);
+  assert.equal(priceWeight('claude-mythos-5', 'claude-opus-5'), 2);
+  assert.equal(priceWeight('claude-opus-5', 'claude-opus-5'), 1);
+  assert.equal(priceWeight('claude-haiku-5-5', 'claude-opus-5-5'), 0.025, 'A3: a Haiku 5.5 helper on an Opus 5.5 main');
   // an unmapped / null MAIN never weights anything
-  for (const main of [null, 'other', undefined]) {
-    for (const model of Object.keys(legs)) assert.equal(tierWeight(model, main), 1.0, `${model} on main ${main}`);
+  for (const main of [null, 'claude-zephyr-7', '', undefined]) {
+    for (const model of models) assert.equal(priceWeight(model, main), 1.0, `${model} on main ${main}`);
   }
 });
 
 test('W2 — display-form and id-form of the same model weigh the same', () => {
-  assert.equal(tierWeight('Sonnet 5', 'fable'), 0.2);
-  assert.equal(tierWeight('claude-sonnet-5', 'fable'), 0.2);
-  assert.equal(tierWeight('Fable 5 (1M context)', 'sonnet'), 5);
+  assert.equal(priceWeight('Sonnet 5', 'claude-fable-5'), 0.2);
+  assert.equal(priceWeight('claude-sonnet-5', 'Fable 5 (1M context)'), 0.2);
+  assert.equal(priceWeight('Fable 5 (1M context)', 'claude-sonnet-5'), 5);
+  assert.equal(priceWeight('claude-opus-5-5', 'Opus 5.5 (1M context)'), 1);
 });
 
 test('W3 — getScannedLegs carries the raw model string ("" when the line has none); dedup unchanged', () => {
@@ -60,13 +65,16 @@ test('W3 — getScannedLegs carries the raw model string ("" when the line has n
   assert.deepEqual(js.map((l) => l.model), ['claude-opus-4-8-20260115', '', 'claude-sonnet-5', '']);
 });
 
-test('W4 — one weight function: TIER_BASE[ is used outside leg-driver only by the statusline tripwire', () => {
-  const sl = readFileSync(join(home, 'statusline.mjs'), 'utf8').split('\n');
-  const slHits = sl.filter((l) => l.includes('TIER_BASE[') && !l.trim().startsWith('//'));
-  assert.equal(slHits.length, 1, `statusline.mjs TIER_BASE[ sites: ${slHits.join(' | ')}`);
-  assert.match(slHits[0], /TIER_BASE\[mainTier\] \/ 1e6/);
-  const rs = readFileSync(join(home, 'render-spikes.mjs'), 'utf8').split('\n');
-  assert.equal(rs.filter((l) => l.includes('TIER_BASE[') && !l.trim().startsWith('//')).length, 0, 'render-spikes must go through tierWeight');
+test('W4 — one price table: no consumer indexes MODEL_PRICES itself; each goes through the leg-driver accessors', () => {
+  // Re-pinned by sprint 261118-per-model-prices: the table lives in leg-driver.mjs only, and the
+  // three consumers read it through the exported accessors, so a price can never be read two ways.
+  for (const f of ['statusline.mjs', 'render-spikes.mjs', 'handover-facts.mjs']) {
+    const lines = readFileSync(join(home, f), 'utf8').split('\n').filter((l) => !l.trim().startsWith('//'));
+    for (const banned of ['MODEL_PRICES', 'TIER_BASE']) {
+      const hits = lines.filter((l) => l.includes(banned));
+      assert.equal(hits.length, 0, `${f} must not read ${banned} directly: ${hits.join(' | ')}`);
+    }
+  }
 });
 
 test('testColdLeg — flags the post-idle big-rewrite leg (m3), not the warm ones', () => {
@@ -235,12 +243,17 @@ test('S7 — sampling starts at the RUN start, not at leg 0: an earlier run of a
   assert.equal(rep(models, NaN, 'Fable 5'), null, 'NaN clamps to 0');
 });
 
-test('S8 — ties in "which tier did serve" break to the higher TIER_BASE, and no number moves across the tie', () => {
+test('S8 — ties in "which tier did serve" break to the family whose newest model costs more, and no number moves across the tie', () => {
+  // Re-pinned by sprint 261118-per-model-prices (spec §9 build manifest: the tie-break reads the
+  // family's newest input price — Fable 5.2 at $8 over Opus 5.5 at $4).
   const a = rep([OPUS, OPUS, FABLE, FABLE], 0, 'Haiku 4.5');
   const b = rep([FABLE, FABLE, OPUS, OPUS], 0, 'Haiku 4.5');
-  assert.deepEqual(a, { display: 'haiku', serving: 'fable' }, 'fable (base 10) beats opus (base 5)');
+  assert.deepEqual(a, { display: 'haiku', serving: 'fable' }, 'fable (newest $8) beats opus (newest $4)');
   assert.deepEqual(b, a, 'and the answer does not depend on which tier was seen first');
-  assert.ok(TIER_BASE.fable > TIER_BASE.opus, 'the tie-break really is on TIER_BASE');
+  assert.ok(inputPrice('claude-fable-6') > inputPrice('claude-opus-6'), 'the tie-break really is on the family\'s newest input price');
+  // A sonnet / haiku tie: Sonnet 5.5 ($2) beats Haiku 5.5 ($0.10), on an Opus label.
+  assert.deepEqual(rep([HAIKU, SONNET], 0, 'Opus 5'), { display: 'opus', serving: 'sonnet' });
+  assert.deepEqual(rep([SONNET, HAIKU], 0, 'Opus 5'), { display: 'opus', serving: 'sonnet' });
   // The tie decides CHIP TEXT only. Its old second half — the same legs through the tier-blind
   // baseline picker giving one answer either way — went with pickFreshBaseline (froz5-removal, D5).
 });
@@ -351,12 +364,15 @@ test('Y7 — ONE shared predicate: both scans call the same exported isSynthetic
 // LATEST wins (F4); from/to are the raw transcript strings either side of the boundary (F2);
 // unmapped models ('', 'claude-x') never open or close a boundary.
 
-test('MSR-1 — a single mapped tier never stamps: same id, or different versions of one tier', () => {
+test('MSR-1 — one price never stamps: same id, or different versions at identical rates', () => {
   assert.equal(modelSwitchReport([OPUS, OPUS, OPUS]), null);
   assert.equal(modelSwitchReport([OPUS]), null, 'one leg has no boundary');
-  // different raw strings, same price tier — a version upgrade is not a switch
+  // different raw strings, identical rates — a version upgrade at the same price is not a switch
   assert.equal(modelSwitchReport(['claude-opus-4-7', 'claude-opus-4-8-20260115']), null);
-  assert.equal(modelSwitchReport(['claude-sonnet-4-5', SONNET]), null);
+  assert.equal(modelSwitchReport(['claude-sonnet-4-5', 'claude-sonnet-4-6']), null);
+  // Re-pinned by sprint 261118-per-model-prices (spec §3 item 8): the switch follows PRICE, not
+  // family, so Sonnet 4.5 ($3) → Sonnet 5 ($2) is now a switch. The rate-pairs are in model-prices.
+  assert.deepEqual(modelSwitchReport(['claude-sonnet-4-5', SONNET]), { atLeg: 2, from: 'claude-sonnet-4-5', to: SONNET });
 });
 
 test('MSR-2 — one boundary mid-array: atLeg is the 1-based index of the FIRST leg at the new tier', () => {
